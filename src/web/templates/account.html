@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Account — Email Reader</title>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="setup-container">
+        <div class="setup-card">
+            <div class="setup-header">
+                <i data-lucide="user" style="width:32px;height:32px;color:var(--accent);"></i>
+                <h1>Email Account</h1>
+                <p>Your connected email account.</p>
+            </div>
+
+            <div class="account-info">
+                <div class="account-field">
+                    <span class="account-label">Email</span>
+                    <span class="account-value">{{ email_user }}</span>
+                </div>
+                <div class="account-field">
+                    <span class="account-label">IMAP Server</span>
+                    <span class="account-value">{{ imap_server }}</span>
+                </div>
+                <div class="account-field">
+                    <span class="account-label">Password</span>
+                    <span class="account-value">{{ masked_pass }}</span>
+                </div>
+            </div>
+
+            <div class="account-actions">
+                <a href="/" class="setup-btn secondary">
+                    <i data-lucide="arrow-left" style="width:16px;height:16px;"></i>
+                    Back to Dashboard
+                </a>
+                <form method="post" action="/account/disconnect" onsubmit="return confirm('Are you sure? This will remove your email credentials.')">
+                    <button type="submit" class="setup-btn danger">
+                        <i data-lucide="log-out" style="width:16px;height:16px;"></i>
+                        Disconnect
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <script>lucide.createIcons();</script>
+</body>
+</html>

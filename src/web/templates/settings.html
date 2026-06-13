@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block title %}Settings — Email Reader{% endblock %}
+
+{% block content %}
+<h1>Settings</h1>
+
+{% if restart_notice %}
+<div class="status-box status-warning">
+  <i data-lucide="alert-triangle" style="width:18px;height:18px;flex-shrink:0;"></i>
+  <span>Restart required for changes to take effect. Restart the container to apply the new network setting.</span>
+</div>
+{% endif %}
+
+<div class="detail-card" style="margin-top:1.25rem;">
+  <div class="settings-row">
+    <div class="settings-info">
+      <div class="settings-label">
+        <i data-lucide="wifi" style="width:16px;height:16px;"></i>
+        Network Access
+      </div>
+      <p class="settings-desc">
+        {% if network_access %}
+          Allow other devices on your local network to access the dashboard.
+        {% else %}
+          The dashboard is only accessible from this machine (localhost).
+        {% endif %}
+      </p>
+    </div>
+    <form method="post" action="/settings/network-access" class="settings-toggle-form">
+      <input type="hidden" name="enabled" value="{% if network_access %}false{% else %}true{% endif %}">
+      <button type="submit" class="toggle-switch {% if network_access %}on{% endif %}" aria-label="Toggle network access">
+        <span class="toggle-knob"></span>
+      </button>
+    </form>
+  </div>
+
+  {% if network_access %}
+  <div class="settings-network-info">
+    <div class="section-title">
+      <i data-lucide="globe" style="width:16px;height:16px;"></i>
+      Access from other devices
+    </div>
+
+    {% if is_docker %}
+      {% if host_ip %}
+      <div class="settings-url">
+        <code>http://{{ host_ip }}:{{ port }}</code>
+        <button type="button" class="btn btn-sm" onclick="navigator.clipboard.writeText('http://{{ host_ip }}:{{ port }}')">
+          <i data-lucide="copy" style="width:14px;height:14px;"></i>
+          Copy
+        </button>
+      </div>
+      {% else %}
+      <div class="settings-hint">
+        <i data-lucide="info" style="width:14px;height:14px;flex-shrink:0;"></i>
+        <span>Running in Docker. Set <code>HOST_IP</code> in your <code>docker-compose.yml</code> to display your network address here.</span>
+      </div>
+      {% endif %}
+    {% elif local_ips %}
+      {% for ip in local_ips %}
+      <div class="settings-url">
+        <code>http://{{ ip }}:{{ port }}</code>
+        <button type="button" class="btn btn-sm" onclick="navigator.clipboard.writeText('http://{{ ip }}:{{ port }}')">
+          <i data-lucide="copy" style="width:14px;height:14px;"></i>
+          Copy
+        </button>
+      </div>
+      {% endfor %}
+    {% else %}
+      <p class="settings-desc">No local network IPs detected. The server may not be connected to a network.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

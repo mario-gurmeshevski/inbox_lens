@@ -1,0 +1,30 @@
+[project]
+name = "inbox-lens"
+version = "0.3.0"
+description = "Fetch, cache, and scan emails via IMAP with keyword-based priority tagging and a web dashboard"
+requires-python = ">=3.12"
+dependencies = [
+    "python-dotenv==1.2.2",
+    "python-telegram-bot[job-queue]==22.7",
+    "tqdm==4.67.3",
+    "html2text==2025.4.15",
+    "rich==15.0.0",
+    "fastapi==0.128.8",
+    "python-multipart==0.0.21",
+    "uvicorn==0.40.0",
+    "jinja2==3.1.6",
+    "cryptography==48.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.0.3",
+    "ruff==0.15.16",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["src/tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"

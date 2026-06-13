@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{% block title %}Email Reader{% endblock %}</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://unpkg.com/htmx.org/dist/ext/sse.js"></script>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <nav>
+      <a href="/" class="brand">
+        <i data-lucide="mail" style="width: 20px; height: 20px"></i>
+        Email Reader
+      </a>
+      <div class="nav-links">
+        <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">
+          <i
+            data-lucide="layout-dashboard"
+            style="width: 16px; height: 16px"
+          ></i>
+          <span class="nav-label">Dashboard</span>
+        </a>
+        <a
+          href="/emails"
+          class="{% if '/emails' in request.url.path %}active{% endif %}"
+        >
+          <i data-lucide="inbox" style="width: 16px; height: 16px"></i>
+          <span class="nav-label">Emails</span>
+        </a>
+        <a
+          href="/account"
+          class="{% if request.url.path == '/account' %}active{% endif %}"
+        >
+          <i data-lucide="user" style="width: 16px; height: 16px"></i>
+          <span class="nav-label">Account</span>
+        </a>
+        <a
+          href="/settings"
+          class="nav-spacer {% if request.url.path == '/settings' %}active{% endif %}"
+        >
+          <i data-lucide="settings" style="width: 16px; height: 16px"></i>
+        </a>
+      </div>
+    </nav>
+    <div class="container" hx-ext="sse" sse-connect="/api/events">
+      <div id="action-status">
+        {% if task_running %}
+        <div
+          hx-get="/api/status"
+          hx-trigger="load"
+          hx-target="#action-status"
+          hx-swap="innerHTML"
+        ></div>
+        {% endif %}
+      </div>
+      {% block content %}{% endblock %}
+    </div>
+    <script>
+      lucide.createIcons();
+      document.body.addEventListener("htmx:afterSwap", function () {
+        lucide.createIcons();
+      });
+
+      (function () {
+        var sseRetries = 0;
+        var maxRetries = 10;
+
+        function reconnectSSE() {
+          var container = document.querySelector("[sse-connect]");
+          if (!container) container = document.querySelector(".container");
+          if (container) {
+            sseRetries++;
+            console.log("SSE reconnecting... attempt " + sseRetries);
+            htmx.removeExtension("sse");
+            htmx.defineExtension("sse", htmx._sseExtension);
+            htmx.process(container);
+          }
+        }
+
+        document.body.addEventListener("htmx:sseError", function (e) {
+          if (sseRetries < maxRetries) {
+            var delay = Math.min(5000 * (sseRetries + 1), 30000);
+            setTimeout(reconnectSSE, delay);
+          }
+        });
+
+        document.body.addEventListener("htmx:sseOpen", function () {
+          sseRetries = 0;
+        });
+      })();
+    </script>
+  </body>
+</html>

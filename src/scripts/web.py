@@ -1,0 +1,414 @@
+import asyncio
+import json
+import os
+import socket
+import threading
+from contextlib import asynccontextmanager
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, Request, Query
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+from email.utils import parsedate_to_datetime
+from pathlib import Path
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from src.scripts import email_reader, cache, idle_monitor, event_bus
+from src.scripts.constants import DB_PATH, DEFAULT_NETWORK_ACCESS
+from src.scripts.utils import get_highest_priority
+
+load_dotenv()
+WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
+WEB_PORT = int(os.getenv("WEB_PORT", "8000"))
+IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.gmail.com")
+
+_monitor: idle_monitor.IdleMonitor | None = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _monitor
+    cache._ensure_secret_key()
+    cache.init_db(DB_PATH)
+
+    if cache.has_email_credentials(DB_PATH):
+        _monitor = idle_monitor.IdleMonitor(
+            db_path=DB_PATH,
+            on_refresh=lambda: event_bus.bus.publish("refresh"),
+        )
+        t = threading.Thread(
+            target=idle_monitor.run_initial_fetch,
+            kwargs={"db_path": DB_PATH, "on_refresh": lambda: event_bus.bus.publish("refresh")},
+            daemon=True,
+        )
+        t.start()
+        _monitor.start()
+
+    yield
+
+    if _monitor:
+        _monitor.stop()
+
+
+app = FastAPI(title="Email Reader Dashboard", lifespan=lifespan)
+
+_WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+templates = Jinja2Templates(directory=str(_WEB_DIR / "templates"))
+templates.env.filters["format_date"] = lambda d: _format_date(d)
+app.mount("/static", StaticFiles(directory=str(_WEB_DIR / "static")), name="static")
+
+
+class SetupGuardMiddleware(BaseHTTPMiddleware):
+    _EXEMPT_PATHS = {"/setup", "/static", "/health", "/api/events"}
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if any(path.startswith(p) for p in self._EXEMPT_PATHS):
+            return await call_next(request)
+        if not cache.has_email_credentials(DB_PATH):
+            return RedirectResponse("/setup", status_code=303)
+        return await call_next(request)
+
+
+app.add_middleware(SetupGuardMiddleware)
+
+
+def _format_date(date_str):
+    if not date_str:
+        return ""
+    try:
+        dt = parsedate_to_datetime(date_str)
+        return dt.strftime("%a, %d %b %Y %H:%M")
+    except Exception:
+        return date_str
+
+
+def _is_docker() -> bool:
+    return Path("/.dockerenv").exists()
+
+
+def _get_local_ips() -> list[str]:
+    if _is_docker():
+        return []
+    try:
+        hostname = socket.gethostname()
+        _, _, ips = socket.gethostbyname_ex(hostname)
+    except Exception:
+        return []
+    return sorted(
+        ip for ip in ips
+        if not ip.startswith("127.") and not ip.startswith("169.254.")
+    )
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+@app.get("/setup", response_class=HTMLResponse)
+async def setup_page(request: Request):
+    if cache.has_email_credentials(DB_PATH):
+        return RedirectResponse("/", status_code=303)
+    return templates.TemplateResponse(request, "setup.html", {
+        "error": None,
+        "imap_server": IMAP_SERVER,
+        "email_user": "",
+    })
+
+
+@app.post("/setup", response_class=HTMLResponse)
+async def setup_submit(request: Request):
+    global _monitor
+
+    if cache.has_email_credentials(DB_PATH):
+        return RedirectResponse("/", status_code=303)
+
+    form = await request.form()
+    imap_server = str(form.get("imap_server", "")).strip() or IMAP_SERVER
+    email_user = str(form.get("email_user", "")).strip()
+    email_pass = str(form.get("email_pass", "")).strip()
+
+    if not email_user or not email_pass:
+        return templates.TemplateResponse(request, "setup.html", {
+            "error": "Email and password are required.",
+            "imap_server": imap_server,
+            "email_user": email_user,
+        })
+
+    result = email_reader.test_connection(imap_server, email_user, email_pass)
+    if not result["success"]:
+        return templates.TemplateResponse(request, "setup.html", {
+            "error": result["error"],
+            "imap_server": imap_server,
+            "email_user": email_user,
+        })
+
+    cache.init_db(DB_PATH)
+    cache.save_setting("imap_server", imap_server, DB_PATH)
+    cache.save_email_credentials(email_user, email_pass, DB_PATH)
+
+    t = threading.Thread(
+        target=idle_monitor.run_initial_fetch,
+        kwargs={"db_path": DB_PATH, "on_refresh": lambda: event_bus.bus.publish("refresh")},
+        daemon=True,
+    )
+    t.start()
+
+    _monitor = idle_monitor.IdleMonitor(
+        db_path=DB_PATH,
+        on_refresh=lambda: event_bus.bus.publish("refresh"),
+    )
+    _monitor.start()
+
+    return RedirectResponse("/", status_code=303)
+
+
+@app.get("/account", response_class=HTMLResponse)
+async def account_page(request: Request):
+    email_user, email_pass = cache.get_email_credentials(DB_PATH)
+    if not email_user:
+        return RedirectResponse("/setup", status_code=303)
+    saved_imap = cache.get_setting("imap_server", DB_PATH) or IMAP_SERVER
+    masked_pass = (email_pass[:4] + "*" * (len(email_pass) - 4)) if email_pass and len(email_pass) > 4 else "****"
+    return templates.TemplateResponse(request, "account.html", {
+        "email_user": email_user,
+        "imap_server": saved_imap,
+        "masked_pass": masked_pass,
+    })
+
+
+@app.post("/account/disconnect")
+async def account_disconnect(request: Request):
+    global _monitor
+    if _monitor:
+        _monitor.stop()
+        _monitor = None
+    cache.delete_email_credentials(DB_PATH)
+    cache.delete_setting("imap_server", DB_PATH)
+    return RedirectResponse("/setup", status_code=303)
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    network_access = cache.get_setting("network_access", DB_PATH) or DEFAULT_NETWORK_ACCESS
+    network_on = network_access == "true"
+    local_ips = _get_local_ips() if network_on else []
+    host_ip = os.getenv("HOST_IP", "")
+    port = int(os.getenv("WEB_PORT", "8000"))
+    return templates.TemplateResponse(request, "settings.html", {
+        "network_access": network_on,
+        "local_ips": local_ips,
+        "host_ip": host_ip,
+        "is_docker": _is_docker(),
+        "port": port,
+        "restart_notice": False,
+    })
+
+
+@app.post("/settings/network-access", response_class=HTMLResponse)
+async def settings_network_access(request: Request):
+    form = await request.form()
+    enabled = str(form.get("enabled", "false")).strip()
+    cache.save_setting("network_access", enabled, DB_PATH)
+    network_on = enabled == "true"
+    local_ips = _get_local_ips() if network_on else []
+    host_ip = os.getenv("HOST_IP", "")
+    port = int(os.getenv("WEB_PORT", "8000"))
+    return templates.TemplateResponse(request, "settings.html", {
+        "network_access": network_on,
+        "local_ips": local_ips,
+        "host_ip": host_ip,
+        "is_docker": _is_docker(),
+        "port": port,
+        "restart_notice": True,
+    })
+
+
+@app.get("/", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    counts = cache.get_counts(DB_PATH)
+    total = counts["headers_only"] + counts["fetched"] + counts["checked"]
+    unscanned = total - counts["checked"]
+
+    raw_priority = cache.get_priority_counts(DB_PATH)
+    priority_dist = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    for level_str, count in raw_priority.items():
+        level = int(level_str) if str(level_str).isdigit() else 0
+        if level >= 9:
+            priority_dist["critical"] += count
+        elif level >= 7:
+            priority_dist["high"] += count
+        elif level >= 4:
+            priority_dist["medium"] += count
+        elif level >= 1:
+            priority_dist["low"] += count
+    priority_dist["unclassified"] = total - sum(priority_dist.values())
+
+    recent_emails = cache.get_recent_emails(DB_PATH, limit=10)
+
+    monitor_active = _monitor is not None and _monitor.running
+
+    return templates.TemplateResponse(request, "dashboard.html", {
+        "counts": counts,
+        "total": total,
+        "unscanned": unscanned,
+        "priority_dist": priority_dist,
+        "recent_emails": recent_emails,
+        "monitor_active": monitor_active,
+    })
+
+
+@app.get("/emails", response_class=HTMLResponse)
+async def email_list(
+    request: Request,
+    status: str = Query("", alias="status"),
+    priority: str = Query("", alias="priority"),
+    search: str = Query("", alias="search"),
+    page: int = Query(1, alias="page"),
+):
+    page_size = 25
+
+    emails, total_rows, total_pages = cache.search_emails(
+        DB_PATH,
+        status=status or None,
+        priority=priority or None,
+        search=search or None,
+        page=page,
+        page_size=page_size,
+    )
+
+    return templates.TemplateResponse(request, "emails.html", {
+        "emails": emails,
+        "status": status,
+        "priority": priority,
+        "search": search,
+        "page": page,
+        "total_pages": total_pages,
+        "total_rows": total_rows,
+    })
+
+
+@app.get("/emails/{email_hash}", response_class=HTMLResponse)
+async def email_detail(request: Request, email_hash: str):
+    email_data = cache.get_email_by_hash(DB_PATH, email_hash)
+    if not email_data:
+        return HTMLResponse("<h1>Email not found</h1>", status_code=404)
+
+    email_data["_highest_priority"] = get_highest_priority(email_data.get("keyword_matches", {}))
+
+    return templates.TemplateResponse(request, "email_detail.html", {
+        "email": email_data,
+        "email_hash": email_hash,
+    })
+
+
+@app.post("/emails/{email_hash}/delete")
+async def delete_email(request: Request, email_hash: str):
+    email_data = cache.get_email_by_hash(DB_PATH, email_hash)
+
+    if not email_data:
+        return RedirectResponse("/emails", status_code=303)
+
+    message_id = email_data.get("message_id", "")
+    if message_id:
+        email_reader.delete_email(message_id, db_path=DB_PATH)
+    return RedirectResponse("/emails", status_code=303)
+
+
+@app.get("/api/events")
+async def sse_events(request: Request):
+    q = event_bus.bus.subscribe()
+
+    async def event_stream():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=30)
+                    yield f"event: {event['type']}\ndata: {json.dumps(event['data'])}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        finally:
+            event_bus.bus.unsubscribe(q)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.get("/partials/dashboard", response_class=HTMLResponse)
+async def partial_dashboard(request: Request):
+    counts = cache.get_counts(DB_PATH)
+    total = counts["headers_only"] + counts["fetched"] + counts["checked"]
+    unscanned = total - counts["checked"]
+    raw_priority = cache.get_priority_counts(DB_PATH)
+    priority_dist = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    for level_str, count in raw_priority.items():
+        level = int(level_str) if str(level_str).isdigit() else 0
+        if level >= 9:
+            priority_dist["critical"] += count
+        elif level >= 7:
+            priority_dist["high"] += count
+        elif level >= 4:
+            priority_dist["medium"] += count
+        elif level >= 1:
+            priority_dist["low"] += count
+    priority_dist["unclassified"] = total - sum(priority_dist.values())
+    recent_emails = cache.get_recent_emails(DB_PATH, limit=10)
+
+    return templates.TemplateResponse(request, "partials/dashboard_content.html", {
+        "counts": counts,
+        "total": total,
+        "unscanned": unscanned,
+        "priority_dist": priority_dist,
+        "recent_emails": recent_emails,
+    })
+
+
+@app.get("/partials/emails", response_class=HTMLResponse)
+async def partial_emails(
+    request: Request,
+    status: str = Query("", alias="status"),
+    priority: str = Query("", alias="priority"),
+    search: str = Query("", alias="search"),
+    page: int = Query(1, alias="page"),
+):
+    page_size = 25
+    emails, total_rows, total_pages = cache.search_emails(
+        DB_PATH,
+        status=status or None,
+        priority=priority or None,
+        search=search or None,
+        page=page,
+        page_size=page_size,
+    )
+
+    return templates.TemplateResponse(request, "partials/email_table.html", {
+        "emails": emails,
+        "status": status,
+        "priority": priority,
+        "search": search,
+        "page": page,
+        "total_pages": total_pages,
+        "total_rows": total_rows,
+    })
+
+
+@app.get("/partials/email-detail/{email_hash}", response_class=HTMLResponse)
+async def partial_email_detail(request: Request, email_hash: str):
+    email_data = cache.get_email_by_hash(DB_PATH, email_hash)
+    if not email_data:
+        return HTMLResponse("<p>Email not found</p>", status_code=404)
+
+    email_data["_highest_priority"] = get_highest_priority(email_data.get("keyword_matches", {}))
+
+    return templates.TemplateResponse(request, "partials/email_detail_content.html", {
+        "email": email_data,
+        "email_hash": email_hash,
+    })
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("src.scripts.web:app", host=WEB_HOST, port=WEB_PORT, reload=True)

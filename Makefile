@@ -1,7 +1,10 @@
-.PHONY: install dev-install bot web test lint clean reset up down
+.PHONY: install uninstall dev-install bot web test lint clean reset up down
 
 install:
 	pip install -r requirements.txt
+
+uninstall:
+	pip uninstall -y -r requirements.txt
 
 dev-install:
 	pip install -r requirements-dev.txt

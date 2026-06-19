@@ -1,32 +1,38 @@
 .PHONY: install uninstall dev-install web test test-cov lint clean reset up up-ts down tailscale-up tailscale-status tailscale-ip tailscale-logout purge
 
 PYTHON ?= python3
+VENV := .venv
+VENV_PIP := $(VENV)/bin/pip
+VENV_PYTHON := $(VENV)/bin/python
 -include .env
 WEB_HOST ?= 0.0.0.0
 WEB_PORT ?= 8000
 
 COMPOSE_FILES_TS = -f docker-compose.yaml -f docker-compose.tailscale.yaml
 
-install:
-	pip install -r requirements.txt
+$(VENV):
+	$(PYTHON) -m venv $(VENV)
+
+install: $(VENV)
+	$(VENV_PIP) install -e .
 
 uninstall:
-	pip uninstall -y -r requirements.txt -r requirements-dev.txt
+	rm -rf $(VENV)
 
-dev-install:
-	pip install -r requirements-dev.txt
+dev-install: install
+	$(VENV_PIP) install -e ".[dev]"
 
 web:
-	uvicorn src.scripts.web:app --host $(WEB_HOST) --port $(WEB_PORT) --reload
+	$(VENV_PYTHON) -m uvicorn src.scripts.web:app --host $(WEB_HOST) --port $(WEB_PORT) --reload
 
-test:
-	$(PYTHON) -m pytest src/tests/ -v
+test: dev-install
+	$(VENV_PYTHON) -m pytest src/tests/ -v
 
-test-cov:
-	$(PYTHON) -m pytest src/tests/ --cov=src/scripts --cov-report=term-missing
+test-cov: dev-install
+	$(VENV_PYTHON) -m pytest src/tests/ --cov=src/scripts --cov-report=term-missing
 
-lint:
-	$(PYTHON) -m ruff check src/
+lint: dev-install
+	$(VENV_PYTHON) -m ruff check src/
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +

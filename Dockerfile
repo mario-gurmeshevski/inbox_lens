@@ -4,10 +4,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf 
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
+COPY pyproject.toml .
 COPY src/ src/
+RUN pip install --no-cache-dir .
 COPY entrypoint.sh /entrypoint.sh
 
 RUN useradd -m appuser \

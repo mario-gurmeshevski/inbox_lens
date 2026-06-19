@@ -14,6 +14,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: pip install .[dev]
 
       - run: make test

@@ -178,7 +178,7 @@ make down # For Mac/Linux
 
 ### Local
 
-Install dependencies, then run the dashboard directly with uvicorn (auto-reloads on file changes):
+Install dependencies into a project-local `.venv/` (auto-created), then run the dashboard directly with uvicorn (auto-reloads on file changes):
 
 ```bash
 
@@ -199,6 +199,8 @@ make dev-install # For Mac/Linux
 ./commands.ps1 dev-install # For Windows
 
 ```
+
+> All `make` commands automatically use the `.venv/` — no system-wide installs. Activate it manually with `source .venv/bin/activate` if you want to run Python directly.
 
 Opens at `http://localhost:8000`. Set `WEB_HOST` and `WEB_PORT` in `.env` to customize.
 
@@ -310,12 +312,12 @@ The dashboard is now available at `https://<hostname>.<tailnet-name>.ts.net` wit
 
 ### `.env` file
 
-| Variable          | Default                  | Description                                                        |
-| ----------------- | ------------------------ | ------------------------------------------------------------------ |
-| `IMAP_SERVER`     | `imap.gmail.com`         | IMAP server address                                                |
-| `WEB_HOST`        | `0.0.0.0`                | Web dashboard host                                                 |
-| `WEB_PORT`        | `8000`                   | Web dashboard port                                                 |
-| `HOST_IP`         | —                        | Host IP for network access display (auto-detected)                 |
+| Variable      | Default          | Description                                        |
+| ------------- | ---------------- | -------------------------------------------------- |
+| `IMAP_SERVER` | `imap.gmail.com` | IMAP server address                                |
+| `WEB_HOST`    | `0.0.0.0`        | Web dashboard host                                 |
+| `WEB_PORT`    | `8000`           | Web dashboard port                                 |
+| `HOST_IP`     | —                | Host IP for network access display (auto-detected) |
 
 The database, encryption key, and keywords file live under `src/data/` (`/app/src/data/` in Docker) and are fixed to that location — they are not configurable via `.env`. Email credentials are configured at runtime via the web setup page — not in `.env`.
 
@@ -383,8 +385,8 @@ All emails are stored in a SQLite database (`emails.db` by default) with the fol
 
 | Target                  | Description                                                  |
 | ----------------------- | ------------------------------------------------------------ |
-| `make install`          | Install Python dependencies                                  |
-| `make uninstall`        | Uninstall Python dependencies                                |
+| `make install`          | Install Python dependencies (project-local `.venv/`)         |
+| `make uninstall`        | Delete `.venv/`                                              |
 | `make dev-install`      | Install dev dependencies (test/lint)                         |
 | `make web`              | Run the web dashboard                                        |
 | `make up`               | Build and start Docker container (default mode, port 8000)   |
@@ -404,8 +406,8 @@ All emails are stored in a SQLite database (`emails.db` by default) with the fol
 
 | Target                            | Description                                                  |
 | --------------------------------- | ------------------------------------------------------------ |
-| `./commands.ps1 install`          | Install Python dependencies                                  |
-| `./commands.ps1 uninstall`        | Uninstall Python dependencies                                |
+| `./commands.ps1 install`          | Install Python dependencies (project-local `.venv/`)         |
+| `./commands.ps1 uninstall`        | Delete `.venv/`                                              |
 | `./commands.ps1 dev-install`      | Install dev dependencies (test/lint)                         |
 | `./commands.ps1 web`              | Run the web dashboard                                        |
 | `./commands.ps1 up`               | Build and start Docker container (default mode, port 8000)   |

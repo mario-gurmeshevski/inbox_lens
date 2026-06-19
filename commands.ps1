@@ -12,7 +12,7 @@ if (-not $Task) {
     Write-Host "Usage: ./commands.ps1 <task> [args...]"
     Write-Host ""
     Write-Host "Available tasks:"
-    Write-Host "  install          Install Python dependencies"
+    Write-Host "  install          Install Python dependencies (project-local .venv)"
     Write-Host "  uninstall        Uninstall Python dependencies"
     Write-Host "  dev-install      Install dev dependencies"
     Write-Host "  web              Run the web server"
@@ -33,6 +33,9 @@ if (-not $Task) {
 }
 
 $PYTHON = "python"
+$VENV = ".venv"
+$VENV_PYTHON = "$VENV\Scripts\python.exe"
+$VENV_PIP = "$VENV\Scripts\pip.exe"
 $COMPOSE_FILES_TS = @("-f", "docker-compose.yaml", "-f", "docker-compose.tailscale.yaml")
 
 $WEB_HOST = if ($env:WEB_HOST) { $env:WEB_HOST } else { "0.0.0.0" }
@@ -71,13 +74,21 @@ function Invoke-Clean {
 }
 
 switch ($Task) {
-    "install" { pip install -r requirements.txt }
-    "uninstall" { pip uninstall -y -r requirements.txt }
-    "dev-install" { pip install -r requirements-dev.txt }
-    "web" { uvicorn src.scripts.web:app --host $WEB_HOST --port $WEB_PORT --reload }
-    "test" { & $PYTHON -m pytest src/tests/ -v }
-    "test-cov" { & $PYTHON -m pytest src/tests/ --cov=src/scripts --cov-report=term-missing }
-    "lint" { & $PYTHON -m ruff check src/ }
+    "install" {
+        if (-not (Test-Path $VENV)) { & $PYTHON -m venv $VENV }
+        & $VENV_PIP install -e .
+    }
+    "uninstall" {
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $VENV
+    }
+    "dev-install" {
+        if (-not (Test-Path $VENV)) { & $PYTHON -m venv $VENV }
+        & $VENV_PIP install -e ".[dev]"
+    }
+    "web" { & $VENV_PYTHON -m uvicorn src.scripts.web:app --host $WEB_HOST --port $WEB_PORT --reload }
+    "test" { & $VENV_PYTHON -m pytest src/tests/ -v }
+    "test-cov" { & $VENV_PYTHON -m pytest src/tests/ --cov=src/scripts --cov-report=term-missing }
+    "lint" { & $VENV_PYTHON -m ruff check src/ }
 
     "clean" {
         Invoke-Clean

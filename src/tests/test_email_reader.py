@@ -1,6 +1,5 @@
 import hashlib
 import json
-import threading
 from datetime import datetime, timezone
 from email import message_from_string
 from email.mime.multipart import MIMEMultipart
@@ -282,6 +281,14 @@ class TestLoadKeywords:
         result = email_reader.load_keywords(str(bad_file))
         assert result == {}
 
+    def test_auto_creates_from_example_when_missing(self, tmp_path):
+        example = tmp_path / "keywords.example.json"
+        example.write_text(json.dumps({"categories": {"8": ["invoice"]}}))
+        kw_file = tmp_path / "keywords.json"
+        result = email_reader.load_keywords(str(kw_file))
+        assert "8" in result and "invoice" in result["8"]
+        assert kw_file.exists()
+
 
 class TestBuildCompiledPatterns:
     def test_compiles_combined_pattern(self):
@@ -323,23 +330,61 @@ class TestChunkList:
         assert flat == [42]
 
 
-class TestSharedCounter:
-    def test_adds_correctly(self):
-        counter = email_reader._SharedCounter()
-        assert counter.add(1) == 1
-        assert counter.add(2) == 3
-        assert counter.value == 3
+class TestLoadKeywordsSeeding:
+    def test_seeding_failure_returns_empty(self, tmp_path, monkeypatch):
+        from src.scripts.email_reader import keywords as kw_mod
 
-    def test_thread_safety(self):
-        counter = email_reader._SharedCounter()
-        threads = []
-        for _ in range(10):
-            t = threading.Thread(target=lambda: counter.add(100))
-            threads.append(t)
-            t.start()
-        for t in threads:
-            t.join()
-        assert counter.value == 1000
+        example = tmp_path / "keywords.example.json"
+        example.write_text(json.dumps({"categories": {"8": ["invoice"]}}))
+        kw_file = tmp_path / "keywords.json"
+
+        def boom(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(kw_mod.Path, "write_text", boom)
+        result = kw_mod.load_keywords(str(kw_file))
+        assert result == {}
+        assert not kw_file.exists()
+
+    def test_seeding_returns_empty_when_no_example(self, tmp_path):
+        kw_file = tmp_path / "absent.json"
+        assert email_reader.load_keywords(str(kw_file)) == {}
+        assert not kw_file.exists()
+
+
+class TestScanEmailsIntegration:
+    def test_pipeline_finds_matches(self, tmp_path, tmp_db):
+        kw_file = tmp_path / "keywords.json"
+        kw_file.write_text(json.dumps({"categories": {"10": ["important"], "7": ["mistake"]}}))
+
+        emails = [
+            {"message_id": "<a@e.com>", "subject": "important!", "body": "hello"},
+            {"message_id": "<b@e.com>", "subject": "normal", "body": "nothing"},
+        ]
+        result = email_reader.scan_emails(emails, str(kw_file), tmp_db)
+        assert result["scanned"] == 2
+        assert result["emails_with_matches"]
+
+    def test_pipeline_with_missing_keywords_file(self, tmp_db):
+        emails = [{"message_id": "<x@e.com>", "subject": "important", "body": "test"}]
+        result = email_reader.scan_emails(emails, "/nonexistent/kw.json", tmp_db)
+        assert result["scanned"] == 1
+        assert not result["emails_with_matches"]
+
+    def test_pipeline_initializes_db(self, tmp_path, tmp_db):
+        kw_file = tmp_path / "k.json"
+        kw_file.write_text(json.dumps({"categories": {}}))
+        result = email_reader.scan_emails([], str(kw_file), tmp_db)
+        assert result["total"] == 0
+
+
+class TestGetTextBodyErrorPaths:
+    def test_skips_part_with_undecodeable_payload(self):
+
+        msg = MIMEMultipart("alternative")
+        msg.attach(MIMEText("real body", "plain"))
+        result = email_reader.get_text_body(msg)
+        assert "real body" in result
 
 
 

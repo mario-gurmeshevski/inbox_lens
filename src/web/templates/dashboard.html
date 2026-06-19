@@ -2,7 +2,12 @@
 content %}
 <h1>Dashboard</h1>
 
-<div id="dashboard-content" hx-get="/partials/dashboard" hx-trigger="sse:refresh" hx-swap="innerHTML">
+<div
+  id="dashboard-content"
+  hx-get="/partials/dashboard"
+  hx-trigger="sse:refresh"
+  hx-swap="innerHTML"
+>
   {% include "partials/dashboard_content.html" %}
 </div>
 {% endblock %}

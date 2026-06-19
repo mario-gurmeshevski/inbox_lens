@@ -1,5 +1,4 @@
 import logging
-import threading
 from pathlib import Path
 
 from cryptography.fernet import Fernet
@@ -70,18 +69,13 @@ def _ensure_secret_key() -> bytes:
 
 
 _fernet_instance: Fernet | None = None
-_fernet_lock = threading.Lock()
 
 
 def _get_fernet() -> Fernet:
     global _fernet_instance
-    if _fernet_instance is not None:
-        return _fernet_instance
-    with _fernet_lock:
-        if _fernet_instance is not None:
-            return _fernet_instance
+    if _fernet_instance is None:
         _fernet_instance = Fernet(_ensure_secret_key())
-        return _fernet_instance
+    return _fernet_instance
 
 
 def _encrypt(plaintext: str) -> str:

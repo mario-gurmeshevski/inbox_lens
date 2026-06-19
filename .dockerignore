@@ -6,6 +6,7 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 data/
+docker-compose*.yaml
 src/data/emails.db
 src/data/emails.db-shm
 src/data/emails.db-wal

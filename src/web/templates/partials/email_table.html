@@ -9,10 +9,9 @@
     </tr>
   </thead>
   <tbody>
-    {% for email in emails %} {% set matches = email.get("keyword_matches",
-    {}) %} {% set highest = namespace(val=0) %} {% for k in matches %} {% if k
-    | int > highest.val %} {% set highest.val = k | int %} {% endif %} {%
-    endfor %}
+    {% for email in emails %} {% set matches = email.get("keyword_matches", {})
+    %} {% set highest = namespace(val=0) %} {% for k in matches %} {% if k | int
+    > highest.val %} {% set highest.val = k | int %} {% endif %} {% endfor %}
     <tr>
       <td data-label="Priority">
         {% if highest.val >= 9 %}
@@ -28,9 +27,7 @@
         {% endif %}
       </td>
       <td data-label="Subject">
-        <a
-          class="email-subject-link"
-          href="/emails/{{ email.message_id_hash }}"
+        <a class="email-subject-link" href="/emails/{{ email.message_id_hash }}"
           >{{ email.subject or "(no subject)" }}</a
         >
       </td>
@@ -44,9 +41,7 @@
         {% elif cat | int >= 7 %}
         <span class="badge badge-high">{{ cat }}: {{ words | length }}</span>
         {% elif cat | int >= 5 %}
-        <span class="badge badge-medium"
-          >{{ cat }}: {{ words | length }}</span
-        >
+        <span class="badge badge-medium">{{ cat }}: {{ words | length }}</span>
         {% else %}
         <span class="badge badge-low">{{ cat }}: {{ words | length }}</span>
         {% endif %} {% endfor %} {% if not matches %}

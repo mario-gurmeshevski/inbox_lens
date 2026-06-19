@@ -1,20 +1,20 @@
 #!/bin/sh
 set -e
-mkdir -p /app/data 2>/dev/null || true
+DATA_DIR="/app/src/data"
+mkdir -p "$DATA_DIR" 2>/dev/null || true
 
-KEYWORDS="${KEYWORDS_FILE:-/app/data/keywords.json}"
+KEYWORDS="$DATA_DIR/keywords.json"
 if [ ! -f "$KEYWORDS" ]; then
     cp /app/src/data/keywords.example.json "$KEYWORDS" 2>/dev/null || true
 fi
 
-DB="${DB_PATH:-/app/data/emails.db}"
+DB="$DATA_DIR/emails.db"
 HOST="0.0.0.0"
 if [ -f "$DB" ]; then
     VAL=$(python3 -c "
-import sqlite3, os
+import sqlite3
 try:
-    db = os.environ.get('DB_PATH', '/app/data/emails.db')
-    r = sqlite3.connect(db).execute(\"SELECT value FROM settings WHERE key='network_access'\").fetchone()
+    r = sqlite3.connect('$DB').execute(\"SELECT value FROM settings WHERE key='network_access'\").fetchone()
     print(r[0] if r else 'true')
 except Exception:
     print('true')

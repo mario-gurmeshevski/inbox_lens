@@ -15,7 +15,7 @@ from pathlib import Path
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.scripts import email_reader, cache, idle_monitor, event_bus
-from src.scripts.constants import DB_PATH, DEFAULT_NETWORK_ACCESS
+from src.scripts.constants import DB_PATH
 from src.scripts.utils import get_highest_priority
 
 load_dotenv()
@@ -60,7 +60,7 @@ app.mount("/static", StaticFiles(directory=str(_WEB_DIR / "static")), name="stat
 
 
 class SetupGuardMiddleware(BaseHTTPMiddleware):
-    _EXEMPT_PATHS = {"/setup", "/static", "/health", "/api/events"}
+    _EXEMPT_PATHS = {"/setup", "/static", "/health", "/api/events", "/partials/tailscale-status"}
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -91,15 +91,88 @@ def _is_docker() -> bool:
 def _get_local_ips() -> list[str]:
     if _is_docker():
         return []
+    ips: set[str] = set()
+
+    # Primary outbound IP via a UDP socket. No packets are actually sent
+    # (SOCK_DGRAM + connect only populates the routing table entry), but this
+    # reliably returns the interface used to reach the network on macOS,
+    # Linux, and Windows — unlike gethostbyname_ex, which fails on macOS
+    # hostnames ending in ".local" and frequently misses non-primary ifs.
     try:
-        hostname = socket.gethostname()
-        _, _, ips = socket.gethostbyname_ex(hostname)
-    except Exception:
-        return []
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect(("8.8.8.8", 80))
+            ips.add(sock.getsockname()[0])
+        finally:
+            sock.close()
+    except OSError:
+        pass
+
+    # Secondary source: hostname resolution surfaces additional interfaces
+    # on hosts where it works (and is harmless when it doesn't).
+    try:
+        _, _, resolved = socket.gethostbyname_ex(socket.gethostname())
+        ips.update(resolved)
+    except OSError:
+        pass
+
     return sorted(
         ip for ip in ips
         if not ip.startswith("127.") and not ip.startswith("169.254.")
     )
+
+
+TS_STATUS_FILE = "/shared/status.json"
+TS_LOGIN_URL_FILE = "/shared/login_url.txt"
+
+
+def _is_tailscale_mode() -> bool:
+    return Path("/shared").is_dir()
+
+
+def _tailscale_info():
+    if not _is_tailscale_mode():
+        return None
+    try:
+        with open(TS_STATUS_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+
+def _get_tailscale_ip() -> str:
+    info = _tailscale_info()
+    if not info or info.get("BackendState") != "Running":
+        return ""
+    self_node = info.get("Self") or {}
+    return next((ip for ip in self_node.get("TailscaleIPs", []) if ip.startswith("100.")), "")
+
+
+def _get_tailscale_dns_name() -> str:
+    info = _tailscale_info()
+    if not info or info.get("BackendState") != "Running":
+        return ""
+    self_node = info.get("Self") or {}
+    return self_node.get("DNSName", "").rstrip(".")
+
+
+def _get_tailscale_login_url() -> str:
+    if not _is_tailscale_mode():
+        return ""
+    try:
+        return Path(TS_LOGIN_URL_FILE).read_text().strip()
+    except (FileNotFoundError, OSError):
+        return ""
+
+
+def _tailscale_state(tailscale_ip: str, tailscale_login_url: str) -> str:
+    if tailscale_ip:
+        return "running"
+    if tailscale_login_url:
+        return "needs_login"
+    if _is_tailscale_mode():
+        return "starting"
+    return "none"
 
 
 @app.get("/health")
@@ -192,15 +265,24 @@ async def account_disconnect(request: Request):
 
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
-    network_access = cache.get_setting("network_access", DB_PATH) or DEFAULT_NETWORK_ACCESS
+    network_access = cache.get_setting("network_access", DB_PATH) or "true"
     network_on = network_access == "true"
     local_ips = _get_local_ips() if network_on else []
     host_ip = os.getenv("HOST_IP", "")
+    tailscale_ip = _get_tailscale_ip()
+    tailscale_login_url = _get_tailscale_login_url()
+    ts_state = _tailscale_state(tailscale_ip, tailscale_login_url)
+    tailscale_host = socket.gethostname() if tailscale_ip else ""
     port = int(os.getenv("WEB_PORT", "8000"))
     return templates.TemplateResponse(request, "settings.html", {
         "network_access": network_on,
         "local_ips": local_ips,
         "host_ip": host_ip,
+        "tailscale_ip": tailscale_ip,
+        "tailscale_host": tailscale_host,
+        "tailscale_dns_name": _get_tailscale_dns_name(),
+        "tailscale_login_url": tailscale_login_url,
+        "ts_state": ts_state,
         "is_docker": _is_docker(),
         "port": port,
         "restart_notice": False,
@@ -215,24 +297,30 @@ async def settings_network_access(request: Request):
     network_on = enabled == "true"
     local_ips = _get_local_ips() if network_on else []
     host_ip = os.getenv("HOST_IP", "")
+    tailscale_ip = _get_tailscale_ip()
+    tailscale_login_url = _get_tailscale_login_url()
+    ts_state = _tailscale_state(tailscale_ip, tailscale_login_url)
+    tailscale_host = socket.gethostname() if tailscale_ip else ""
     port = int(os.getenv("WEB_PORT", "8000"))
     return templates.TemplateResponse(request, "settings.html", {
         "network_access": network_on,
         "local_ips": local_ips,
         "host_ip": host_ip,
+        "tailscale_ip": tailscale_ip,
+        "tailscale_host": tailscale_host,
+        "tailscale_dns_name": _get_tailscale_dns_name(),
+        "tailscale_login_url": tailscale_login_url,
+        "ts_state": ts_state,
         "is_docker": _is_docker(),
         "port": port,
         "restart_notice": True,
     })
 
 
-@app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request):
-    counts = cache.get_counts(DB_PATH)
+def _dashboard_context(db_path: str) -> dict:
+    counts = cache.get_counts(db_path)
     total = counts["headers_only"] + counts["fetched"] + counts["checked"]
-    unscanned = total - counts["checked"]
-
-    raw_priority = cache.get_priority_counts(DB_PATH)
+    raw_priority = cache.get_priority_counts(db_path)
     priority_dist = {"critical": 0, "high": 0, "medium": 0, "low": 0}
     for level_str, count in raw_priority.items():
         level = int(level_str) if str(level_str).isdigit() else 0
@@ -245,19 +333,40 @@ async def dashboard(request: Request):
         elif level >= 1:
             priority_dist["low"] += count
     priority_dist["unclassified"] = total - sum(priority_dist.values())
-
-    recent_emails = cache.get_recent_emails(DB_PATH, limit=10)
-
-    monitor_active = _monitor is not None and _monitor.running
-
-    return templates.TemplateResponse(request, "dashboard.html", {
+    return {
         "counts": counts,
         "total": total,
-        "unscanned": unscanned,
+        "unscanned": total - counts["checked"],
         "priority_dist": priority_dist,
-        "recent_emails": recent_emails,
-        "monitor_active": monitor_active,
-    })
+        "recent_emails": cache.get_recent_emails(db_path, limit=10),
+    }
+
+
+def _email_list_context(db_path, status, priority, search, page, page_size=25) -> dict:
+    emails, total_rows, total_pages = cache.search_emails(
+        db_path,
+        status=status or None,
+        priority=priority or None,
+        search=search or None,
+        page=page,
+        page_size=page_size,
+    )
+    return {
+        "emails": emails,
+        "status": status,
+        "priority": priority,
+        "search": search,
+        "page": page,
+        "total_pages": total_pages,
+        "total_rows": total_rows,
+    }
+
+
+@app.get("/", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    ctx = _dashboard_context(DB_PATH)
+    ctx["monitor_active"] = _monitor is not None and _monitor.running
+    return templates.TemplateResponse(request, "dashboard.html", ctx)
 
 
 @app.get("/emails", response_class=HTMLResponse)
@@ -268,26 +377,7 @@ async def email_list(
     search: str = Query("", alias="search"),
     page: int = Query(1, alias="page"),
 ):
-    page_size = 25
-
-    emails, total_rows, total_pages = cache.search_emails(
-        DB_PATH,
-        status=status or None,
-        priority=priority or None,
-        search=search or None,
-        page=page,
-        page_size=page_size,
-    )
-
-    return templates.TemplateResponse(request, "emails.html", {
-        "emails": emails,
-        "status": status,
-        "priority": priority,
-        "search": search,
-        "page": page,
-        "total_pages": total_pages,
-        "total_rows": total_rows,
-    })
+    return templates.TemplateResponse(request, "emails.html", _email_list_context(DB_PATH, status, priority, search, page))
 
 
 @app.get("/emails/{email_hash}", response_class=HTMLResponse)
@@ -339,31 +429,7 @@ async def sse_events(request: Request):
 
 @app.get("/partials/dashboard", response_class=HTMLResponse)
 async def partial_dashboard(request: Request):
-    counts = cache.get_counts(DB_PATH)
-    total = counts["headers_only"] + counts["fetched"] + counts["checked"]
-    unscanned = total - counts["checked"]
-    raw_priority = cache.get_priority_counts(DB_PATH)
-    priority_dist = {"critical": 0, "high": 0, "medium": 0, "low": 0}
-    for level_str, count in raw_priority.items():
-        level = int(level_str) if str(level_str).isdigit() else 0
-        if level >= 9:
-            priority_dist["critical"] += count
-        elif level >= 7:
-            priority_dist["high"] += count
-        elif level >= 4:
-            priority_dist["medium"] += count
-        elif level >= 1:
-            priority_dist["low"] += count
-    priority_dist["unclassified"] = total - sum(priority_dist.values())
-    recent_emails = cache.get_recent_emails(DB_PATH, limit=10)
-
-    return templates.TemplateResponse(request, "partials/dashboard_content.html", {
-        "counts": counts,
-        "total": total,
-        "unscanned": unscanned,
-        "priority_dist": priority_dist,
-        "recent_emails": recent_emails,
-    })
+    return templates.TemplateResponse(request, "partials/dashboard_content.html", _dashboard_context(DB_PATH))
 
 
 @app.get("/partials/emails", response_class=HTMLResponse)
@@ -374,25 +440,7 @@ async def partial_emails(
     search: str = Query("", alias="search"),
     page: int = Query(1, alias="page"),
 ):
-    page_size = 25
-    emails, total_rows, total_pages = cache.search_emails(
-        DB_PATH,
-        status=status or None,
-        priority=priority or None,
-        search=search or None,
-        page=page,
-        page_size=page_size,
-    )
-
-    return templates.TemplateResponse(request, "partials/email_table.html", {
-        "emails": emails,
-        "status": status,
-        "priority": priority,
-        "search": search,
-        "page": page,
-        "total_pages": total_pages,
-        "total_rows": total_rows,
-    })
+    return templates.TemplateResponse(request, "partials/email_table.html", _email_list_context(DB_PATH, status, priority, search, page))
 
 
 @app.get("/partials/email-detail/{email_hash}", response_class=HTMLResponse)
@@ -406,6 +454,23 @@ async def partial_email_detail(request: Request, email_hash: str):
     return templates.TemplateResponse(request, "partials/email_detail_content.html", {
         "email": email_data,
         "email_hash": email_hash,
+    })
+
+
+@app.get("/partials/tailscale-status", response_class=HTMLResponse)
+async def partial_tailscale_status(request: Request):
+    tailscale_ip = _get_tailscale_ip()
+    tailscale_login_url = _get_tailscale_login_url()
+    ts_state = _tailscale_state(tailscale_ip, tailscale_login_url)
+    tailscale_host = socket.gethostname() if tailscale_ip else ""
+    port = int(os.getenv("WEB_PORT", "8000"))
+    return templates.TemplateResponse(request, "partials/tailscale_status.html", {
+        "ts_state": ts_state,
+        "tailscale_ip": tailscale_ip,
+        "tailscale_host": tailscale_host,
+        "tailscale_dns_name": _get_tailscale_dns_name(),
+        "tailscale_login_url": tailscale_login_url,
+        "port": port,
     })
 
 

@@ -1,14 +1,18 @@
-{% extends "base.html" %}
-{% block title %}{{ email.subject or "Email Detail" }}{% endblock %}
-{% block content %}
-<div style="margin-bottom: 1.25rem;">
-    <a href="/emails" class="btn btn-primary btn-sm">
-        <i data-lucide="arrow-left" style="width:14px;height:14px;"></i>
-        Back to Emails
-    </a>
+{% extends "base.html" %} {% block title %}{{ email.subject or "Email Detail"
+}}{% endblock %} {% block content %}
+<div style="margin-bottom: 1.25rem">
+  <a href="/emails" class="btn btn-primary btn-sm">
+    <i data-lucide="arrow-left" style="width: 14px; height: 14px"></i>
+    Back to Emails
+  </a>
 </div>
 
-<div id="email-detail-content" hx-get="/partials/email-detail/{{ email_hash }}" hx-trigger="sse:refresh" hx-swap="innerHTML">
-    {% include "partials/email_detail_content.html" %}
+<div
+  id="email-detail-content"
+  hx-get="/partials/email-detail/{{ email_hash }}"
+  hx-trigger="sse:refresh"
+  hx-swap="innerHTML"
+>
+  {% include "partials/email_detail_content.html" %}
 </div>
 {% endblock %}

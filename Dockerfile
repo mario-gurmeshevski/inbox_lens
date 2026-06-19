@@ -11,15 +11,10 @@ COPY src/ src/
 COPY entrypoint.sh /entrypoint.sh
 
 RUN useradd -m appuser \
-    && mkdir -p /app/data \
     && chown -R appuser:appuser /app \
     && chmod +x /entrypoint.sh
 
 USER appuser
-
-ENV DB_PATH=/app/data/emails.db
-ENV SECRET_KEY_PATH=/app/data/.secret.key
-ENV KEYWORDS_FILE=/app/data/keywords.json
 
 EXPOSE 8000
 

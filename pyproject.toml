@@ -1,14 +1,11 @@
 [project]
 name = "inbox-lens"
-version = "0.3.0"
+version = "1.1.0"
 description = "Fetch, cache, and scan emails via IMAP with keyword-based priority tagging and a web dashboard"
 requires-python = ">=3.12"
 dependencies = [
     "python-dotenv==1.2.2",
-    "python-telegram-bot[job-queue]==22.8",
-    "tqdm==4.68.2",
     "html2text==2025.4.15",
-    "rich==15.0.0",
     "fastapi==0.136.3",
     "python-multipart==0.0.32",
     "uvicorn==0.49.0",
@@ -19,11 +16,26 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest==9.0.3",
+    "pytest-cov==7.0.0",
     "ruff==0.15.16",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["src/tests"]
+
+[tool.coverage.run]
+source = ["src/scripts"]
+branch = true
+parallel = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
 
 [tool.ruff]
 line-length = 120

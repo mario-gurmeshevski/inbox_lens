@@ -20,13 +20,13 @@ def priority_emoji(level):
     except (ValueError, TypeError):
         return "\u26aa"
     if n >= 9:
-        return "\U0001f534"
+        return "\u26ab"
     if n >= 7:
+        return "\U0001f534"
+    if n >= 4:
         return "\U0001f7e0"
-    if n >= 5:
-        return "\U0001f7e1"
     if n >= 1:
-        return "\U0001f535"
+        return "\U0001f7e1"
     return "\u26aa"
 
 

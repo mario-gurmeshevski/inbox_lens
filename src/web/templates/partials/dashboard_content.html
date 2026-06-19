@@ -36,27 +36,20 @@
     Priority Distribution
   </div>
   <div class="priority-bar">
-    {% for tier, count in priority_dist.items() %}
-    {% if count > 0 %}
-    {% set pct = (count / total * 100) | round(1) %}
-    <div
-      class="priority-bar-segment {{ tier }}"
-      style="--w: {{ pct }}%"
-    >
+    {% for tier, count in priority_dist.items() %} {% if count > 0 %} {% set pct
+    = (count / total * 100) | round(1) %}
+    <div class="priority-bar-segment {{ tier }}" style="--w: {{ pct }}%">
       {% if pct >= 5 %}{{ count }}{% endif %}
     </div>
-    {% endif %}
-    {% endfor %}
+    {% endif %} {% endfor %}
   </div>
   <div class="priority-bar-legend">
-    {% for tier, count in priority_dist.items() %}
-    {% if count > 0 %}
+    {% for tier, count in priority_dist.items() %} {% if count > 0 %}
     <span
-      ><span class="legend-dot {{ tier }}"></span>
-      {{ tier | title }}: {{ count }}</span
+      ><span class="legend-dot {{ tier }}"></span> {{ tier | title }}: {{ count
+      }}</span
     >
-    {% endif %}
-    {% endfor %}
+    {% endif %} {% endfor %}
   </div>
 </div>
 {% endif %}

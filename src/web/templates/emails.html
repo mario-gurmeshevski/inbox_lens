@@ -9,25 +9,34 @@
 
 <div class="filter-bar">
   <select name="status" id="filter-status">
-    <option value="" {% if status == "" %}selected{% endif %}>
+    <option value="" {% if status="" ="" %}selected{% endif %}>
       All Status
     </option>
-    <option value="fetched" {% if status == "fetched" %}selected{% endif %}>
+    <option value="fetched" {% if status="" ="fetched" %}selected{% endif %}>
       Fetched
     </option>
-    <option value="checked" {% if status == "checked" %}selected{% endif %}>
+    <option value="checked" {% if status="" ="checked" %}selected{% endif %}>
       Checked
     </option>
-    <option value="headers_only" {% if status == "headers_only" %}selected{% endif %}>
+    <option
+      value="headers_only"
+      {%
+      if
+      status=""
+      ="headers_only"
+      %}selected{%
+      endif
+      %}
+    >
       Headers Only
     </option>
   </select>
   <select name="priority" id="filter-priority">
-    <option value="" {% if priority == "" %}selected{% endif %}>
+    <option value="" {% if priority="" ="" %}selected{% endif %}>
       All Priorities
     </option>
     {% for i in range(10, 0, -1) %}
-    <option value="{{ i }}" {% if priority == i|string %}selected{% endif %}>
+    <option value="{{ i }}" {% if priority="" ="i|string" %}selected{% endif %}>
       Level {{ i }}
     </option>
     {% endfor %}
@@ -49,7 +58,12 @@
   </a>
 </div>
 
-<div id="email-table" hx-get="/partials/emails?status={{ status }}&priority={{ priority }}&search={{ search }}&page={{ page }}" hx-trigger="sse:refresh" hx-swap="innerHTML">
+<div
+  id="email-table"
+  hx-get="/partials/emails?status={{ status }}&priority={{ priority }}&search={{ search }}&page={{ page }}"
+  hx-trigger="sse:refresh"
+  hx-swap="innerHTML"
+>
   {% include "partials/email_table.html" %}
 </div>
 

@@ -1,31 +1,36 @@
 {% if running %}
 <div class="status-box status-running">
-    <i data-lucide="loader" style="width:16px;height:16px;" class="spin"></i>
-    <div class="status-content">
-        <div class="status-header">
-            <span class="status-phase">{{ phase_label }}</span>
-            {% if total > 0 %}
-            <span class="status-count">{{ current }} / {{ total }}</span>
-            {% endif %}
-        </div>
-        {% if total > 0 %}
-        <div class="progress-bar-container">
-            {% set pct = (current / total * 100) | int %}
-            {% set bar_width = pct if pct > 3 else 3 %}
-            <div class="progress-bar" style="--w: {{ bar_width }}%">{{ pct }}%</div>
-        </div>
-        {% endif %}
+  <i data-lucide="loader" style="width: 16px; height: 16px" class="spin"></i>
+  <div class="status-content">
+    <div class="status-header">
+      <span class="status-phase">{{ phase_label }}</span>
+      {% if total > 0 %}
+      <span class="status-count">{{ current }} / {{ total }}</span>
+      {% endif %}
     </div>
-    <span hx-get="/api/status" hx-trigger="every 2s" hx-target="#action-status" hx-swap="innerHTML"></span>
+    {% if total > 0 %}
+    <div class="progress-bar-container">
+      {% set pct = (current / total * 100) | int %} {% set bar_width = pct if
+      pct > 3 else 3 %}
+      <div class="progress-bar" style="--w: {{ bar_width }}%">{{ pct }}%</div>
+    </div>
+    {% endif %}
+  </div>
+  <span
+    hx-get="/api/status"
+    hx-trigger="every 2s"
+    hx-target="#action-status"
+    hx-swap="innerHTML"
+  ></span>
 </div>
 {% elif phase == "error" %}
 <div class="status-box status-error">
-    <i data-lucide="alert-circle" style="width:16px;height:16px;"></i>
-    <span>{{ message }}</span>
+  <i data-lucide="alert-circle" style="width: 16px; height: 16px"></i>
+  <span>{{ message }}</span>
 </div>
 {% else %}
 <div class="status-box status-done">
-    <i data-lucide="check-circle" style="width:16px;height:16px;"></i>
-    <span>{{ message }}</span>
+  <i data-lucide="check-circle" style="width: 16px; height: 16px"></i>
+  <span>{{ message }}</span>
 </div>
 {% endif %}

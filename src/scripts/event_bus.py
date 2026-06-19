@@ -28,7 +28,7 @@ class EventBus:
         with self._lock:
             subscribers = list(self._subscribers)
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = None
         for q in subscribers:

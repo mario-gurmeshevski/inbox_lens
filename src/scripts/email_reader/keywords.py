@@ -11,7 +11,17 @@ logger = logging.getLogger(__name__)
 def load_keywords(keywords_path):
     path = Path(keywords_path)
     if not path.exists():
-        return {}
+        example = path.with_name(path.stem + ".example.json")
+        try:
+            if example.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+                logger.info("Created %s from %s", path, example)
+            else:
+                return {}
+        except Exception:
+            logger.warning("Failed to seed %s from %s", path, example, exc_info=True)
+            return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return data.get("categories", {})

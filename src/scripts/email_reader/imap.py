@@ -3,7 +3,6 @@ import re
 import ssl
 import logging
 import imaplib
-import threading
 import time
 import email as email_lib
 from contextlib import contextmanager
@@ -65,17 +64,6 @@ def imap_session(db_path=None):
             _safe_close(mail)
 
 
-class _SharedCounter:
-    def __init__(self):
-        self.value = 0
-        self._lock = threading.Lock()
-
-    def add(self, n=1):
-        with self._lock:
-            self.value += n
-            return self.value
-
-
 def _chunk_list(lst, n):
     k, m = divmod(len(lst), n)
     return [lst[i * k + min(i, m) : (i + 1) * k + min(i + 1, m)] for i in range(n)]
@@ -87,16 +75,7 @@ def _reconnect(conn, db_path=None):
     return _imap_connect(db_path)
 
 
-def _flush_progress(local_count, counter, progress_callback, grand_total):
-    if local_count > 0 and counter:
-        current = counter.add(local_count)
-        if progress_callback:
-            progress_callback(current, grand_total, "fetching")
-        return 0
-    return local_count
-
-
-def _batch_fetch_loop(conn, items, batch_size, bulk_fn, single_fn, report_fn, db_path=None):
+def _batch_fetch_loop(conn, items, batch_size, bulk_fn, single_fn, db_path=None):
     results = []
     batch_start = 0
     while batch_start < len(items):
@@ -109,7 +88,6 @@ def _batch_fetch_loop(conn, items, batch_size, bulk_fn, single_fn, report_fn, db
                 batch_result = bulk_fn(conn, batch)
                 if batch_result is not None:
                     results.extend(batch_result)
-                    report_fn(len(batch))
                     batch_ok = True
                     break
             except (imaplib.IMAP4.abort, ssl.SSLError, OSError):
@@ -127,7 +105,6 @@ def _batch_fetch_loop(conn, items, batch_size, bulk_fn, single_fn, report_fn, db
             for item in batch:
                 single_result, conn = single_fn(conn, item)
                 results.extend(single_result)
-                report_fn(1)
 
         batch_start = batch_end
 
@@ -196,27 +173,6 @@ def _get_email_ids(mail, since_date):
     if status != "OK":
         return []
     return data[0].split()
-
-
-def _fetch_message_ids_bulk(mail, email_ids):
-    if not email_ids:
-        return {}
-    id_str = b",".join(email_ids)
-    status, msg_data = mail.uid('fetch', id_str, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
-    if status != "OK":
-        return {}
-    results = {}
-    for item in msg_data:
-        if isinstance(item, tuple):
-            envelope = item[0].decode(errors="replace")
-            uid = _extract_uid(envelope)
-            if uid is None:
-                continue
-            raw = item[1]
-            msg = email_lib.message_from_bytes(raw)
-            message_id = msg.get("Message-ID", "")
-            results[uid] = message_id
-    return results
 
 
 def _fetch_headers_bulk(mail, email_ids):
@@ -349,44 +305,31 @@ def move_to_trash(mail, message_id):
     return True
 
 
-def fetch_headers_and_cache(since_date=None, db_path=None, max_workers=MAX_WORKERS, progress_callback=None):
+def fetch_headers_and_cache(since_date=None, db_path=None):
     if db_path is None:
         db_path = DB_PATH
 
     if not cache.has_email_credentials(db_path):
-        return {"error": "Email account not configured. Please log in via the web dashboard or Telegram bot."}
+        return {"error": "Email account not configured. Please log in via the web dashboard."}
 
     cache.init_db(db_path)
 
     try:
-        if progress_callback:
-            progress_callback(0, 0, "connecting")
-
         with imap_session(db_path) as mail:
-            if progress_callback:
-                progress_callback(0, 0, "searching")
-
             email_ids = _get_email_ids(mail, since_date)
             if not email_ids:
-                if progress_callback:
-                    progress_callback(0, 0, "done")
                 return {"new_count": 0, "existing_count": 0, "emails": [], "imap_id_pairs": []}
 
-            if progress_callback:
-                progress_callback(0, len(email_ids), "searching")
-
-            eid_map = {eid: eid for eid in email_ids}
             headers = _fetch_headers_bulk(mail, email_ids)
 
             header_entries = []
             for header in headers:
                 uid = header.pop("_uid", None)
-                eid = eid_map.get(uid) if uid else None
-                if eid is None:
+                if not uid:
                     continue
                 mid = header.get("message_id", "")
                 h = cache._hash_message_id(mid)
-                header_entries.append((header, eid, mid, h))
+                header_entries.append((header, uid, mid, h))
 
             existing_hashes = cache.check_hashes_exist(db_path, [h for _, _, _, h in header_entries])
 
@@ -399,13 +342,7 @@ def fetch_headers_and_cache(since_date=None, db_path=None, max_workers=MAX_WORKE
 
             existing = cache.get_total_count(db_path)
 
-            if progress_callback:
-                progress_callback(len(new_headers), len(email_ids), "filtering")
-
             cache.save_headers_batch(new_headers, db_path)
-
-            if progress_callback:
-                progress_callback(len(new_headers), len(new_headers), "saving")
 
             return {
                 "new_count": len(new_headers),
@@ -417,38 +354,20 @@ def fetch_headers_and_cache(since_date=None, db_path=None, max_workers=MAX_WORKE
         return {"error": str(e)}
 
 
-def _fetch_body_chunk(chunk_pairs, progress_callback=None, counter=None, grand_total=0, db_path=None):
-    local_count = 0
-    last_cb_time = time.monotonic()
-
-    def _report_count(count):
-        nonlocal local_count, last_cb_time
-        local_count += count
-        if progress_callback and counter:
-            now = time.monotonic()
-            if now - last_cb_time >= 1.0:
-                current = counter.add(local_count)
-                local_count = 0
-                last_cb_time = now
-                progress_callback(current, grand_total, "fetching")
-
+def _fetch_body_chunk(chunk_pairs, db_path=None):
     bulk_fn, single_fn = _make_body_fetchers(db_path)
-
     results = []
     try:
         conn = _imap_connect(db_path)
-        results, conn = _batch_fetch_loop(conn, chunk_pairs, FETCH_BATCH_SIZE, bulk_fn, single_fn, _report_count, db_path)
-        local_count = _flush_progress(local_count, counter, progress_callback, grand_total)
+        results, conn = _batch_fetch_loop(conn, chunk_pairs, FETCH_BATCH_SIZE, bulk_fn, single_fn, db_path)
         _safe_close(conn)
     except Exception:
         logger.warning("Failed to connect for body chunk fetch", exc_info=True)
-        if local_count > 0 and counter:
-            counter.add(local_count)
 
     return results
 
 
-def fetch_bodies_for_ids(imap_id_pairs, db_path=None, max_workers=MAX_WORKERS, progress_callback=None):
+def fetch_bodies_for_ids(imap_id_pairs, db_path=None, max_workers=MAX_WORKERS):
     if db_path is None:
         db_path = DB_PATH
 
@@ -457,22 +376,15 @@ def fetch_bodies_for_ids(imap_id_pairs, db_path=None, max_workers=MAX_WORKERS, p
 
     cache.init_db(db_path)
 
-    total = len(imap_id_pairs)
     num_workers = max(1, min(max_workers, MAX_WORKERS))
-    chunks = _chunk_list(imap_id_pairs, num_workers)
-    chunks = [c for c in chunks if c]
-    counter = _SharedCounter()
+    chunks = [c for c in _chunk_list(imap_id_pairs, num_workers) if c]
 
     results = []
     with ThreadPoolExecutor(max_workers=min(len(chunks), MAX_WORKERS)) as executor:
-        futures = [
-            executor.submit(_fetch_body_chunk, chunk, progress_callback, counter, total, db_path)
-            for chunk in chunks
-        ]
+        futures = [executor.submit(_fetch_body_chunk, chunk, db_path) for chunk in chunks]
         for future in as_completed(futures):
             try:
-                chunk_results = future.result()
-                results.extend(chunk_results)
+                results.extend(future.result())
             except Exception:
                 continue
 
@@ -480,8 +392,6 @@ def fetch_bodies_for_ids(imap_id_pairs, db_path=None, max_workers=MAX_WORKERS, p
     updated = cache.update_bodies_batch(updates, db_path)
     if updated < len(updates):
         logger.warning("Body DB update: %d/%d rows updated", updated, len(updates))
-    if progress_callback:
-        progress_callback(counter.value, total, "done")
     return results
 
 
@@ -490,7 +400,7 @@ def fetch_single_body(message_id, db_path=None):
         db_path = DB_PATH
 
     if not cache.has_email_credentials(db_path):
-        return {"error": "Email account not configured. Please log in via the web dashboard or Telegram bot."}
+        return {"error": "Email account not configured. Please log in via the web dashboard."}
 
     try:
         with imap_session(db_path) as mail:
@@ -512,7 +422,7 @@ def fetch_single_body(message_id, db_path=None):
         return {"error": str(e)}
 
 
-def fetch_bodies_by_message_ids(message_ids, db_path=None, progress_callback=None):
+def fetch_bodies_by_message_ids(message_ids, db_path=None):
     if db_path is None:
         db_path = DB_PATH
 
@@ -520,12 +430,8 @@ def fetch_bodies_by_message_ids(message_ids, db_path=None, progress_callback=Non
         return {"fetched": 0, "failed": 0}
 
     cache.init_db(db_path)
-    total = len(message_ids)
     fetched = 0
     failed = 0
-
-    if progress_callback:
-        progress_callback(0, total, "fetching_bodies")
 
     conn = None
     try:
@@ -542,19 +448,8 @@ def fetch_bodies_by_message_ids(message_ids, db_path=None, progress_callback=Non
         if failed > 0:
             logger.warning("UIDs not found for %d message-id(s)", failed)
 
-        if progress_callback:
-            progress_callback(fetched, total, "fetching_bodies")
-
-        processed = 0
-
-        def report_fn(count):
-            nonlocal processed
-            processed += count
-            if progress_callback:
-                progress_callback(processed + failed, total, "fetching_bodies")
-
         bulk_fn, single_fn = _make_body_fetchers(db_path)
-        raw_results, conn = _batch_fetch_loop(conn, target_pairs, FETCH_BATCH_SIZE, bulk_fn, single_fn, report_fn, db_path)
+        raw_results, conn = _batch_fetch_loop(conn, target_pairs, FETCH_BATCH_SIZE, bulk_fn, single_fn, db_path)
 
         db_updates = [
             (r.get("_message_id", r.get("message_id", "")), r.get("body", ""))
@@ -573,11 +468,7 @@ def fetch_bodies_by_message_ids(message_ids, db_path=None, progress_callback=Non
     except Exception:
         logger.warning("Failed to connect for batch body fetch by message_id", exc_info=True)
         _safe_close(conn)
-        remaining = total - fetched - failed
-        failed += remaining
-
-    if progress_callback:
-        progress_callback(fetched, total, "done")
+        failed += len(message_ids) - fetched - failed
 
     return {"fetched": fetched, "failed": failed}
 
@@ -587,7 +478,7 @@ def delete_email(message_id, db_path=None):
         db_path = DB_PATH
 
     if not cache.has_email_credentials(db_path):
-        return {"error": "Email account not configured. Please log in via the web dashboard or Telegram bot."}
+        return {"error": "Email account not configured. Please log in via the web dashboard."}
 
     try:
         with imap_session(db_path) as mail:

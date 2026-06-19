@@ -6,7 +6,7 @@ This document outlines planned features and improvements for Inbox Lens.
 
 Connect and monitor multiple email accounts simultaneously.
 
-- Add multiple IMAP accounts via the web setup page or Telegram
+- Add multiple IMAP accounts via the web setup page
 - Per-account keyword configuration and priority rules
 - Unified inbox view across all accounts with account badges
 - Individual account stats on the dashboard

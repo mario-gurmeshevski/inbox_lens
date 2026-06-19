@@ -65,6 +65,22 @@ def _parse_date_iso(date_str: str) -> str | None:
 
 _local = threading.local()
 _CONNECTION_MAX_AGE = 300
+_all_connections: set[sqlite3.Connection] = set()
+_all_connections_lock = threading.Lock()
+
+
+def close_all_connections() -> None:
+    with _all_connections_lock:
+        conns = list(_all_connections)
+        _all_connections.clear()
+    for conn in conns:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    for key in list(vars(_local).keys()):
+        if key.startswith("_conn_"):
+            setattr(_local, key, None)
 
 
 def _get_conn(db_path: str) -> sqlite3.Connection:
@@ -79,9 +95,10 @@ def _get_conn(db_path: str) -> sqlite3.Connection:
                 conn.close()
             except Exception:
                 pass
+            _discard_conn(conn, key)
             conn = None
     if conn is None:
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
@@ -90,9 +107,17 @@ def _get_conn(db_path: str) -> sqlite3.Connection:
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA mmap_size=268435456")
         conn.execute("PRAGMA busy_timeout=5000")
+        with _all_connections_lock:
+            _all_connections.add(conn)
         setattr(_local, key, conn)
         setattr(_local, ts_key, now)
     return conn
+
+
+def _discard_conn(conn: sqlite3.Connection, key: str) -> None:
+    with _all_connections_lock:
+        _all_connections.discard(conn)
+    setattr(_local, key, None)
 
 
 @contextmanager
@@ -110,9 +135,8 @@ def _connect(db_path: str):
                 conn.close()
             except Exception:
                 pass
-            setattr(_local, key, None)
+            _discard_conn(conn, key)
         raise
-
 
 def _migrate_thread_id(db_path: str) -> None:
     with _connect(db_path) as conn:

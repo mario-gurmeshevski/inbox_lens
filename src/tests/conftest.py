@@ -9,6 +9,48 @@ def tmp_db(tmp_path):
     cache.init_db(db_path)
     return db_path
 
+@pytest.fixture(autouse=True)
+def cleanup_db_connections():
+    yield
+    from src.scripts.cache.db import close_all_connections
+    close_all_connections()
+
+
+@pytest.fixture
+def isolated_secret_key(tmp_path, monkeypatch):
+    from src.scripts.cache import crypto
+
+    key_path = tmp_path / ".secret.key"
+    monkeypatch.setattr(crypto, "SECRET_KEY_PATH", str(key_path))
+    monkeypatch.setattr(crypto, "_fernet_instance", None)
+    yield key_path
+    monkeypatch.setattr(crypto, "_fernet_instance", None)
+
+
+@pytest.fixture
+def fake_credentials(monkeypatch):
+    monkeypatch.setattr(cache, "get_email_credentials", lambda db_path=None: ("user@e.com", "pass"))
+    monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
+
+
+@pytest.fixture
+def fake_mail():
+    from unittest.mock import MagicMock
+
+    mail = MagicMock(name="imap_conn")
+    mail.uid.return_value = ("OK", [b""])
+    mail.select.return_value = ("OK", [b""])
+    mail.list.return_value = ("OK", [])
+    mail.capability.return_value = ("OK", [b"IMAP4rev1 IDLE"])
+    mail.login.return_value = ("OK", [b""])
+    mail.close.return_value = ("OK", [b""])
+    mail.logout.return_value = ("OK", [b""])
+    mail.send.return_value = None
+    mail.readline.return_value = b"+ idling\r\n"
+    mail._new_tag.return_value = b"AB0001"
+    return mail
+
+
 
 @pytest.fixture
 def sample_email():
@@ -18,7 +60,7 @@ def sample_email():
         "subject": "Test Subject",
         "date": "Mon, 01 Jan 2024 10:00:00 +0000",
         "body": "Hello, this is a test email body.",
-        "keyword_matches": {"8": ["фактура"]},
+        "keyword_matches": {"8": ["invoice"]},
         "_category": "8",
         "thread_id": "abc123def456",
         "in_reply_to": "<parent@example.com>",
@@ -34,7 +76,7 @@ def sample_emails_batch():
             "subject": f"Batch subject {i}",
             "date": f"Mon, 0{i+1} Jan 2024 10:00:00 +0000",
             "body": f"Body {i}",
-            "keyword_matches": {"7": ["проблем"]} if i % 2 == 0 else None,
+            "keyword_matches": {"7": ["problem"]} if i % 2 == 0 else None,
             "_category": "7" if i % 2 == 0 else None,
             "thread_id": f"thread_{i}",
             "in_reply_to": None,
@@ -46,9 +88,9 @@ def sample_emails_batch():
 @pytest.fixture
 def compiled_patterns():
     categories = {
-        "10": ["итно", "веднаш"],
-        "8": ["фактура", "плаќање"],
-        "7": ["проблем", "грешка"],
+        "10": ["important", "immediately"],
+        "8": ["invoice", "payment"],
+        "7": ["problem", "mistake"],
         "1": ["unsubscribe"],
     }
     return email_reader.build_compiled_patterns(categories)

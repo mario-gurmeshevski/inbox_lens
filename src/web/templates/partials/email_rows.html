@@ -1,43 +1,39 @@
-{% for email in emails %}
-{% set matches = email.get("keyword_matches", {}) %}
-{% set highest = namespace(val=0) %}
-{% for k in matches %}
-    {% if k | int > highest.val %}
-        {% set highest.val = k | int %}
-    {% endif %}
-{% endfor %}
+{% for email in emails %} {% set matches = email.get("keyword_matches", {}) %}
+{% set highest = namespace(val=0) %} {% for k in matches %} {% if k | int >
+highest.val %} {% set highest.val = k | int %} {% endif %} {% endfor %}
 <tr>
-    <td>
-        {% if highest.val >= 9 %}
-            <span class="priority-critical">{{ highest.val }}</span>
-        {% elif highest.val >= 7 %}
-            <span class="priority-high">{{ highest.val }}</span>
-        {% elif highest.val >= 5 %}
-            <span class="priority-medium">{{ highest.val }}</span>
-        {% elif highest.val >= 1 %}
-            <span class="priority-low">{{ highest.val }}</span>
-        {% else %}
-            <span class="priority-none">-</span>
-        {% endif %}
-    </td>
-    <td><a href="/emails/{{ email.message_id_hash }}">{{ email.subject or "(no subject)" }}</a></td>
-    <td>{{ (email.from or "")[:35] }}</td>
-    <td>{{ email.date | format_date }}</td>
-    <td>
-        {% for cat, words in matches.items() %}
-            {% if cat | int >= 9 %}
-                <span class="badge badge-critical">{{ cat }}: {{ words | length }}</span>
-            {% elif cat | int >= 7 %}
-                <span class="badge badge-high">{{ cat }}: {{ words | length }}</span>
-            {% elif cat | int >= 5 %}
-                <span class="badge badge-medium">{{ cat }}: {{ words | length }}</span>
-            {% else %}
-                <span class="badge badge-low">{{ cat }}: {{ words | length }}</span>
-            {% endif %}
-        {% endfor %}
-        {% if not matches %}
-            <span class="badge badge-none">none</span>
-        {% endif %}
-    </td>
+  <td>
+    {% if highest.val >= 9 %}
+    <span class="priority-critical">{{ highest.val }}</span>
+    {% elif highest.val >= 7 %}
+    <span class="priority-high">{{ highest.val }}</span>
+    {% elif highest.val >= 5 %}
+    <span class="priority-medium">{{ highest.val }}</span>
+    {% elif highest.val >= 1 %}
+    <span class="priority-low">{{ highest.val }}</span>
+    {% else %}
+    <span class="priority-none">-</span>
+    {% endif %}
+  </td>
+  <td>
+    <a href="/emails/{{ email.message_id_hash }}"
+      >{{ email.subject or "(no subject)" }}</a
+    >
+  </td>
+  <td>{{ (email.from or "")[:35] }}</td>
+  <td>{{ email.date | format_date }}</td>
+  <td>
+    {% for cat, words in matches.items() %} {% if cat | int >= 9 %}
+    <span class="badge badge-critical">{{ cat }}: {{ words | length }}</span>
+    {% elif cat | int >= 7 %}
+    <span class="badge badge-high">{{ cat }}: {{ words | length }}</span>
+    {% elif cat | int >= 5 %}
+    <span class="badge badge-medium">{{ cat }}: {{ words | length }}</span>
+    {% else %}
+    <span class="badge badge-low">{{ cat }}: {{ words | length }}</span>
+    {% endif %} {% endfor %} {% if not matches %}
+    <span class="badge badge-none">none</span>
+    {% endif %}
+  </td>
 </tr>
 {% endfor %}

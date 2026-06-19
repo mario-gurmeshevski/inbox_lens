@@ -1,0 +1,69 @@
+<div
+  id="tailscale-section"
+  {%
+  if
+  ts_state
+  !="running"
+  %}hx-get="/partials/tailscale-status"
+  hx-trigger="every 5s"
+  hx-swap="outerHTML"
+  {%
+  endif
+  %}
+>
+  {% if ts_state == "starting" %}
+  <div class="settings-hint">
+    <i
+      data-lucide="loader"
+      style="width: 14px; height: 14px; flex-shrink: 0"
+      class="spin"
+    ></i>
+    <span>Connecting to Tailscale...</span>
+  </div>
+  {% elif ts_state == "needs_login" and tailscale_login_url %}
+  <div class="settings-hint">
+    <i data-lucide="link" style="width: 14px; height: 14px; flex-shrink: 0"></i>
+    <span
+      >Authorize on Tailscale:
+      <a href="{{ tailscale_login_url }}" target="_blank" rel="noopener"
+        >{{ tailscale_login_url }}</a
+      ></span
+    >
+  </div>
+  {% elif ts_state == "running" %} {% if tailscale_dns_name %}
+  <div class="settings-url">
+    <code>http://{{ tailscale_dns_name }}:{{ port }}</code>
+    <button
+      type="button"
+      class="btn btn-sm"
+      onclick="navigator.clipboard.writeText('http://{{ tailscale_dns_name }}:{{ port }}')"
+    >
+      <i data-lucide="copy" style="width: 14px; height: 14px"></i>
+      Copy
+    </button>
+  </div>
+  {% endif %}
+  <div class="settings-url">
+    <code>http://{{ tailscale_host }}:{{ port }}</code>
+    <button
+      type="button"
+      class="btn btn-sm"
+      onclick="navigator.clipboard.writeText('http://{{ tailscale_host }}:{{ port }}')"
+    >
+      <i data-lucide="copy" style="width: 14px; height: 14px"></i>
+      Copy
+    </button>
+  </div>
+  <div class="settings-url">
+    <code>http://{{ tailscale_ip }}:{{ port }}</code>
+    <button
+      type="button"
+      class="btn btn-sm"
+      onclick="navigator.clipboard.writeText('http://{{ tailscale_ip }}:{{ port }}')"
+    >
+      <i data-lucide="copy" style="width: 14px; height: 14px"></i>
+      Copy
+    </button>
+  </div>
+  {% endif %}
+</div>

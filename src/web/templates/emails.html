@@ -1,12 +1,10 @@
-{% extends "base.html" %} {% block title %}Emails{% endblock %} {% block content
-%}
+{% extends "base.html" %} {% block title %}Emails{% endblock %} {% block content %}
 <h1>
   Emails
   <span style="font-size: 0.9rem; color: var(--text-muted); font-weight: 400"
     >({{ total_rows }} total)</span
   >
 </h1>
-
 <div class="filter-bar">
   <select name="status" id="filter-status">
     <option value="" {% if status == "" %}selected{% endif %}>
@@ -48,31 +46,31 @@
     Clear
   </a>
 </div>
-
-<div id="email-table" hx-get="/partials/emails?status={{ status }}&priority={{ priority }}&search={{ search }}&page={{ page }}" hx-trigger="sse:refresh" hx-swap="innerHTML">
+<div
+  id="email-table"
+  hx-get="/partials/emails?status={{ status }}&priority={{ priority }}&search={{ search }}&page={{ page }}"
+  hx-trigger="sse:refresh"
+  hx-swap="innerHTML"
+>
   {% include "partials/email_table.html" %}
 </div>
-
 {% if total_pages > 1 %}
 <div class="pagination">
   {% if page > 1 %}
-  <a
+
     href="{{ url_for('email_list') }}?status={{ status }}&priority={{ priority }}&search={{ search }}&page={{ page - 1 }}"
     >&laquo; Prev</a
   >
   {% endif %}
-
   <span class="current">Page {{ page }} of {{ total_pages }}</span>
-
   {% if page < total_pages %}
-  <a
+
     href="{{ url_for('email_list') }}?status={{ status }}&priority={{ priority }}&search={{ search }}&page={{ page + 1 }}"
     >Next &raquo;</a
   >
   {% endif %}
 </div>
 {% endif %}
-
 <script>
   function applyFilters() {
     const status = document.getElementById("filter-status").value;

@@ -9,3 +9,5 @@ src/data/emails.db
 src/data/emails.db-shm
 src/data/emails.db-wal
 src/data/.secret.key
+tailscale-state/
+.coverage

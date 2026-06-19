@@ -7,10 +7,7 @@ import hashlib
 from itertools import groupby
 from email.header import decode_header
 
-try:
-    import html2text as _html2text_mod
-except ImportError:
-    _html2text_mod = None
+import html2text as _html2text_mod
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +16,7 @@ _html2text_local = threading.local()
 
 def _get_html2text():
     converter = getattr(_html2text_local, 'converter', None)
-    if converter is None and _html2text_mod is not None:
+    if converter is None:
         converter = _html2text_mod.HTML2Text()
         converter.ignore_links = False
         converter.ignore_images = True
@@ -44,7 +41,6 @@ def decode_str(value):
 _RE_IMG = re.compile(r'<img[^>]*>', re.IGNORECASE)
 _RE_STYLE = re.compile(r'<style[^>]*>.*?</style>', re.IGNORECASE | re.DOTALL)
 _RE_NBSP = re.compile(r'&nbsp;')
-_RE_ENTITY = re.compile(r'&([a-zA-Z]+);')
 _RE_SPACES = re.compile(r'[ \t]+')
 _RE_BLANK_LINE = re.compile(r'\n[ \t]+\n')
 _RE_NEWLINES = re.compile(r'\n{3,}')
@@ -52,8 +48,6 @@ _RE_DASHES = re.compile(r'-{3,}')
 _RE_UNDERSCORES = re.compile(r'_{3,}')
 _RE_STARS = re.compile(r'\*{3,}')
 _RE_PREFIX = re.compile(r'^(Re|Fwd|Fw|Reply)\s*:\s*', re.IGNORECASE)
-_RE_BR = re.compile(r'<br\s*/?>', re.IGNORECASE)
-_RE_ANY_TAG = re.compile(r'<[^>]+')
 
 
 def _clean_body(text: str) -> str:
@@ -62,7 +56,7 @@ def _clean_body(text: str) -> str:
     text = _RE_IMG.sub('', text)
     text = _RE_STYLE.sub('', text)
     text = _RE_NBSP.sub(' ', text)
-    text = _RE_ENTITY.sub(lambda m: html.unescape(f'&{m.group(1)};'), text)
+    text = html.unescape(text)
     text = _RE_SPACES.sub(' ', text)
     text = _RE_BLANK_LINE.sub('\n\n', text)
     text = _RE_NEWLINES.sub('\n\n', text)
@@ -79,15 +73,7 @@ def _clean_body(text: str) -> str:
 
 
 def _html_to_text(html_body: str) -> str:
-    converter = _get_html2text()
-    if converter:
-        raw = converter.handle(html_body) or ""
-        return _clean_body(raw)
-    text = _RE_BR.sub("\n", html_body)
-    text = _RE_STYLE.sub("", text)
-    text = _RE_ANY_TAG.sub("", text)
-    text = html.unescape(text)
-    return _clean_body(text)
+    return _clean_body(_get_html2text().handle(html_body) or "")
 
 
 def get_text_body(msg):

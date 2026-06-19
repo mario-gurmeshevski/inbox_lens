@@ -1,14 +1,37 @@
 {
   "categories": {
-    "10": ["urgent", "asap", "immediately", "action required", "deadline today"],
-    "9": ["final notice", "overdue", "past due", "last chance", "expires today"],
+    "10": [
+      "urgent",
+      "asap",
+      "immediately",
+      "action required",
+      "deadline today"
+    ],
+    "9": [
+      "final notice",
+      "overdue",
+      "past due",
+      "last chance",
+      "expires today"
+    ],
     "8": ["invoice", "payment", "refund", "charge", "receipt"],
     "7": ["meeting", "appointment", "schedule", "agenda", "confirmed"],
     "6": ["password", "security", "login", "account suspended", "two-factor"],
-    "5": ["verify your account", "click here", "password expire", "confirm your email"],
+    "5": [
+      "verify your account",
+      "click here",
+      "password expire",
+      "confirm your email"
+    ],
     "4": ["calendar", "booked", "reschedule", "reminder", "follow up"],
     "3": ["notification", "update", "announcement", "news", "information"],
     "2": ["promotion", "discount", "offer", "sale", "deal"],
-    "1": ["unsubscribe", "no-reply", "newsletter", "automated message", "do not reply"]
+    "1": [
+      "unsubscribe",
+      "no-reply",
+      "newsletter",
+      "automated message",
+      "do not reply"
+    ]
   }
 }

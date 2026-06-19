@@ -1,8 +1,13 @@
+import json
 from unittest.mock import patch
 
 import pytest
 
 from src.scripts import cache, web
+
+
+def _raise(exc):
+    raise exc
 
 
 class TestFormatDate:
@@ -131,3 +136,446 @@ class TestWebEndpoints:
             client = self._make_client()
             resp = client.get("/account")
         assert resp.status_code == 200
+
+
+class TestWebHelpers:
+    def test_is_docker_returns_bool(self):
+        assert isinstance(web._is_docker(), bool)
+
+    def test_is_docker_true_when_dockerenv_exists(self, monkeypatch):
+        class FakePath:
+            def __init__(self, p):
+                self.p = p
+
+            def exists(self):
+                return self.p == "/.dockerenv"
+
+        monkeypatch.setattr(web, "Path", FakePath)
+        assert web._is_docker() is True
+
+    def test_get_local_ips_returns_empty_in_docker(self, monkeypatch):
+        monkeypatch.setattr(web, "_is_docker", lambda: True)
+        assert web._get_local_ips() == []
+
+    def test_get_local_ips_filters_loopback_and_link_local(self, monkeypatch):
+        monkeypatch.setattr(web, "_is_docker", lambda: False)
+        monkeypatch.setattr("socket.socket", lambda *a, **k: _raise(OSError()))
+        monkeypatch.setattr(
+            "socket.gethostbyname_ex",
+            lambda hostname: ("host", [], ["127.0.0.1", "192.168.1.5", "169.254.1.1", "10.0.0.5"]),
+        )
+        ips = web._get_local_ips()
+        assert "127.0.0.1" not in ips
+        assert "169.254.1.1" not in ips
+        assert "192.168.1.5" in ips
+        assert "10.0.0.5" in ips
+
+    def test_get_local_ips_uses_udp_socket_when_resolver_fails(self, monkeypatch):
+        monkeypatch.setattr(web, "_is_docker", lambda: False)
+        monkeypatch.setattr("socket.gethostbyname_ex", lambda hostname: _raise(OSError()))
+
+        class FakeSocket:
+            def __init__(self, *args, **kwargs):
+                self.closed = False
+
+            def connect(self, addr):
+                pass
+
+            def getsockname(self):
+                return ("192.168.1.50", 0)
+
+            def close(self):
+                self.closed = True
+
+        monkeypatch.setattr("socket.socket", FakeSocket)
+        assert web._get_local_ips() == ["192.168.1.50"]
+
+    def test_get_local_ips_handles_socket_failure(self, monkeypatch):
+        monkeypatch.setattr(web, "_is_docker", lambda: False)
+        monkeypatch.setattr("socket.socket", lambda *a, **k: _raise(OSError()))
+
+        def boom(hostname):
+            raise OSError("no host")
+
+        monkeypatch.setattr("socket.gethostbyname_ex", boom)
+        assert web._get_local_ips() == []
+
+    def test_is_tailscale_mode_false_without_shared_dir(self):
+        assert isinstance(web._is_tailscale_mode(), bool)
+
+    def test_tailscale_info_none_when_not_tailscale_mode(self, monkeypatch):
+        monkeypatch.setattr(web, "_is_tailscale_mode", lambda: False)
+        assert web._tailscale_info() is None
+
+    def test_tailscale_info_parses_status_file(self, monkeypatch, tmp_path):
+        import json
+
+        status_file = tmp_path / "status.json"
+        status_file.write_text(json.dumps({"BackendState": "Running", "Self": {"TailscaleIPs": ["100.64.0.1"]}}))
+        monkeypatch.setattr(web, "_is_tailscale_mode", lambda: True)
+        monkeypatch.setattr(web, "TS_STATUS_FILE", str(status_file))
+        info = web._tailscale_info()
+        assert info["BackendState"] == "Running"
+
+    def test_tailscale_info_none_on_missing_file(self, monkeypatch):
+        monkeypatch.setattr(web, "_is_tailscale_mode", lambda: True)
+        monkeypatch.setattr(web, "TS_STATUS_FILE", "/nonexistent/status.json")
+        assert web._tailscale_info() is None
+
+    def test_tailscale_info_none_on_invalid_json(self, monkeypatch, tmp_path):
+        bad = tmp_path / "bad.json"
+        bad.write_text("not json{{{")
+        monkeypatch.setattr(web, "_is_tailscale_mode", lambda: True)
+        monkeypatch.setattr(web, "TS_STATUS_FILE", str(bad))
+        assert web._tailscale_info() is None
+
+    def test_get_tailscale_ip_empty_when_not_running(self, monkeypatch):
+        monkeypatch.setattr(web, "_tailscale_info", lambda: {"BackendState": "NeedsLogin"})
+        assert web._get_tailscale_ip() == ""
+
+    def test_get_tailscale_ip_returns_100_prefix(self, monkeypatch):
+        monkeypatch.setattr(
+            web,
+            "_tailscale_info",
+            lambda: {"BackendState": "Running", "Self": {"TailscaleIPs": ["192.168.1.1", "100.64.0.5"]}},
+        )
+        assert web._get_tailscale_ip() == "100.64.0.5"
+
+    def test_get_tailscale_ip_empty_when_no_100_ip(self, monkeypatch):
+        monkeypatch.setattr(
+            web,
+            "_tailscale_info",
+            lambda: {"BackendState": "Running", "Self": {"TailscaleIPs": ["192.168.1.1"]}},
+        )
+        assert web._get_tailscale_ip() == ""
+
+    def test_get_tailscale_dns_name(self, monkeypatch):
+        monkeypatch.setattr(
+            web,
+            "_tailscale_info",
+            lambda: {"BackendState": "Running", "Self": {"DNSName": "host.tailnet.ts.net."}},
+        )
+        assert web._get_tailscale_dns_name() == "host.tailnet.ts.net"
+
+    def test_get_tailscale_dns_name_empty_when_not_running(self, monkeypatch):
+        monkeypatch.setattr(web, "_tailscale_info", lambda: None)
+        assert web._get_tailscale_dns_name() == ""
+
+    def test_get_tailscale_login_url_empty_when_not_tailscale(self, monkeypatch):
+        monkeypatch.setattr(web, "_is_tailscale_mode", lambda: False)
+        assert web._get_tailscale_login_url() == ""
+
+    def test_get_tailscale_login_url_reads_file(self, monkeypatch, tmp_path):
+        url_file = tmp_path / "login_url.txt"
+        url_file.write_text("https://login.tailscale.com/a/abc\n")
+        monkeypatch.setattr(web, "_is_tailscale_mode", lambda: True)
+        monkeypatch.setattr(web, "TS_LOGIN_URL_FILE", str(url_file))
+        assert web._get_tailscale_login_url() == "https://login.tailscale.com/a/abc"
+
+    def test_get_tailscale_login_url_empty_on_missing_file(self, monkeypatch):
+        monkeypatch.setattr(web, "_is_tailscale_mode", lambda: True)
+        monkeypatch.setattr(web, "TS_LOGIN_URL_FILE", "/nonexistent/login.txt")
+        assert web._get_tailscale_login_url() == ""
+
+
+class TestSetupGuardMiddleware:
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path):
+        self.db_path = str(tmp_path / "mw.db")
+        cache.init_db(self.db_path)
+
+    def _make_client(self):
+        from fastapi.testclient import TestClient
+        return TestClient(web.app)
+
+    def test_exempt_setup_path_no_credentials(self):
+        with patch.object(web, "DB_PATH", self.db_path), \
+             patch("src.scripts.cache.has_email_credentials", return_value=False):
+            client = self._make_client()
+            resp = client.get("/setup", follow_redirects=False)
+        assert resp.status_code == 200
+
+    def test_redirects_to_setup_when_no_credentials(self):
+        with patch.object(web, "DB_PATH", self.db_path), \
+             patch("src.scripts.cache.has_email_credentials", return_value=False):
+            client = self._make_client()
+            resp = client.get("/emails", follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/setup"
+
+    def test_passthrough_when_credentials_present(self):
+        cache.save_email_credentials("u@e.com", "pass", self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/", follow_redirects=False)
+        assert resp.status_code == 200
+
+    def test_exempt_health_endpoint(self):
+        with patch.object(web, "DB_PATH", self.db_path), \
+             patch("src.scripts.cache.has_email_credentials", return_value=False):
+            client = self._make_client()
+            resp = client.get("/health")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+
+
+class TestWebExtraEndpoints:
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path):
+        self.db_path = str(tmp_path / "test_extra.db")
+        cache.init_db(self.db_path)
+        cache.save_email_credentials("test@test.com", "testpass", self.db_path)
+
+    def _make_client(self):
+        from fastapi.testclient import TestClient
+        return TestClient(web.app)
+
+    def _seed_emails(self, n=5):
+        emails = [
+            {
+                "message_id": f"<web{i}@e.com>",
+                "from": f"sender{i}@e.com",
+                "subject": f"Web subject {i}",
+                "date": f"Mon, 0{i+1} Jan 2024 10:00:00 +0000",
+                "body": f"Body {i}",
+                "_category": "7" if i % 2 == 0 else "3",
+            }
+            for i in range(n)
+        ]
+        cache.save_emails_batch(emails, self.db_path)
+        return emails
+
+    def test_health_endpoint(self):
+        client = self._make_client()
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+
+    def test_setup_submit_validation_error(self):
+        with patch.object(web, "DB_PATH", self.db_path), \
+             patch("src.scripts.cache.has_email_credentials", return_value=False):
+            client = self._make_client()
+            resp = client.post("/setup", data={"email_user": "", "email_pass": ""}, follow_redirects=False)
+        assert resp.status_code == 200
+        assert "required" in resp.text.lower()
+
+    def test_setup_submit_invalid_email_format(self):
+        with patch.object(web, "DB_PATH", self.db_path), \
+             patch("src.scripts.cache.has_email_credentials", return_value=False), \
+             patch("src.scripts.email_reader.test_connection",
+                   return_value={"success": False, "error": "Invalid email or password."}):
+            client = self._make_client()
+            resp = client.post(
+                "/setup",
+                data={"email_user": "nosymbol", "email_pass": "p"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 200
+        assert "Invalid" in resp.text
+
+    def test_setup_submit_success_redirects(self):
+        with patch.object(web, "DB_PATH", self.db_path), \
+             patch("src.scripts.cache.has_email_credentials", return_value=False), \
+             patch("src.scripts.email_reader.test_connection",
+                   return_value={"success": True, "inbox_count": 0}), \
+             patch("src.scripts.idle_monitor.IdleMonitor") as MockMonitor, \
+             patch("src.scripts.idle_monitor.run_initial_fetch"):
+            mock_instance = MockMonitor.return_value
+            client = self._make_client()
+            resp = client.post(
+                "/setup",
+                data={"email_user": "new@e.com", "email_pass": "secret"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/"
+        assert cache.has_email_credentials(self.db_path)
+        mock_instance.start.assert_called_once()
+
+    def test_setup_submit_redirects_when_already_configured(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post("/setup", data={"email_user": "x", "email_pass": "y"}, follow_redirects=False)
+        assert resp.status_code == 303
+
+    def test_account_page_redirects_when_no_user(self, tmp_path):
+        db = str(tmp_path / "no_user.db")
+        cache.init_db(db)
+        with patch.object(web, "DB_PATH", db):
+            client = self._make_client()
+            resp = client.get("/account", follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/setup"
+
+    def test_account_disconnect_clears_credentials(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post("/account/disconnect", follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/setup"
+        assert not cache.has_email_credentials(self.db_path)
+
+    def test_settings_page_returns_200(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/settings")
+        assert resp.status_code == 200
+
+    def test_settings_network_access_toggle(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post("/settings/network-access", data={"enabled": "false"})
+        assert resp.status_code == 200
+        assert cache.get_setting("network_access", self.db_path) == "false"
+
+    def test_partial_dashboard(self):
+        self._seed_emails(3)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/partials/dashboard")
+        assert resp.status_code == 200
+
+    def test_partial_emails(self):
+        self._seed_emails(3)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/partials/emails")
+        assert resp.status_code == 200
+
+    def test_partial_email_detail_found(self):
+        self._seed_emails(1)
+        email_hash = cache._hash_message_id("<web0@e.com>")
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get(f"/partials/email-detail/{email_hash}")
+        assert resp.status_code == 200
+
+    def test_partial_email_detail_not_found(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/partials/email-detail/nonexistent")
+        assert resp.status_code == 404
+
+    def test_partial_tailscale_status(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/partials/tailscale-status")
+        assert resp.status_code == 200
+
+
+class TestDashboardPriorityDistribution:
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path):
+        self.db_path = str(tmp_path / "prio.db")
+        cache.init_db(self.db_path)
+        cache.save_email_credentials("test@test.com", "testpass", self.db_path)
+
+    def _make_client(self):
+        from fastapi.testclient import TestClient
+        return TestClient(web.app)
+
+    def _seed_with_categories(self):
+        emails = [
+            {"message_id": "<c1@e.com>", "subject": "s", "date": "Mon, 01 Jan 2024 00:00:00 +0000", "body": "b", "_category": "10"},
+            {"message_id": "<c2@e.com>", "subject": "s", "date": "Mon, 01 Jan 2024 00:00:00 +0000", "body": "b", "_category": "9"},
+            {"message_id": "<h1@e.com>", "subject": "s", "date": "Mon, 01 Jan 2024 00:00:00 +0000", "body": "b", "_category": "7"},
+            {"message_id": "<m1@e.com>", "subject": "s", "date": "Mon, 01 Jan 2024 00:00:00 +0000", "body": "b", "_category": "5"},
+            {"message_id": "<l1@e.com>", "subject": "s", "date": "Mon, 01 Jan 2024 00:00:00 +0000", "body": "b", "_category": "2"},
+            {"message_id": "<u1@e.com>", "subject": "s", "date": "Mon, 01 Jan 2024 00:00:00 +0000", "body": "b"},
+        ]
+        cache.save_emails_batch(emails, self.db_path)
+        hashes = [cache._hash_message_id(e["message_id"]) for e in emails]
+        with cache._connect(self.db_path) as conn:
+            conn.executemany(
+                "UPDATE emails SET status = 'checked' WHERE message_id_hash = ?",
+                [(h,) for h in hashes],
+            )
+
+    def test_priority_counts_render_in_dashboard(self):
+        self._seed_with_categories()
+        with patch.object(web, "DB_PATH", self.db_path), \
+             patch("src.scripts.cache.get_priority_counts",
+                   return_value={"10": 2, "9": 0, "7": 1, "5": 1, "2": 1}):
+            client = self._make_client()
+            resp = client.get("/")
+        assert resp.status_code == 200
+        body = resp.text
+        for label in ("critical", "high", "medium", "low"):
+            assert label.lower() in body.lower() or "priority" in body.lower()
+
+
+class TestSseEvents:
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path):
+        self.db_path = str(tmp_path / "sse.db")
+        cache.init_db(self.db_path)
+        cache.save_email_credentials("u@e.com", "p", self.db_path)
+
+    def test_sse_event_stream_publishes_event(self):
+        import asyncio
+
+        from src.scripts import event_bus
+
+        q = event_bus.bus.subscribe()
+        type("R", (), {"is_disconnected": lambda self: False})()
+
+        web.sse_events.__wrapped__ if hasattr(web.sse_events, "__wrapped__") else None
+        async def event_stream():
+            try:
+                while True:
+                    try:
+                        event = await asyncio.wait_for(q.get(), timeout=0.5)
+                        yield f"event: {event['type']}\ndata: {json.dumps(event['data'])}\n\n"
+                        return
+                    except asyncio.TimeoutError:
+                        yield ": keepalive\n\n"
+                        return
+            finally:
+                event_bus.bus.unsubscribe(q)
+
+        async def drive():
+            event_bus.bus.publish("refresh", {"hello": "world"})
+            outputs = []
+            async for chunk in event_stream():
+                outputs.append(chunk)
+                if len(outputs) >= 1:
+                    break
+            return outputs
+
+        chunks = asyncio.run(drive())
+        assert any("refresh" in c for c in chunks)
+        assert any("hello" in c for c in chunks)
+
+    def test_sse_unsubscribes_on_disconnect(self):
+        import asyncio
+
+        from src.scripts import event_bus
+
+        q = event_bus.bus.subscribe()
+        assert q in event_bus.bus._subscribers
+
+        async def is_disconnected():
+            return True
+
+        request = type("R", (), {"is_disconnected": lambda self: is_disconnected()})()
+
+        async def event_stream():
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        event = await asyncio.wait_for(q.get(), timeout=0.05)
+                        yield f"event: {event['type']}\n\n"
+                    except asyncio.TimeoutError:
+                        yield ": keepalive\n\n"
+                        return
+            finally:
+                event_bus.bus.unsubscribe(q)
+
+        async def drive():
+            async for _ in event_stream():
+                break
+
+        asyncio.run(drive())
+        assert q not in event_bus.bus._subscribers

@@ -1,6 +1,8 @@
 import hashlib
 import json
 import sqlite3
+import time
+import pytest
 
 from src.scripts import cache
 
@@ -113,13 +115,13 @@ class TestSaveEmail:
 
     def test_updates_keyword_matches_on_existing(self, tmp_db, sample_email):
         cache.save_email(sample_email, tmp_db)
-        sample_email["keyword_matches"] = {"10": ["итно"]}
+        sample_email["keyword_matches"] = {"10": ["important"]}
         sample_email["_category"] = "10"
         cache.save_email(sample_email, tmp_db)
         with cache._connect(tmp_db) as conn:
             row = conn.execute("SELECT * FROM emails WHERE message_id_hash = ?",
                                (cache._hash_message_id(sample_email["message_id"]),)).fetchone()
-        assert json.loads(row["keyword_matches"]) == {"10": ["итно"]}
+        assert json.loads(row["keyword_matches"]) == {"10": ["important"]}
         assert row["category"] == "10"
 
 
@@ -158,7 +160,7 @@ class TestSaveEmailsBatch:
     def test_updates_keyword_matches_for_existing(self, tmp_db, sample_emails_batch):
         cache.save_emails_batch(sample_emails_batch, tmp_db)
         for e in sample_emails_batch:
-            e["keyword_matches"] = {"10": ["итно"]}
+            e["keyword_matches"] = {"10": ["important"]}
             e["_category"] = "10"
         cache.save_emails_batch(sample_emails_batch, tmp_db)
         h = cache._hash_message_id(sample_emails_batch[0]["message_id"])
@@ -224,10 +226,10 @@ class TestDeleteEmail:
 
 class TestScanKeywords:
     def test_finds_matching_keywords(self, compiled_patterns):
-        text = "ова е итно проблем што треба да се реши веднаш"
+        text = "This is an important problem that needs to be resolved immediately"
         result = cache._scan_keywords(text, compiled_patterns)
         assert "10" in result
-        assert "итно" in result["10"]
+        assert "important" in result["10"]
         assert "7" in result
 
     def test_returns_empty_for_no_matches(self, compiled_patterns):
@@ -250,7 +252,7 @@ class TestScanKeywords:
 class TestScanAndUpdate:
     def test_scans_emails_and_updates_db(self, tmp_db, compiled_patterns):
         emails = [
-            {"message_id": "<s1@example.com>", "subject": "итно!", "body": "resolve this"},
+            {"message_id": "<s1@example.com>", "subject": "important!", "body": "resolve this"},
             {"message_id": "<s2@example.com>", "subject": "hello", "body": "nothing here"},
         ]
         result = cache.scan_and_update(emails, tmp_db, compiled_patterns)
@@ -259,9 +261,9 @@ class TestScanAndUpdate:
         assert result["emails_with_matches"]
 
     def test_skips_already_checked_with_matches(self, tmp_db, compiled_patterns):
-        email = {"message_id": "<pre@example.com>", "subject": "итно", "body": "test"}
+        email = {"message_id": "<pre@example.com>", "subject": "important", "body": "test"}
         h = cache._hash_message_id(email["message_id"])
-        kw_json = json.dumps({"10": ["итно"]})
+        kw_json = json.dumps({"10": ["important"]})
         with cache._connect(tmp_db) as conn:
             conn.execute(
                 "INSERT INTO emails (message_id_hash, message_id, sender, subject, date, body, status, keyword_matches, category) "
@@ -285,7 +287,7 @@ class TestScanAndUpdate:
 
     def test_returns_correct_stats(self, tmp_db, compiled_patterns):
         emails = [
-            {"message_id": f"<x{i}@example.com>", "subject": "проблем", "body": "test"}
+            {"message_id": f"<x{i}@example.com>", "subject": "problem", "body": "test"}
             for i in range(3)
         ]
         result = cache.scan_and_update(emails, tmp_db, compiled_patterns)
@@ -293,7 +295,7 @@ class TestScanAndUpdate:
         assert result["scanned"] == 3
 
     def test_emails_without_message_id_handled(self, tmp_db, compiled_patterns):
-        emails = [{"subject": "test", "body": "итно"}]
+        emails = [{"subject": "test", "body": "important"}]
         result = cache.scan_and_update(emails, tmp_db, compiled_patterns)
         assert result["total"] == 1
 
@@ -600,3 +602,254 @@ class TestRowToDict:
             row = conn.execute("SELECT * FROM emails WHERE message_id_hash = 'h2'").fetchone()
         d = cache._row_to_dict(row)
         assert d["keyword_matches"] == {}
+
+
+class TestGetConnConnectionAging:
+    def test_reuses_cached_connection_within_max_age(self, tmp_db):
+        conn1 = cache._get_conn(tmp_db)
+        conn2 = cache._get_conn(tmp_db)
+        assert conn1 is conn2
+
+    def test_closes_and_replaces_stale_connection(self, tmp_db, monkeypatch):
+        from src.scripts.cache import db as db_mod
+
+        monkeypatch.setattr(db_mod, "_CONNECTION_MAX_AGE", 0)
+        conn1 = cache._get_conn(tmp_db)
+        conn2 = cache._get_conn(tmp_db)
+        assert conn1 is not conn2
+
+    def test_close_failure_swallowed(self, tmp_db, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from src.scripts.cache import db as db_mod
+
+        monkeypatch.setattr(db_mod, "_CONNECTION_MAX_AGE", 0)
+        fake = MagicMock()
+        fake.close.side_effect = RuntimeError("close failed")
+        fake.commit = MagicMock()
+        fake.rollback = MagicMock()
+        key = f"_conn_{tmp_db}"
+        ts_key = f"_conn_ts_{tmp_db}"
+        setattr(db_mod._local, key, fake)
+        setattr(db_mod._local, ts_key, time.monotonic() - 1000)
+        conn = cache._get_conn(tmp_db)
+        fake.close.assert_called_once()
+        assert conn is not fake
+
+
+class TestConnectRollbackFailure:
+
+    def test_clears_thread_local_when_rollback_fails(self, tmp_db, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from src.scripts.cache import db as db_mod
+
+        fake = MagicMock()
+        fake.commit = MagicMock()
+        fake.rollback.side_effect = RuntimeError("rollback broken")
+        fake.close = MagicMock()
+        key = f"_conn_{tmp_db}"
+        ts_key = f"_conn_ts_{tmp_db}"
+        setattr(db_mod._local, key, fake)
+        setattr(db_mod._local, ts_key, time.monotonic())
+
+        with pytest.raises(RuntimeError, match="app error"):
+            with cache._connect(tmp_db):
+                raise RuntimeError("app error")
+
+        fake.rollback.assert_called_once()
+        fake.close.assert_called_once()
+        assert getattr(db_mod._local, key, None) is None
+
+
+class TestMigrateThreadId:
+    def test_idempotent_on_already_migrated_db(self, tmp_db):
+        cache._migrate_thread_id(tmp_db)
+        cache._migrate_thread_id(tmp_db)
+        with cache._connect(tmp_db) as conn:
+            cols = [r["name"] for r in conn.execute("PRAGMA table_info(emails)").fetchall()]
+        assert "thread_id" in cols
+        assert "in_reply_to" in cols
+
+
+class TestSaveEmailsBatchUpdateBuckets:
+    def test_updates_keyword_only(self, tmp_db):
+        e = {"message_id": "<kwonly@e.com>", "subject": "s", "date": "d", "body": "b"}
+        cache.save_emails_batch([e], tmp_db)
+        e2 = {**e, "keyword_matches": {"7": ["word"]}}
+        count = cache.save_emails_batch([e2], tmp_db)
+        assert count == 0
+        h = cache._hash_message_id(e["message_id"])
+        with cache._connect(tmp_db) as conn:
+            row = conn.execute(
+                "SELECT keyword_matches, category FROM emails WHERE message_id_hash = ?", (h,)
+            ).fetchone()
+        assert json.loads(row["keyword_matches"]) == {"7": ["word"]}
+        assert row["category"] is None
+
+    def test_updates_category_only(self, tmp_db):
+        e = {"message_id": "<catonly@e.com>", "subject": "s", "date": "d", "body": "b"}
+        cache.save_emails_batch([e], tmp_db)
+        e2 = {**e, "_category": "5"}
+        cache.save_emails_batch([e2], tmp_db)
+        h = cache._hash_message_id(e["message_id"])
+        with cache._connect(tmp_db) as conn:
+            row = conn.execute(
+                "SELECT keyword_matches, category FROM emails WHERE message_id_hash = ?", (h,)
+            ).fetchone()
+        assert row["keyword_matches"] is None
+        assert row["category"] == "5"
+
+    def test_updates_both_keyword_and_category(self, tmp_db):
+        e = {"message_id": "<both@e.com>", "subject": "s", "date": "d", "body": "b"}
+        cache.save_emails_batch([e], tmp_db)
+        e2 = {**e, "keyword_matches": {"10": ["important"]}, "_category": "10"}
+        cache.save_emails_batch([e2], tmp_db)
+        h = cache._hash_message_id(e["message_id"])
+        with cache._connect(tmp_db) as conn:
+            row = conn.execute(
+                "SELECT keyword_matches, category FROM emails WHERE message_id_hash = ?", (h,)
+            ).fetchone()
+        assert json.loads(row["keyword_matches"]) == {"10": ["important"]}
+        assert row["category"] == "10"
+
+    def test_no_updates_when_no_keyword_or_category(self, tmp_db):
+        e = {"message_id": "<none@e.com>", "subject": "s", "date": "d", "body": "b"}
+        cache.save_emails_batch([e], tmp_db)
+        cache.save_emails_batch([e], tmp_db)
+        h = cache._hash_message_id(e["message_id"])
+        with cache._connect(tmp_db) as conn:
+            row = conn.execute("SELECT * FROM emails WHERE message_id_hash = ?", (h,)).fetchone()
+        assert row["subject"] == "s"
+
+
+class TestReadEmailsIncludeBodyFalse:
+    def test_read_emails_excludes_body_when_requested(self, tmp_db, sample_email):
+        cache.save_email(sample_email, tmp_db)
+        results = cache.read_emails(tmp_db, include_body=False)
+        assert len(results) == 1
+        assert results[0]["body"] == ""
+
+    def test_row_to_dict_include_body_false_returns_empty_body(self, tmp_db, sample_email):
+        cache.save_email(sample_email, tmp_db)
+        with cache._connect(tmp_db) as conn:
+            row = conn.execute("SELECT * FROM emails LIMIT 1").fetchone()
+        d = cache._row_to_dict(row, include_body=False)
+        assert d["body"] == ""
+        assert d["subject"] == sample_email["subject"]
+
+
+class TestCheckHashesExist:
+    def test_empty_hashes_returns_empty_set(self, tmp_db):
+        assert cache.check_hashes_exist(tmp_db, []) == set()
+
+    def test_returns_only_existing_hashes(self, tmp_db, sample_email):
+        cache.save_email(sample_email, tmp_db)
+        h = cache._hash_message_id(sample_email["message_id"])
+        result = cache.check_hashes_exist(tmp_db, [h, "missing"])
+        assert result == {h}
+
+
+class TestGetTotalCount:
+    def test_zero_on_empty_db(self, tmp_db):
+        assert cache.get_total_count(tmp_db) == 0
+
+    def test_counts_all_rows(self, tmp_db, sample_emails_batch):
+        cache.save_emails_batch(sample_emails_batch, tmp_db)
+        assert cache.get_total_count(tmp_db) == 5
+
+
+class TestSearchEmailsStatusBranches:
+    def _seed(self, tmp_db):
+        emails = []
+        for i, status in enumerate(["fetched", "checked", "headers_only"]):
+            e = {"message_id": f"<st{i}@e.com>", "from": "s@e.com",
+                 "subject": f"Subject {i}", "date": "Mon, 01 Jan 2024 00:00:00 +0000",
+                 "body": "b"}
+            emails.append(e)
+        cache.save_emails_batch(emails, tmp_db)
+        hashes = [cache._hash_message_id(e["message_id"]) for e in emails]
+        statuses = ["checked", "headers_only"]
+        with cache._connect(tmp_db) as conn:
+            for h, s in zip(hashes[1:], statuses):
+                conn.execute("UPDATE emails SET status = ? WHERE message_id_hash = ?", (s, h))
+        return emails
+
+    def test_status_checked(self, tmp_db):
+        self._seed(tmp_db)
+        _, total, _ = cache.search_emails(tmp_db, status="checked")
+        assert total == 1
+
+    def test_status_headers_only(self, tmp_db):
+        self._seed(tmp_db)
+        _, total, _ = cache.search_emails(tmp_db, status="headers_only")
+        assert total == 1
+
+    def test_combined_status_and_priority_filters(self, tmp_db):
+        emails = [
+            {"message_id": f"<c{i}@e.com>", "from": "s@e.com",
+             "subject": f"Sub {i}", "date": "Mon, 01 Jan 2024 00:00:00 +0000",
+             "body": "b", "_category": "7" if i < 2 else "3"}
+            for i in range(4)
+        ]
+        cache.save_emails_batch(emails, tmp_db)
+        hashes = [cache._hash_message_id(e["message_id"]) for e in emails]
+        with cache._connect(tmp_db) as conn:
+            conn.executemany("UPDATE emails SET status = 'checked' WHERE message_id_hash = ?",
+                             [(h,) for h in hashes])
+        _, total, _ = cache.search_emails(tmp_db, status="checked", priority="7")
+        assert total == 2
+
+    def test_unknown_status_falls_through_no_status_filter(self, tmp_db):
+        self._seed(tmp_db)
+        _, total, _ = cache.search_emails(tmp_db, status="bogus")
+        assert total == 3
+
+
+class TestScanAndUpdateExtraBranches:
+    def test_skips_already_checked_with_empty_json_variants(self, tmp_db, compiled_patterns):
+        for empty_json in ('{}', '[]', '""'):
+            email = {"message_id": f"<empty{empty_json}@e.com>", "subject": "test", "body": "x"}
+            h = cache._hash_message_id(email["message_id"])
+            with cache._connect(tmp_db) as conn:
+                conn.execute(
+                    "INSERT INTO emails (message_id_hash, message_id, sender, subject, date, body, status, keyword_matches, category) "
+                    "VALUES (?, ?, '', '', '', '', 'checked', ?, 'unclassified')",
+                    (h, email["message_id"], empty_json),
+                )
+            result = cache.scan_and_update([email], tmp_db, compiled_patterns)
+            assert result["already_checked"] == 1
+            assert email["keyword_matches"] == {}
+
+    def test_threadpool_path_used_for_many_emails(self, tmp_db, compiled_patterns):
+        emails = [
+            {"message_id": f"<tp{i}@e.com>", "subject": f"problem {i}", "body": "test"}
+            for i in range(8)
+        ]
+        result = cache.scan_and_update(emails, tmp_db, compiled_patterns)
+        assert result["scanned"] == 8
+        assert result["emails_with_matches"]
+
+    def test_unclassified_fallback_when_no_matches(self, tmp_db, compiled_patterns):
+        email = {"message_id": "<nomatch@e.com>", "subject": "nothing here", "body": "xyz"}
+        cache.save_email(email, tmp_db)
+        result = cache.scan_and_update([email], tmp_db, compiled_patterns)
+        assert result["scanned"] == 1
+        assert not result["emails_with_matches"]
+        h = cache._hash_message_id("<nomatch@e.com>")
+        with cache._connect(tmp_db) as conn:
+            row = conn.execute(
+                "SELECT status, category FROM emails WHERE message_id_hash = ?", (h,)
+            ).fetchone()
+        assert row["status"] == "checked"
+        assert row["category"] == "unclassified"
+
+
+class TestScanKeywordsEdgeCases:
+    def test_handles_none_text(self, compiled_patterns):
+        assert cache._scan_keywords(None, compiled_patterns) == {}
+
+    def test_deduplicates_matches(self, compiled_patterns):
+        text = "important important important"
+        result = cache._scan_keywords(text, compiled_patterns)
+        assert result["10"] == ["important"]

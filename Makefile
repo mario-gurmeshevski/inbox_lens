@@ -25,13 +25,13 @@ dev-install: install
 web:
 	$(VENV_PYTHON) -m uvicorn src.scripts.web:app --host $(WEB_HOST) --port $(WEB_PORT) --reload
 
-test:
+test: dev-install
 	$(VENV_PYTHON) -m pytest src/tests/ -v
 
-test-cov:
+test-cov: dev-install
 	$(VENV_PYTHON) -m pytest src/tests/ --cov=src/scripts --cov-report=term-missing
 
-lint:
+lint: dev-install
 	$(VENV_PYTHON) -m ruff check src/
 
 clean:

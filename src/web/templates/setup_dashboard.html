@@ -48,9 +48,7 @@
           <i data-lucide="arrow-right" style="width: 16px; height: 16px"></i>
           Continue to Dashboard
         </a>
-        {% else %}
-
-        {% if error %}
+        {% else %} {% if error %}
         <div class="setup-error">
           <i data-lucide="alert-circle" style="width: 16px; height: 16px"></i>
           {{ error }}
@@ -132,11 +130,13 @@
     </div>
     <script>
       lucide.createIcons();
-      function togglePassword(id){
-        const i=document.getElementById(id);
-        const show=i.type==='password';
-        i.type=show?'text':'password';
-        i.parentElement.querySelector('.password-toggle i').setAttribute('data-lucide',show?'eye-off':'eye');
+      function togglePassword(id) {
+        const i = document.getElementById(id);
+        const show = i.type === "password";
+        i.type = show ? "text" : "password";
+        i.parentElement
+          .querySelector(".password-toggle i")
+          .setAttribute("data-lucide", show ? "eye-off" : "eye");
         lucide.createIcons();
       }
     </script>

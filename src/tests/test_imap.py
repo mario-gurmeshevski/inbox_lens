@@ -65,14 +65,7 @@ class TestParseFetchedEmail:
         assert email_reader._parse_fetched_email([]) == []
 
     def test_extracts_thread_info(self):
-        raw = (
-            b"From: a@b.com\r\n"
-            b"Subject: Re: Topic\r\n"
-            b"Message-ID: <m@e.com>\r\n"
-            b"References: <ref@e.com>\r\n"
-            b"\r\n"
-            b"body\r\n"
-        )
+        raw = b"From: a@b.com\r\nSubject: Re: Topic\r\nMessage-ID: <m@e.com>\r\nReferences: <ref@e.com>\r\n\r\nbody\r\n"
         result = email_reader._parse_fetched_email([(b"env", raw)])
         assert result[0]["in_reply_to"] == ""
         assert result[0]["thread_id"] is not None
@@ -239,7 +232,9 @@ class TestReconnect:
 class TestMakeBodyFetchers:
     def test_bulk_returns_parsed_results(self, monkeypatch):
         raw = b"From: a@b.com\r\nSubject: s\r\nMessage-ID: <m@e.com>\r\n\r\nbody\r\n"
-        monkeypatch.setattr(imap_mod, "_parse_fetched_email", lambda data: [{"message_id": "<m@e.com>", "body": "body"}])
+        monkeypatch.setattr(
+            imap_mod, "_parse_fetched_email", lambda data: [{"message_id": "<m@e.com>", "body": "body"}]
+        )
         bulk, single = email_reader._make_body_fetchers("/db")
         mail = MagicMock()
         mail.uid.return_value = ("OK", [(b"env", raw)])
@@ -315,9 +310,7 @@ class TestBatchFetchLoop:
             return [{"message_id": mid, "body": "x"} for _, mid in batch]
 
         single_fn = MagicMock()
-        results, returned = email_reader._batch_fetch_loop(
-            conn, items, 25, bulk_fn, single_fn, db_path="/db"
-        )
+        results, returned = email_reader._batch_fetch_loop(conn, items, 25, bulk_fn, single_fn, db_path="/db")
         assert len(results) == 2
         single_fn.assert_not_called()
 
@@ -335,9 +328,7 @@ class TestBatchFetchLoop:
         def bulk_raises(conn, batch):
             raise imaplib.IMAP4.abort("aborted")
 
-        results, returned = email_reader._batch_fetch_loop(
-            conn, items, 25, bulk_raises, single_fn, db_path="/db"
-        )
+        results, returned = email_reader._batch_fetch_loop(conn, items, 25, bulk_raises, single_fn, db_path="/db")
         assert results == [{"body": "single"}]
         assert returned is new_conn
 
@@ -354,12 +345,9 @@ class TestBatchFetchLoop:
 
         monkeypatch.setattr(imap_mod.time, "sleep", lambda s: None)
         monkeypatch.setattr(
-            imap_mod, "_reconnect",
-            lambda c, db_path=None: (_ for _ in ()).throw(RuntimeError("reconnect failed"))
+            imap_mod, "_reconnect", lambda c, db_path=None: (_ for _ in ()).throw(RuntimeError("reconnect failed"))
         )
-        results, returned = email_reader._batch_fetch_loop(
-            conn, items, 25, bulk_raises, single_fn, db_path="/db"
-        )
+        results, returned = email_reader._batch_fetch_loop(conn, items, 25, bulk_raises, single_fn, db_path="/db")
         assert results == [{"body": "single"}]
 
 
@@ -381,10 +369,7 @@ class TestTestConnection:
         assert "Invalid" in result["error"]
 
     def test_generic_exception_returns_error(self, monkeypatch):
-        monkeypatch.setattr(
-            imap_mod.imaplib, "IMAP4_SSL",
-            MagicMock(side_effect=OSError("network down"))
-        )
+        monkeypatch.setattr(imap_mod.imaplib, "IMAP4_SSL", MagicMock(side_effect=OSError("network down")))
         result = email_reader.test_connection("server", "u", "p")
         assert result["success"] is False
         assert "network down" in result["error"]

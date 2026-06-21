@@ -48,6 +48,7 @@ class TestIdleMonitorInit:
     def test_custom_params(self):
         def cb():
             return None
+
         m = IdleMonitor(db_path="/x.db", on_refresh=cb)
         assert m.db_path == "/x.db"
         assert m.on_refresh is cb
@@ -202,11 +203,9 @@ class TestDoIdle:
             b"+ idling\r\n",
             b"* 3 EXISTS\r\n",
         ]
-        monkeypatch.setattr(idle_mod.select, "select",
-                            lambda r, w, x, t: ([r[0]], [], []))
+        monkeypatch.setattr(idle_mod.select, "select", lambda r, w, x, t: ([r[0]], [], []))
         end_calls = []
-        monkeypatch.setattr(idle_mod.IdleMonitor, "_end_idle",
-                            lambda self, conn, tag: end_calls.append(tag))
+        monkeypatch.setattr(idle_mod.IdleMonitor, "_end_idle", lambda self, conn, tag: end_calls.append(tag))
         assert IdleMonitor()._do_idle(conn) is True
         assert len(end_calls) == 1
 
@@ -216,10 +215,8 @@ class TestDoIdle:
             b"+ idling\r\n",
             b"* 1 RECENT\r\n",
         ]
-        monkeypatch.setattr(idle_mod.select, "select",
-                            lambda r, w, x, t: ([r[0]], [], []))
-        monkeypatch.setattr(idle_mod.IdleMonitor, "_end_idle",
-                            lambda self, conn, tag: None)
+        monkeypatch.setattr(idle_mod.select, "select", lambda r, w, x, t: ([r[0]], [], []))
+        monkeypatch.setattr(idle_mod.IdleMonitor, "_end_idle", lambda self, conn, tag: None)
         assert IdleMonitor()._do_idle(conn) is True
 
     def test_returns_false_on_stop_during_select_timeout(self, monkeypatch):
@@ -233,8 +230,7 @@ class TestDoIdle:
             return ([], [], [])
 
         monkeypatch.setattr(idle_mod.select, "select", mock_select)
-        monkeypatch.setattr(idle_mod.IdleMonitor, "_end_idle",
-                            lambda self, conn, tag: None)
+        monkeypatch.setattr(idle_mod.IdleMonitor, "_end_idle", lambda self, conn, tag: None)
         m = IdleMonitor()
         assert m._do_idle(conn) is False
 
@@ -290,19 +286,15 @@ class TestDoIdle:
 
     def test_raises_connection_lost_on_select_os_error(self, monkeypatch):
         conn = self.make_conn()
-        monkeypatch.setattr(idle_mod.select, "select",
-                            lambda r, w, x, t: (_ for _ in ()).throw(OSError("sel fail")))
-        monkeypatch.setattr(idle_mod.IdleMonitor, "_end_idle",
-                            lambda self, conn, tag: None)
+        monkeypatch.setattr(idle_mod.select, "select", lambda r, w, x, t: (_ for _ in ()).throw(OSError("sel fail")))
+        monkeypatch.setattr(idle_mod.IdleMonitor, "_end_idle", lambda self, conn, tag: None)
         with pytest.raises(ConnectionLost):
             IdleMonitor()._do_idle(conn)
 
     def test_raises_connection_lost_on_select_value_error(self, monkeypatch):
         conn = self.make_conn()
-        monkeypatch.setattr(idle_mod.select, "select",
-                            lambda r, w, x, t: (_ for _ in ()).throw(ValueError("bad fd")))
-        monkeypatch.setattr(idle_mod.IdleMonitor, "_end_idle",
-                            lambda self, conn, tag: None)
+        monkeypatch.setattr(idle_mod.select, "select", lambda r, w, x, t: (_ for _ in ()).throw(ValueError("bad fd")))
+        monkeypatch.setattr(idle_mod.IdleMonitor, "_end_idle", lambda self, conn, tag: None)
         with pytest.raises(ConnectionLost):
             IdleMonitor()._do_idle(conn)
 
@@ -312,10 +304,8 @@ class TestDoIdle:
             b"+ idling\r\n",
             b"",
         ]
-        monkeypatch.setattr(idle_mod.select, "select",
-                            lambda r, w, x, t: ([r[0]], [], []))
-        monkeypatch.setattr(idle_mod.IdleMonitor, "_end_idle",
-                            lambda self, conn, tag: None)
+        monkeypatch.setattr(idle_mod.select, "select", lambda r, w, x, t: ([r[0]], [], []))
+        monkeypatch.setattr(idle_mod.IdleMonitor, "_end_idle", lambda self, conn, tag: None)
         assert IdleMonitor()._do_idle(conn) is False
 
     def test_returns_false_on_readline_exception(self, monkeypatch):
@@ -324,10 +314,8 @@ class TestDoIdle:
             b"+ idling\r\n",
             RuntimeError("boom"),
         ]
-        monkeypatch.setattr(idle_mod.select, "select",
-                            lambda r, w, x, t: ([r[0]], [], []))
-        monkeypatch.setattr(idle_mod.IdleMonitor, "_end_idle",
-                            lambda self, conn, tag: None)
+        monkeypatch.setattr(idle_mod.select, "select", lambda r, w, x, t: ([r[0]], [], []))
+        monkeypatch.setattr(idle_mod.IdleMonitor, "_end_idle", lambda self, conn, tag: None)
         assert IdleMonitor()._do_idle(conn) is False
 
     def test_raises_connection_lost_on_readline_connection_error(self, monkeypatch):
@@ -336,10 +324,8 @@ class TestDoIdle:
             b"+ idling\r\n",
             ConnectionResetError("reset"),
         ]
-        monkeypatch.setattr(idle_mod.select, "select",
-                            lambda r, w, x, t: ([r[0]], [], []))
-        monkeypatch.setattr(idle_mod.IdleMonitor, "_end_idle",
-                            lambda self, conn, tag: None)
+        monkeypatch.setattr(idle_mod.select, "select", lambda r, w, x, t: ([r[0]], [], []))
+        monkeypatch.setattr(idle_mod.IdleMonitor, "_end_idle", lambda self, conn, tag: None)
         with pytest.raises(ConnectionLost):
             IdleMonitor()._do_idle(conn)
 
@@ -347,10 +333,10 @@ class TestDoIdle:
         conn = self.make_conn()
         end_calls = []
 
-        monkeypatch.setattr(idle_mod.select, "select",
-                            lambda r, w, x, t: ([], [], []))
+        monkeypatch.setattr(idle_mod.select, "select", lambda r, w, x, t: ([], [], []))
         monkeypatch.setattr(
-            idle_mod.IdleMonitor, "_end_idle",
+            idle_mod.IdleMonitor,
+            "_end_idle",
             lambda self, conn, tag: (end_calls.append(tag), m._stop.set()),
         )
 
@@ -367,8 +353,7 @@ class TestDoIdle:
 
     def test_sends_idle_with_tag(self, monkeypatch):
         conn = self.make_conn()
-        monkeypatch.setattr(idle_mod.select, "select",
-                            lambda r, w, x, t: ([], [], []))
+        monkeypatch.setattr(idle_mod.select, "select", lambda r, w, x, t: ([], [], []))
         select_calls = []
 
         def mock_select(r, w, x, t):
@@ -378,8 +363,7 @@ class TestDoIdle:
             return ([], [], [])
 
         monkeypatch.setattr(idle_mod.select, "select", mock_select)
-        monkeypatch.setattr(idle_mod.IdleMonitor, "_end_idle",
-                            lambda self, conn, tag: None)
+        monkeypatch.setattr(idle_mod.IdleMonitor, "_end_idle", lambda self, conn, tag: None)
         m = IdleMonitor()
         m._do_idle(conn)
         conn._new_tag.assert_called()
@@ -388,8 +372,7 @@ class TestDoIdle:
 
 class TestIdleLoop:
     def test_connects_and_loops_calling_do_idle(self, monkeypatch, idle_conn):
-        monkeypatch.setattr(email_reader, "_imap_connect",
-                            lambda db_path=None: idle_conn)
+        monkeypatch.setattr(email_reader, "_imap_connect", lambda db_path=None: idle_conn)
         do_calls = []
 
         def tracking_do_idle(self, conn):
@@ -406,17 +389,14 @@ class TestIdleLoop:
     def test_returns_early_when_idle_unsupported(self, monkeypatch):
         unsupported = MagicMock()
         unsupported.capability.return_value = ("OK", [b"IMAP4rev1"])
-        monkeypatch.setattr(email_reader, "_imap_connect",
-                            lambda db_path=None: unsupported)
+        monkeypatch.setattr(email_reader, "_imap_connect", lambda db_path=None: unsupported)
         never_called = []
-        monkeypatch.setattr(idle_mod.IdleMonitor, "_do_idle",
-                            lambda self, conn: never_called.append(1))
+        monkeypatch.setattr(idle_mod.IdleMonitor, "_do_idle", lambda self, conn: never_called.append(1))
         IdleMonitor()._idle_loop()
         assert never_called == []
 
     def test_fetches_new_mail_when_do_idle_returns_true(self, monkeypatch, idle_conn):
-        monkeypatch.setattr(email_reader, "_imap_connect",
-                            lambda db_path=None: idle_conn)
+        monkeypatch.setattr(email_reader, "_imap_connect", lambda db_path=None: idle_conn)
         monkeypatch.setattr(email_reader, "_safe_close", lambda c: None)
 
         do_calls = []
@@ -430,15 +410,13 @@ class TestIdleLoop:
 
         monkeypatch.setattr(idle_mod.IdleMonitor, "_do_idle", do_idle_then_stop)
         fetch_calls = []
-        monkeypatch.setattr(idle_mod.IdleMonitor, "_fetch_new",
-                            lambda self: fetch_calls.append(1))
+        monkeypatch.setattr(idle_mod.IdleMonitor, "_fetch_new", lambda self: fetch_calls.append(1))
         m = IdleMonitor()
         m._idle_loop()
         assert len(fetch_calls) == 1
 
     def test_reconnects_on_connection_lost(self, monkeypatch, idle_conn):
-        monkeypatch.setattr(email_reader, "_imap_connect",
-                            lambda db_path=None: idle_conn)
+        monkeypatch.setattr(email_reader, "_imap_connect", lambda db_path=None: idle_conn)
         monkeypatch.setattr(email_reader, "_safe_close", lambda c: None)
 
         do_calls = []
@@ -456,8 +434,7 @@ class TestIdleLoop:
         assert len(do_calls) >= 1
 
     def test_breaks_on_connection_lost_when_stop_set(self, monkeypatch, idle_conn):
-        monkeypatch.setattr(email_reader, "_imap_connect",
-                            lambda db_path=None: idle_conn)
+        monkeypatch.setattr(email_reader, "_imap_connect", lambda db_path=None: idle_conn)
         monkeypatch.setattr(email_reader, "_safe_close", lambda c: None)
 
         def set_stop_then_raise(self, conn):
@@ -468,8 +445,7 @@ class TestIdleLoop:
         IdleMonitor()._idle_loop()
 
     def test_closes_connection_in_finally(self, monkeypatch, idle_conn):
-        monkeypatch.setattr(email_reader, "_imap_connect",
-                            lambda db_path=None: idle_conn)
+        monkeypatch.setattr(email_reader, "_imap_connect", lambda db_path=None: idle_conn)
         close_calls = []
         monkeypatch.setattr(email_reader, "_safe_close", lambda c: close_calls.append(c))
 
@@ -491,37 +467,37 @@ class TestFetchNew:
     def test_calls_run_initial_fetch_with_params(self, monkeypatch):
         kwargs = {}
         monkeypatch.setattr(idle_mod, "run_initial_fetch", lambda **kw: kwargs.update(kw))
+
         def cb():
             return None
+
         m = IdleMonitor(db_path="/x.db", on_refresh=cb)
         m._fetch_new()
         assert kwargs["db_path"] == "/x.db"
         assert kwargs["on_refresh"] is cb
 
     def test_swallows_exception(self, monkeypatch):
-        monkeypatch.setattr(idle_mod, "run_initial_fetch",
-                            lambda **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+        monkeypatch.setattr(idle_mod, "run_initial_fetch", lambda **kw: (_ for _ in ()).throw(RuntimeError("boom")))
         IdleMonitor()._fetch_new()
 
 
 class TestRunInitialFetch:
     def test_calls_fetch_headers_and_cache(self, monkeypatch):
-        monkeypatch.setattr(email_reader, "fetch_headers_and_cache",
-                            lambda db_path=None: {"new_count": 0, "existing_count": 0})
+        monkeypatch.setattr(
+            email_reader, "fetch_headers_and_cache", lambda db_path=None: {"new_count": 0, "existing_count": 0}
+        )
         monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: [])
         monkeypatch.setattr(cache, "read_emails", lambda db_path, limit=None: [])
         result = run_initial_fetch(db_path="/db")
         assert result["new_count"] == 0
 
     def test_returns_error_result(self, monkeypatch):
-        monkeypatch.setattr(email_reader, "fetch_headers_and_cache",
-                            lambda db_path=None: {"error": "bad"})
+        monkeypatch.setattr(email_reader, "fetch_headers_and_cache", lambda db_path=None: {"error": "bad"})
         result = run_initial_fetch(db_path="/db")
         assert result["error"] == "bad"
 
     def test_calls_on_refresh_three_times(self, monkeypatch):
-        monkeypatch.setattr(email_reader, "fetch_headers_and_cache",
-                            lambda db_path=None: {"new_count": 0})
+        monkeypatch.setattr(email_reader, "fetch_headers_and_cache", lambda db_path=None: {"new_count": 0})
         monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: [])
         monkeypatch.setattr(cache, "read_emails", lambda db_path, limit=None: [])
         calls = []
@@ -529,49 +505,47 @@ class TestRunInitialFetch:
         assert len(calls) == 3
 
     def test_swallows_on_refresh_exception(self, monkeypatch):
-        monkeypatch.setattr(email_reader, "fetch_headers_and_cache",
-                            lambda db_path=None: {"new_count": 0})
+        monkeypatch.setattr(email_reader, "fetch_headers_and_cache", lambda db_path=None: {"new_count": 0})
         monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: [])
         monkeypatch.setattr(cache, "read_emails", lambda db_path, limit=None: [])
         run_initial_fetch(db_path="/db", on_refresh=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
 
     def test_fetches_bodies_for_imap_id_pairs(self, monkeypatch):
-        monkeypatch.setattr(email_reader, "fetch_headers_and_cache",
-                            lambda db_path=None: {"new_count": 1, "imap_id_pairs": [(b"1", "<m@e.com>")]})
+        monkeypatch.setattr(
+            email_reader,
+            "fetch_headers_and_cache",
+            lambda db_path=None: {"new_count": 1, "imap_id_pairs": [(b"1", "<m@e.com>")]},
+        )
         monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: [])
         monkeypatch.setattr(cache, "read_emails", lambda db_path, limit=None: [])
         fetches = []
-        monkeypatch.setattr(email_reader, "fetch_bodies_for_ids",
-                            lambda pairs, db_path=None: fetches.append(pairs))
+        monkeypatch.setattr(email_reader, "fetch_bodies_for_ids", lambda pairs, db_path=None: fetches.append(pairs))
         run_initial_fetch(db_path="/db")
         assert len(fetches) == 1
 
     def test_fetches_bodies_for_headers_only_ids(self, monkeypatch):
-        monkeypatch.setattr(email_reader, "fetch_headers_and_cache",
-                            lambda db_path=None: {"new_count": 0})
-        monkeypatch.setattr(cache, "get_headers_only_message_ids",
-                            lambda db_path=None: ["<h@e.com>"])
+        monkeypatch.setattr(email_reader, "fetch_headers_and_cache", lambda db_path=None: {"new_count": 0})
+        monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: ["<h@e.com>"])
         monkeypatch.setattr(cache, "read_emails", lambda db_path, limit=None: [])
         fetches = []
-        monkeypatch.setattr(email_reader, "fetch_bodies_by_message_ids",
-                            lambda ids, db_path=None: fetches.append(ids))
+        monkeypatch.setattr(email_reader, "fetch_bodies_by_message_ids", lambda ids, db_path=None: fetches.append(ids))
         run_initial_fetch(db_path="/db")
         assert len(fetches) == 1
 
     def test_scans_emails(self, monkeypatch):
-        monkeypatch.setattr(email_reader, "fetch_headers_and_cache",
-                            lambda db_path=None: {"new_count": 0})
+        monkeypatch.setattr(email_reader, "fetch_headers_and_cache", lambda db_path=None: {"new_count": 0})
         monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: [])
-        monkeypatch.setattr(cache, "read_emails",
-                            lambda db_path, limit=None: [{"message_id": "<m@e.com>"}])
+        monkeypatch.setattr(cache, "read_emails", lambda db_path, limit=None: [{"message_id": "<m@e.com>"}])
         scans = []
-        monkeypatch.setattr(email_reader, "scan_emails",
-                            lambda emails, keywords_file, db_path=None: scans.append(emails))
+        monkeypatch.setattr(
+            email_reader, "scan_emails", lambda emails, keywords_file, db_path=None: scans.append(emails)
+        )
         run_initial_fetch(db_path="/db")
         assert len(scans) == 1
 
     def test_top_level_exception_returns_error(self, monkeypatch):
-        monkeypatch.setattr(email_reader, "fetch_headers_and_cache",
-                            lambda db_path=None: (_ for _ in ()).throw(RuntimeError("kaboom")))
+        monkeypatch.setattr(
+            email_reader, "fetch_headers_and_cache", lambda db_path=None: (_ for _ in ()).throw(RuntimeError("kaboom"))
+        )
         result = run_initial_fetch(db_path="/db")
         assert "error" in result

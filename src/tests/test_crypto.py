@@ -118,9 +118,7 @@ class TestEmailCredentials:
         crypto.save_setting("email_pass", crypto._encrypt("p"), tmp_db)
         assert crypto.has_email_credentials(tmp_db) is False
 
-    def test_get_credentials_returns_none_pass_on_decrypt_failure(
-        self, tmp_db, isolated_secret_key
-    ):
+    def test_get_credentials_returns_none_pass_on_decrypt_failure(self, tmp_db, isolated_secret_key):
         crypto._fernet_instance = None
         crypto.save_email_credentials("u@e.com", "p", tmp_db)
         crypto._fernet_instance = None

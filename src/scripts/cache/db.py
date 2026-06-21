@@ -119,6 +119,7 @@ def _connect(db_path: str):
             setattr(_local, key, None)
         raise
 
+
 def init_db(db_path: str) -> None:
     Path(db_path).resolve().parent.mkdir(parents=True, exist_ok=True)
     with _connect(db_path) as conn:
@@ -131,7 +132,7 @@ _BATCH_CHUNK = 500
 def _batch_existing_hashes(conn, hashes: list[str]) -> set[str]:
     existing = set()
     for i in range(0, len(hashes), _BATCH_CHUNK):
-        chunk = hashes[i:i + _BATCH_CHUNK]
+        chunk = hashes[i : i + _BATCH_CHUNK]
         placeholders = ",".join("?" * len(chunk))
         rows = conn.execute(
             f"SELECT message_id_hash FROM emails WHERE message_id_hash IN ({placeholders})",
@@ -165,16 +166,18 @@ def save_headers_batch(emails: list[dict], db_path: str) -> int:
             continue
         message_id_hash = _hash_message_id(message_id)
         date_parsed = _parse_date_iso(email_data.get("date", ""))
-        prepared.append((
-            message_id_hash,
-            message_id,
-            email_data.get("from", ""),
-            email_data.get("subject", ""),
-            email_data.get("date", ""),
-            date_parsed,
-            email_data.get("thread_id"),
-            email_data.get("in_reply_to"),
-        ))
+        prepared.append(
+            (
+                message_id_hash,
+                message_id,
+                email_data.get("from", ""),
+                email_data.get("subject", ""),
+                email_data.get("date", ""),
+                date_parsed,
+                email_data.get("thread_id"),
+                email_data.get("in_reply_to"),
+            )
+        )
 
     if not prepared:
         return 0
@@ -202,8 +205,7 @@ def update_bodies_batch(updates: list[tuple[str, str]], db_path: str) -> int:
     rows = [(body, _hash_message_id(mid)) for mid, body in updates]
     with _connect(db_path) as conn:
         cursor = conn.executemany(
-            "UPDATE emails SET body = ?, status = 'fetched' "
-            "WHERE message_id_hash = ?",
+            "UPDATE emails SET body = ?, status = 'fetched' WHERE message_id_hash = ?",
             rows,
         )
     return cursor.rowcount
@@ -211,9 +213,7 @@ def update_bodies_batch(updates: list[tuple[str, str]], db_path: str) -> int:
 
 def get_headers_only_message_ids(db_path: str) -> list[str]:
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT message_id FROM emails WHERE status = 'headers_only'"
-        ).fetchall()
+        rows = conn.execute("SELECT message_id FROM emails WHERE status = 'headers_only'").fetchall()
     return [row["message_id"] for row in rows]
 
 

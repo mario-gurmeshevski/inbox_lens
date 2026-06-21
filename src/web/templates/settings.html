@@ -2,7 +2,33 @@
 {% block content %}
 <h1>Settings</h1>
 
-{% if restart_notice %}
+{% if is_docker %}
+<div class="detail-card" style="margin-top: 1.25rem">
+  {% include "partials/update_panel.html" %}
+</div>
+{% else %}
+<div class="detail-card" style="margin-top: 1.25rem">
+  <div class="settings-row">
+    <div class="settings-info">
+      <div class="settings-label">
+        <i data-lucide="git-pull-request" style="width: 16px; height: 16px"></i>
+        Updates
+      </div>
+      <p class="settings-desc">
+        This instance is running outside Docker (version
+        <strong>{{ update.current_version }}</strong>). In-app updates are
+        unavailable. To update, submit a Pull Request at
+        <a
+          href="https://github.com/mario-gurmeshevski/inbox_lens"
+          target="_blank"
+          rel="noopener"
+          >github.com/mario-gurmeshevski/inbox_lens</a
+        >.
+      </p>
+    </div>
+  </div>
+</div>
+{% endif %} {% if restart_notice %}
 <div class="status-box status-warning">
   <i
     data-lucide="alert-triangle"
@@ -129,19 +155,27 @@
     ></i>
     <span>{{ password_msg }}</span>
   </div>
-  {% endif %}
-
-  {% if auth_enabled %}
+  {% endif %} {% if auth_enabled %}
   <div class="settings-network-info">
     <div class="section-title">
       <i data-lucide="key" style="width: 16px; height: 16px"></i>
       Change Password
     </div>
-    <form method="post" action="/settings/password" class="setup-form" style="max-width: 100%">
+    <form
+      method="post"
+      action="/settings/password"
+      class="setup-form"
+      style="max-width: 100%"
+    >
       <div class="form-group">
         <label for="old_password">Current Password</label>
         <div class="password-field">
-          <input type="password" id="old_password" name="old_password" required />
+          <input
+            type="password"
+            id="old_password"
+            name="old_password"
+            required
+          />
           <button
             type="button"
             class="password-toggle"
@@ -209,18 +243,26 @@
         API Key
       </div>
       <p class="settings-desc">
-        {% if api_key_created_at %} Programmatic access is enabled (created
-        {{ api_key_created_at }}). Pass it via the
+        {% if api_key_created_at %} Programmatic access is enabled (created {{
+        api_key_created_at }}). Pass it via the
         <code>Authorization: Bearer &lt;key&gt;</code> header on
         <code>/api/*</code>. {% else %} No API key configured. {% endif %}
       </p>
     </div>
     {% if api_key_created_at %}
-    <form method="post" action="/settings/api-key/revoke" class="settings-toggle-form">
+    <form
+      method="post"
+      action="/settings/api-key/revoke"
+      class="settings-toggle-form"
+    >
       <button
         type="submit"
         class="btn btn-danger btn-sm"
-        onclick="return confirm('Revoke the API key? Programmatic access will stop immediately.');"
+        onclick="
+          return confirm(
+            'Revoke the API key? Programmatic access will stop immediately.',
+          );
+        "
       >
         <i data-lucide="trash-2" style="width: 14px; height: 14px"></i>
         Revoke

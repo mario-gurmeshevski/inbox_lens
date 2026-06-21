@@ -1,4 +1,4 @@
-.PHONY: install uninstall dev-install web test test-cov lint clean reset up up-ts down stop start tailscale-up tailscale-status tailscale-ip tailscale-logout purge
+.PHONY: install uninstall dev-install web test test-cov lint format clean reset up up-ts down stop start tailscale-up tailscale-status tailscale-ip tailscale-logout purge
 
 PYTHON ?= python3
 VENV := .venv
@@ -33,6 +33,9 @@ test-cov: dev-install
 
 lint: dev-install
 	$(VENV_PYTHON) -m ruff check src/
+
+format: dev-install
+	$(VENV_PYTHON) -m ruff format src/
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +

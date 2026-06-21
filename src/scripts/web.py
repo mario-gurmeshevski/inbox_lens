@@ -15,7 +15,7 @@ from pathlib import Path
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
-from src.scripts import email_reader, cache, idle_monitor, event_bus
+from src.scripts import email_reader, cache, idle_monitor, event_bus, updater
 from src.scripts import auth
 from src.scripts.constants import DB_PATH
 from src.scripts.utils import _priority_bucket
@@ -28,11 +28,19 @@ SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "
 SESSION_COOKIE_MAX_AGE = int(os.getenv("SESSION_COOKIE_MAX_AGE", "2592000"))
 
 _monitor: idle_monitor.IdleMonitor | None = None
+_update_checker: updater.UpdateChecker | None = None
+
+
+def _on_update_available(result: dict) -> None:
+    try:
+        event_bus.bus.publish("update_available", result)
+    except Exception:
+        pass
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _monitor
+    global _monitor, _update_checker
     cache._ensure_secret_key()
     cache._ensure_session_key()
     cache.init_db(DB_PATH)
@@ -50,8 +58,14 @@ async def lifespan(app: FastAPI):
         t.start()
         _monitor.start()
 
+    if updater.is_docker_environment():
+        _update_checker = updater.UpdateChecker(on_update=_on_update_available)
+        _update_checker.start()
+
     yield
 
+    if _update_checker:
+        _update_checker.stop()
     if _monitor:
         _monitor.stop()
 
@@ -96,8 +110,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 class SetupGuardMiddleware(BaseHTTPMiddleware):
     _EXEMPT_PATHS = {
-        "/setup", "/setup-dashboard", "/login", "/static", "/health",
-        "/api/events", "/partials/tailscale-status",
+        "/setup",
+        "/setup-dashboard",
+        "/login",
+        "/static",
+        "/health",
+        "/api/events",
+        "/partials/tailscale-status",
     }
 
     async def dispatch(self, request: Request, call_next):
@@ -140,12 +159,6 @@ def _get_local_ips() -> list[str]:
     if _is_docker():
         return []
     ips: set[str] = set()
-
-    # Primary outbound IP via a UDP socket. No packets are actually sent
-    # (SOCK_DGRAM + connect only populates the routing table entry), but this
-    # reliably returns the interface used to reach the network on macOS,
-    # Linux, and Windows — unlike gethostbyname_ex, which fails on macOS
-    # hostnames ending in ".local" and frequently misses non-primary ifs.
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -157,17 +170,13 @@ def _get_local_ips() -> list[str]:
         pass
 
     # Secondary source: hostname resolution surfaces additional interfaces
-    # on hosts where it works (and is harmless when it doesn't).
     try:
         _, _, resolved = socket.gethostbyname_ex(socket.gethostname())
         ips.update(resolved)
     except OSError:
         pass
 
-    return sorted(
-        ip for ip in ips
-        if not ip.startswith("127.") and not ip.startswith("169.254.")
-    )
+    return sorted(ip for ip in ips if not ip.startswith("127.") and not ip.startswith("169.254."))
 
 
 TS_STATUS_FILE = "/shared/status.json"
@@ -242,11 +251,15 @@ async def health():
 async def setup_page(request: Request):
     if cache.has_email_credentials(DB_PATH):
         return RedirectResponse("/", status_code=303)
-    return templates.TemplateResponse(request, "setup.html", {
-        "error": None,
-        "imap_server": IMAP_SERVER,
-        "email_user": "",
-    })
+    return templates.TemplateResponse(
+        request,
+        "setup.html",
+        {
+            "error": None,
+            "imap_server": IMAP_SERVER,
+            "email_user": "",
+        },
+    )
 
 
 @app.post("/setup", response_class=HTMLResponse)
@@ -262,19 +275,27 @@ async def setup_submit(request: Request):
     email_pass = str(form.get("email_pass", "")).strip()
 
     if not email_user or not email_pass:
-        return templates.TemplateResponse(request, "setup.html", {
-            "error": "Email and password are required.",
-            "imap_server": imap_server,
-            "email_user": email_user,
-        })
+        return templates.TemplateResponse(
+            request,
+            "setup.html",
+            {
+                "error": "Email and password are required.",
+                "imap_server": imap_server,
+                "email_user": email_user,
+            },
+        )
 
     result = email_reader.test_connection(imap_server, email_user, email_pass)
     if not result["success"]:
-        return templates.TemplateResponse(request, "setup.html", {
-            "error": result["error"],
-            "imap_server": imap_server,
-            "email_user": email_user,
-        })
+        return templates.TemplateResponse(
+            request,
+            "setup.html",
+            {
+                "error": result["error"],
+                "imap_server": imap_server,
+                "email_user": email_user,
+            },
+        )
 
     cache.init_db(DB_PATH)
     cache.save_setting("imap_server", imap_server, DB_PATH)
@@ -306,10 +327,14 @@ def _safe_next(next_url: str) -> str:
 async def setup_dashboard_page(request: Request):
     if auth.is_auth_configured(DB_PATH):
         return RedirectResponse("/", status_code=303)
-    return templates.TemplateResponse(request, "setup_dashboard.html", {
-        "error": None,
-        "generated_api_key": None,
-    })
+    return templates.TemplateResponse(
+        request,
+        "setup_dashboard.html",
+        {
+            "error": None,
+            "generated_api_key": None,
+        },
+    )
 
 
 @app.post("/setup-dashboard", response_class=HTMLResponse)
@@ -326,10 +351,14 @@ async def setup_dashboard_submit(request: Request):
     if not error and password != confirm:
         error = "Passwords do not match."
     if error:
-        return templates.TemplateResponse(request, "setup_dashboard.html", {
-            "error": error,
-            "generated_api_key": None,
-        })
+        return templates.TemplateResponse(
+            request,
+            "setup_dashboard.html",
+            {
+                "error": error,
+                "generated_api_key": None,
+            },
+        )
 
     auth.set_password(password, DB_PATH)
     auth.mark_logged_in(request)
@@ -340,10 +369,14 @@ async def setup_dashboard_submit(request: Request):
         auth.save_api_key(generated_api_key, DB_PATH)
 
     if generated_api_key:
-        return templates.TemplateResponse(request, "setup_dashboard.html", {
-            "error": None,
-            "generated_api_key": generated_api_key,
-        })
+        return templates.TemplateResponse(
+            request,
+            "setup_dashboard.html",
+            {
+                "error": None,
+                "generated_api_key": generated_api_key,
+            },
+        )
     return RedirectResponse("/", status_code=303)
 
 
@@ -351,10 +384,14 @@ async def setup_dashboard_submit(request: Request):
 async def login_page(request: Request):
     if auth.is_auth_configured(DB_PATH) and auth.is_logged_in(request):
         return RedirectResponse("/", status_code=303)
-    return templates.TemplateResponse(request, "login.html", {
-        "error": None,
-        "next": _safe_next(request.query_params.get("next", "/")),
-    })
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {
+            "error": None,
+            "next": _safe_next(request.query_params.get("next", "/")),
+        },
+    )
 
 
 @app.post("/login", response_class=HTMLResponse)
@@ -368,10 +405,14 @@ async def login_submit(request: Request):
     ip = auth._client_ip(request)
 
     if auth.login_rate_limiter.is_limited(ip):
-        return templates.TemplateResponse(request, "login.html", {
-            "error": "Too many login attempts. Please try again later.",
-            "next": next_url,
-        })
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {
+                "error": "Too many login attempts. Please try again later.",
+                "next": next_url,
+            },
+        )
 
     if auth.verify_password(password, DB_PATH):
         auth.login_rate_limiter.reset(ip)
@@ -379,10 +420,14 @@ async def login_submit(request: Request):
         return RedirectResponse(next_url, status_code=303)
 
     auth.login_rate_limiter.record_failure(ip)
-    return templates.TemplateResponse(request, "login.html", {
-        "error": "Incorrect password.",
-        "next": next_url,
-    })
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {
+            "error": "Incorrect password.",
+            "next": next_url,
+        },
+    )
 
 
 @app.post("/logout")
@@ -398,11 +443,15 @@ async def account_page(request: Request):
         return RedirectResponse("/setup", status_code=303)
     saved_imap = cache.get_setting("imap_server", DB_PATH) or IMAP_SERVER
     masked_pass = (email_pass[:4] + "*" * (len(email_pass) - 4)) if email_pass and len(email_pass) > 4 else "****"
-    return templates.TemplateResponse(request, "account.html", {
-        "email_user": email_user,
-        "imap_server": saved_imap,
-        "masked_pass": masked_pass,
-    })
+    return templates.TemplateResponse(
+        request,
+        "account.html",
+        {
+            "email_user": email_user,
+            "imap_server": saved_imap,
+            "masked_pass": masked_pass,
+        },
+    )
 
 
 @app.post("/account/disconnect")
@@ -414,6 +463,22 @@ async def account_disconnect(request: Request):
     cache.delete_email_credentials(DB_PATH)
     cache.delete_setting("imap_server", DB_PATH)
     return RedirectResponse("/setup", status_code=303)
+
+
+def _update_info(db_path: str = DB_PATH) -> dict:
+    check = updater.check_for_update()
+    latest = check.get("latest")
+    dismissed = cache.get_setting(updater.DISMISSED_VERSION_KEY, db_path)
+    banner_dismissed = bool(latest and dismissed == latest)
+    return {
+        "current_version": updater.get_current_version(),
+        "latest_version": latest,
+        "update_available": check.get("update_available", False),
+        "update_error": check.get("error", False),
+        "docker_managed": updater.is_docker_managed(),
+        "update_state": updater.update_state(),
+        "banner_dismissed": banner_dismissed,
+    }
 
 
 def _settings_context(
@@ -450,6 +515,7 @@ def _settings_context(
         "password_ok": password_ok,
         "api_key_msg": api_key_msg,
         "new_api_key": new_api_key,
+        "update": _update_info(db_path),
     }
 
 
@@ -496,7 +562,9 @@ async def settings_api_key_regenerate(request: Request):
     return templates.TemplateResponse(
         request,
         "settings.html",
-        _settings_context(DB_PATH, api_key_msg="API key regenerated. Copy it now — it won't be shown again.", new_api_key=token),
+        _settings_context(
+            DB_PATH, api_key_msg="API key regenerated. Copy it now — it won't be shown again.", new_api_key=token
+        ),
     )
 
 
@@ -506,6 +574,46 @@ async def settings_api_key_revoke(request: Request):
     return templates.TemplateResponse(
         request, "settings.html", _settings_context(DB_PATH, api_key_msg="API key revoked.")
     )
+
+
+@app.get("/partials/update-banner", response_class=HTMLResponse)
+async def partial_update_banner(request: Request):
+    return templates.TemplateResponse(
+        request, "partials/update_banner.html", {"is_docker": _is_docker(), "update": _update_info(DB_PATH)}
+    )
+
+
+@app.post("/api/update/dismiss", response_class=HTMLResponse)
+async def api_update_dismiss(request: Request):
+    latest = updater.fetch_latest_version()
+    if latest:
+        cache.save_setting(updater.DISMISSED_VERSION_KEY, latest, DB_PATH)
+    return templates.TemplateResponse(
+        request, "partials/update_banner.html", {"is_docker": _is_docker(), "update": _update_info(DB_PATH)}
+    )
+
+
+@app.get("/partials/update-panel", response_class=HTMLResponse)
+async def partial_update_panel(request: Request):
+    return templates.TemplateResponse(request, "partials/update_panel.html", {"update": _update_info(DB_PATH)})
+
+
+@app.post("/api/update/check", response_class=HTMLResponse)
+async def api_update_check(request: Request):
+    updater.fetch_latest_version(force=True)
+    return templates.TemplateResponse(request, "partials/update_panel.html", {"update": _update_info(DB_PATH)})
+
+
+@app.post("/api/update/run", response_class=HTMLResponse)
+async def api_update_run(request: Request):
+    if updater.is_docker_managed():
+        updater.trigger_update()
+    return templates.TemplateResponse(request, "partials/update_panel.html", {"update": _update_info(DB_PATH)})
+
+
+@app.get("/api/update/status")
+async def api_update_status():
+    return _update_info(DB_PATH)
 
 
 def _dashboard_context(db_path: str) -> dict:
@@ -562,7 +670,9 @@ async def email_list(
     search: str = Query("", alias="search"),
     page: int = Query(1, alias="page"),
 ):
-    return templates.TemplateResponse(request, "emails.html", _email_list_context(DB_PATH, status, priority, search, page))
+    return templates.TemplateResponse(
+        request, "emails.html", _email_list_context(DB_PATH, status, priority, search, page)
+    )
 
 
 @app.get("/emails/{email_hash}", response_class=HTMLResponse)
@@ -571,10 +681,14 @@ async def email_detail(request: Request, email_hash: str):
     if not email_data:
         return HTMLResponse("<h1>Email not found</h1>", status_code=404)
 
-    return templates.TemplateResponse(request, "email_detail.html", {
-        "email": email_data,
-        "email_hash": email_hash,
-    })
+    return templates.TemplateResponse(
+        request,
+        "email_detail.html",
+        {
+            "email": email_data,
+            "email_hash": email_hash,
+        },
+    )
 
 
 @app.post("/emails/{email_hash}/delete")
@@ -623,7 +737,9 @@ async def partial_emails(
     search: str = Query("", alias="search"),
     page: int = Query(1, alias="page"),
 ):
-    return templates.TemplateResponse(request, "partials/email_table.html", _email_list_context(DB_PATH, status, priority, search, page))
+    return templates.TemplateResponse(
+        request, "partials/email_table.html", _email_list_context(DB_PATH, status, priority, search, page)
+    )
 
 
 @app.get("/partials/email-detail/{email_hash}", response_class=HTMLResponse)
@@ -632,10 +748,14 @@ async def partial_email_detail(request: Request, email_hash: str):
     if not email_data:
         return HTMLResponse("<p>Email not found</p>", status_code=404)
 
-    return templates.TemplateResponse(request, "partials/email_detail_content.html", {
-        "email": email_data,
-        "email_hash": email_hash,
-    })
+    return templates.TemplateResponse(
+        request,
+        "partials/email_detail_content.html",
+        {
+            "email": email_data,
+            "email_hash": email_hash,
+        },
+    )
 
 
 @app.get("/partials/tailscale-status", response_class=HTMLResponse)
@@ -644,14 +764,18 @@ async def partial_tailscale_status(request: Request):
     tailscale_login_url = _get_tailscale_login_url()
     ts_state = _tailscale_state(tailscale_ip, tailscale_login_url)
     port = int(os.getenv("WEB_PORT", "8000"))
-    return templates.TemplateResponse(request, "partials/tailscale_status.html", {
-        "ts_state": ts_state,
-        "tailscale_ip": tailscale_ip,
-        "tailscale_dns_name": _get_tailscale_dns_name(),
-        "tailscale_serve_url": _get_tailscale_serve_url(),
-        "tailscale_login_url": tailscale_login_url,
-        "port": port,
-    })
+    return templates.TemplateResponse(
+        request,
+        "partials/tailscale_status.html",
+        {
+            "ts_state": ts_state,
+            "tailscale_ip": tailscale_ip,
+            "tailscale_dns_name": _get_tailscale_dns_name(),
+            "tailscale_serve_url": _get_tailscale_serve_url(),
+            "tailscale_login_url": tailscale_login_url,
+            "port": port,
+        },
+    )
 
 
 def _resolve_bind_host(requested: str) -> str:
@@ -662,7 +786,9 @@ def _resolve_bind_host(requested: str) -> str:
         cache.init_db(DB_PATH)
         if not auth.is_auth_configured(DB_PATH):
             print(f"[auth] No dashboard password configured — binding to 127.0.0.1 (requested {requested}).")
-            print("[auth] Set a password at http://127.0.0.1:8000/setup-dashboard, then restart to expose the dashboard.")
+            print(
+                "[auth] Set a password at http://127.0.0.1:8000/setup-dashboard, then restart to expose the dashboard."
+            )
             return "127.0.0.1"
     except Exception as exc:
         print(f"[auth] Could not verify auth configuration ({exc!r}); using requested host {requested}.")
@@ -671,6 +797,7 @@ def _resolve_bind_host(requested: str) -> str:
 
 if __name__ == "__main__":
     import uvicorn
+
     cache._ensure_secret_key()
     cache._ensure_session_key()
     host = _resolve_bind_host(WEB_HOST)

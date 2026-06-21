@@ -113,7 +113,7 @@ def _make_body_fetchers(db_path):
     def bulk(conn, batch):
         id_str = b",".join(eid for eid, _ in batch)
         try:
-            status, msg_data = conn.uid('fetch', id_str, "(BODY.PEEK[])")
+            status, msg_data = conn.uid("fetch", id_str, "(BODY.PEEK[])")
         except Exception:
             return None
         if status != "OK":
@@ -133,7 +133,7 @@ def _make_body_fetchers(db_path):
         eid, message_id = item
         for attempt in range(2):
             try:
-                status, msg_data = conn.uid('fetch', eid, "(BODY.PEEK[])")
+                status, msg_data = conn.uid("fetch", eid, "(BODY.PEEK[])")
                 if status == "OK":
                     parsed = _parse_fetched_email(msg_data)
                     for p in parsed:
@@ -157,13 +157,13 @@ def _make_body_fetchers(db_path):
 
 
 def _extract_uid(envelope):
-    match = re.search(r'\bUID (\d+)', envelope)
+    match = re.search(r"\bUID (\d+)", envelope)
     return match.group(1).encode() if match else None
 
 
 def _get_email_ids(mail):
     mail.select("INBOX")
-    status, data = mail.uid('search', None, "ALL")
+    status, data = mail.uid("search", None, "ALL")
     if status != "OK":
         return []
     return data[0].split()
@@ -188,16 +188,18 @@ def _fetch_headers_bulk(mail, email_ids):
         uid = _extract_uid(envelope)
         msg = email_lib.message_from_bytes(item[1])
         thread_info = extract_thread_info(msg)
-        results.append({
-            "message_id": msg.get("Message-ID", ""),
-            "from": decode_str(msg.get("From", "")),
-            "subject": decode_str(msg.get("Subject", "")),
-            "date": msg.get("Date", ""),
-            "body": "",
-            "thread_id": thread_info["thread_id"],
-            "in_reply_to": thread_info["in_reply_to"],
-            "_uid": uid,
-        })
+        results.append(
+            {
+                "message_id": msg.get("Message-ID", ""),
+                "from": decode_str(msg.get("From", "")),
+                "subject": decode_str(msg.get("Subject", "")),
+                "date": msg.get("Date", ""),
+                "body": "",
+                "thread_id": thread_info["thread_id"],
+                "in_reply_to": thread_info["in_reply_to"],
+                "_uid": uid,
+            }
+        )
     return results
 
 
@@ -219,25 +221,27 @@ def _parse_fetched_email(msg_data_list):
         if body:
             body = body.strip()
 
-        results.append({
-            "message_id": message_id,
-            "from": from_addr,
-            "subject": subject,
-            "date": date,
-            "body": body,
-            "thread_id": thread_info["thread_id"],
-            "in_reply_to": thread_info["in_reply_to"],
-        })
+        results.append(
+            {
+                "message_id": message_id,
+                "from": from_addr,
+                "subject": subject,
+                "date": date,
+                "body": body,
+                "thread_id": thread_info["thread_id"],
+                "in_reply_to": thread_info["in_reply_to"],
+            }
+        )
     return results
 
 
 def _sanitize_imap_search(value):
-    return value.replace('"', '').replace(')', '').replace('(', '').replace('\\', '')
+    return value.replace('"', "").replace(")", "").replace("(", "").replace("\\", "")
 
 
 def _resolve_uid(mail, message_id):
     safe_id = _sanitize_imap_search(message_id)
-    status, data = mail.uid('search', None, f'(HEADER "Message-ID" "{safe_id}")')
+    status, data = mail.uid("search", None, f'(HEADER "Message-ID" "{safe_id}")')
     if status == "OK" and data[0].split():
         return data[0].split()[0]
     return None
@@ -248,7 +252,7 @@ def find_trash_folder(mail):
     if status == "OK":
         for folder in folders:
             decoded = folder.decode()
-            if '\\Trash' in decoded:
+            if "\\Trash" in decoded:
                 name = _parse_list_folder_name(decoded)
                 if name:
                     return name
@@ -273,11 +277,11 @@ def move_to_trash(mail, message_id):
         _trash_folder_cache = find_trash_folder(mail)
     trash_folder = _trash_folder_cache
 
-    status, _ = mail.uid('copy', email_id, trash_folder)
+    status, _ = mail.uid("copy", email_id, trash_folder)
     if status != "OK":
         return False
 
-    mail.uid('store', email_id, "+FLAGS", "\\Deleted")
+    mail.uid("store", email_id, "+FLAGS", "\\Deleted")
     mail.expunge()
     return True
 
@@ -447,7 +451,7 @@ def test_connection(imap_server, email_user, email_pass):
         conn = imaplib.IMAP4_SSL(imap_server, timeout=IMAP_TIMEOUT)
         conn.login(email_user, email_pass)
         conn.select("INBOX")
-        status, data = conn.uid('search', None, "ALL")
+        status, data = conn.uid("search", None, "ALL")
         count = len(data[0].split()) if status == "OK" and data[0] else 0
         _safe_close(conn)
         return {"success": True, "inbox_count": count}

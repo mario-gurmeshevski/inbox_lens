@@ -41,7 +41,6 @@ class TestIdleMonitorInit:
     def test_default_params(self):
         m = IdleMonitor()
         assert m.db_path is not None
-        assert m.on_new_emails is None
         assert m.on_refresh is None
         assert not m._running
         assert m._thread is None
@@ -49,9 +48,8 @@ class TestIdleMonitorInit:
     def test_custom_params(self):
         def cb():
             return None
-        m = IdleMonitor(db_path="/x.db", on_new_emails=cb, on_refresh=cb)
+        m = IdleMonitor(db_path="/x.db", on_refresh=cb)
         assert m.db_path == "/x.db"
-        assert m.on_new_emails is cb
         assert m.on_refresh is cb
 
 
@@ -495,11 +493,10 @@ class TestFetchNew:
         monkeypatch.setattr(idle_mod, "run_initial_fetch", lambda **kw: kwargs.update(kw))
         def cb():
             return None
-        m = IdleMonitor(db_path="/x.db", on_new_emails=cb, on_refresh=cb)
+        m = IdleMonitor(db_path="/x.db", on_refresh=cb)
         m._fetch_new()
         assert kwargs["db_path"] == "/x.db"
         assert kwargs["on_refresh"] is cb
-        assert kwargs["on_new_emails"] is cb
 
     def test_swallows_exception(self, monkeypatch):
         monkeypatch.setattr(idle_mod, "run_initial_fetch",
@@ -572,36 +569,6 @@ class TestRunInitialFetch:
                             lambda emails, keywords_file, db_path=None: scans.append(emails))
         run_initial_fetch(db_path="/db")
         assert len(scans) == 1
-
-    def test_calls_on_new_emails_when_new_count_gt_zero(self, monkeypatch):
-        monkeypatch.setattr(email_reader, "fetch_headers_and_cache",
-                            lambda db_path=None: {"new_count": 2})
-        monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: [])
-        monkeypatch.setattr(cache, "read_emails",
-                            lambda db_path, limit=None: [{"message_id": "<a@e.com>"}])
-        monkeypatch.setattr(email_reader, "scan_emails", lambda *a, **kw: None)
-        calls = []
-        run_initial_fetch(db_path="/db", on_new_emails=lambda r, e: calls.append((r, e)))
-        assert len(calls) == 1
-
-    def test_skips_on_new_emails_when_count_zero(self, monkeypatch):
-        monkeypatch.setattr(email_reader, "fetch_headers_and_cache",
-                            lambda db_path=None: {"new_count": 0})
-        monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: [])
-        monkeypatch.setattr(cache, "read_emails", lambda db_path, limit=None: [])
-        calls = []
-        run_initial_fetch(db_path="/db", on_new_emails=lambda r, e: calls.append(1))
-        assert len(calls) == 0
-
-    def test_swallows_on_new_emails_exception(self, monkeypatch):
-        monkeypatch.setattr(email_reader, "fetch_headers_and_cache",
-                            lambda db_path=None: {"new_count": 1})
-        monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: [])
-        monkeypatch.setattr(cache, "read_emails",
-                            lambda db_path, limit=None: [{"message_id": "<m@e.com>"}])
-        monkeypatch.setattr(email_reader, "scan_emails", lambda *a, **kw: None)
-        run_initial_fetch(db_path="/db",
-                          on_new_emails=lambda r, e: (_ for _ in ()).throw(RuntimeError("boom")))
 
     def test_top_level_exception_returns_error(self, monkeypatch):
         monkeypatch.setattr(email_reader, "fetch_headers_and_cache",

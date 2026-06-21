@@ -24,6 +24,8 @@ if (-not $Task) {
     Write-Host "  up               Start Docker Compose (auto-detect host IP)"
     Write-Host "  up-ts            Start Docker Compose with Tailscale"
     Write-Host "  down             Stop and remove Docker Compose"
+    Write-Host "  stop             Stop Docker Compose containers (no data removed)"
+    Write-Host "  start            Start previously-stopped Docker Compose containers"
     Write-Host "  tailscale-up     Show Tailscale logs (login URL)"
     Write-Host "  tailscale-status Show Tailscale status"
     Write-Host "  tailscale-ip     Show Tailscale IP"
@@ -96,7 +98,7 @@ switch ($Task) {
 
     "reset" {
         Invoke-Clean
-        @("src/data/emails.db", "src/data/emails.db-shm", "src/data/emails.db-wal", "src/data/.secret.key") | ForEach-Object {
+        @("src/data/emails.db", "src/data/emails.db-shm", "src/data/emails.db-wal", "src/data/.secret.key", "src/data/.session.key") | ForEach-Object {
             Remove-Item -Force -ErrorAction SilentlyContinue $_
         }
     }
@@ -118,6 +120,16 @@ switch ($Task) {
 
     "down" {
         docker compose down --rmi local --volumes --remove-orphans
+    }
+
+    "stop" {
+        $argList = @("compose") + $COMPOSE_FILES_TS + @("stop")
+        & docker @argList
+    }
+
+    "start" {
+        $argList = @("compose") + $COMPOSE_FILES_TS + @("start")
+        & docker @argList
     }
 
     "tailscale-up" {
@@ -153,7 +165,7 @@ switch ($Task) {
         & docker @logoutArgs 2>$null
 
         Invoke-Clean
-        @("src/data/emails.db", "src/data/emails.db-shm", "src/data/emails.db-wal", "src/data/.secret.key") | ForEach-Object {
+        @("src/data/emails.db", "src/data/emails.db-shm", "src/data/emails.db-wal", "src/data/.secret.key", "src/data/.session.key") | ForEach-Object {
             Remove-Item -Force -ErrorAction SilentlyContinue $_
         }
 

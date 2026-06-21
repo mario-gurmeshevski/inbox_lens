@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Setup — Email Reader</title>
+    <title>Login — Email Reader</title>
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
     <link rel="stylesheet" href="/static/style.css" />
   </head>
@@ -12,11 +12,11 @@
       <div class="setup-card">
         <div class="setup-header">
           <i
-            data-lucide="mail"
+            data-lucide="lock"
             style="width: 32px; height: 32px; color: var(--accent)"
           ></i>
-          <h1>Email Reader Setup</h1>
-          <p>Connect your email account to get started.</p>
+          <h1>Login</h1>
+          <p>Enter your dashboard password to continue.</p>
         </div>
 
         {% if error %}
@@ -26,64 +26,34 @@
         </div>
         {% endif %}
 
-        <form method="post" action="/setup" class="setup-form">
-          <div class="form-group">
-            <label for="imap_server">IMAP Server</label>
-            <input
-              type="text"
-              id="imap_server"
-              name="imap_server"
-              value="{{ imap_server }}"
-              placeholder="imap.gmail.com"
-              required
-            />
-            <span class="form-hint">Default: imap.gmail.com</span>
-          </div>
+        <form method="post" action="/login" class="setup-form">
+          <input type="hidden" name="next" value="{{ next }}" />
 
           <div class="form-group">
-            <label for="email_user">Email Address</label>
-            <input
-              type="email"
-              id="email_user"
-              name="email_user"
-              value="{{ email_user }}"
-              placeholder="you@gmail.com"
-              required
-            />
-          </div>
-
-          <div class="form-group">
-            <label for="email_pass">App Password</label>
+            <label for="password">Password</label>
             <div class="password-field">
               <input
                 type="password"
-                id="email_pass"
-                name="email_pass"
-                placeholder="Enter your app password"
+                id="password"
+                name="password"
+                placeholder="Enter your password"
+                autofocus
                 required
               />
               <button
                 type="button"
                 class="password-toggle"
-                onclick="togglePassword('email_pass')"
+                onclick="togglePassword('password')"
                 aria-label="Show password"
               >
                 <i data-lucide="eye" style="width: 16px; height: 16px"></i>
               </button>
             </div>
-            <span class="form-hint">
-              <a
-                href="https://myaccount.google.com/apppasswords"
-                target="_blank"
-                rel="noopener"
-                >Generate an App Password</a
-              >
-            </span>
           </div>
 
           <button type="submit" class="setup-btn">
             <i data-lucide="log-in" style="width: 16px; height: 16px"></i>
-            Connect & Test
+            Log In
           </button>
         </form>
       </div>

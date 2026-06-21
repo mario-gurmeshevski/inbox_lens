@@ -7,7 +7,6 @@ import time
 import email as email_lib
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
 
 from src.scripts import cache
 from src.scripts.constants import DB_PATH
@@ -65,8 +64,7 @@ def imap_session(db_path=None):
 
 
 def _chunk_list(lst, n):
-    k, m = divmod(len(lst), n)
-    return [lst[i * k + min(i, m) : (i + 1) * k + min(i + 1, m)] for i in range(n)]
+    return [lst[i::n] for i in range(n)]
 
 
 def _reconnect(conn, db_path=None):
@@ -163,13 +161,9 @@ def _extract_uid(envelope):
     return match.group(1).encode() if match else None
 
 
-def _get_email_ids(mail, since_date):
+def _get_email_ids(mail):
     mail.select("INBOX")
-    if since_date:
-        criteria = f'(SINCE {since_date})'
-    else:
-        criteria = "ALL"
-    status, data = mail.uid('search', None, criteria)
+    status, data = mail.uid('search', None, "ALL")
     if status != "OK":
         return []
     return data[0].split()
@@ -237,18 +231,6 @@ def _parse_fetched_email(msg_data_list):
     return results
 
 
-def parse_since(value):
-    now = datetime.now(timezone.utc)
-    if value == "today":
-        return now.strftime("%d-%b-%Y")
-    if value == "yesterday":
-        return (now - timedelta(days=1)).strftime("%d-%b-%Y")
-    try:
-        return datetime.strptime(value, "%Y-%m-%d").strftime("%d-%b-%Y")
-    except ValueError:
-        return None
-
-
 def _sanitize_imap_search(value):
     return value.replace('"', '').replace(')', '').replace('(', '').replace('\\', '')
 
@@ -267,11 +249,6 @@ def find_trash_folder(mail):
         for folder in folders:
             decoded = folder.decode()
             if '\\Trash' in decoded:
-                name = _parse_list_folder_name(decoded)
-                if name:
-                    return name
-            lower = decoded.lower()
-            if any(n in lower for n in ['trash', 'bin', 'papelera', 'eliminados', 'deleted messages']):
                 name = _parse_list_folder_name(decoded)
                 if name:
                     return name
@@ -305,7 +282,7 @@ def move_to_trash(mail, message_id):
     return True
 
 
-def fetch_headers_and_cache(since_date=None, db_path=None):
+def fetch_headers_and_cache(db_path=None):
     if db_path is None:
         db_path = DB_PATH
 
@@ -316,7 +293,7 @@ def fetch_headers_and_cache(since_date=None, db_path=None):
 
     try:
         with imap_session(db_path) as mail:
-            email_ids = _get_email_ids(mail, since_date)
+            email_ids = _get_email_ids(mail)
             if not email_ids:
                 return {"new_count": 0, "existing_count": 0, "emails": [], "imap_id_pairs": []}
 
@@ -393,33 +370,6 @@ def fetch_bodies_for_ids(imap_id_pairs, db_path=None, max_workers=MAX_WORKERS):
     if updated < len(updates):
         logger.warning("Body DB update: %d/%d rows updated", updated, len(updates))
     return results
-
-
-def fetch_single_body(message_id, db_path=None):
-    if db_path is None:
-        db_path = DB_PATH
-
-    if not cache.has_email_credentials(db_path):
-        return {"error": "Email account not configured. Please log in via the web dashboard."}
-
-    try:
-        with imap_session(db_path) as mail:
-            eid = _resolve_uid(mail, message_id)
-            if not eid:
-                return {"error": "Email not found on server"}
-
-            status, msg_data = mail.uid('fetch', eid, "(BODY.PEEK[])")
-            if status != "OK":
-                return {"error": "Failed to fetch email body"}
-
-            parsed = _parse_fetched_email(msg_data)
-            if parsed:
-                body = parsed[0].get("body", "")
-                cache.update_email_body(message_id, body, db_path)
-                return {"body": body, "message_id": message_id}
-            return {"error": "Failed to parse email"}
-    except Exception as e:
-        return {"error": str(e)}
 
 
 def fetch_bodies_by_message_ids(message_ids, db_path=None):

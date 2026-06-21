@@ -25,6 +25,8 @@ services:
   tailscale-status:
     image: tailscale/tailscale:latest
     container_name: inbox-lens-ts-status
+    environment:
+      - TS_SERVE_HTTPS=${TS_SERVE_HTTPS:-true}
     volumes:
       - ts-socket:/var/run/tailscale
       - ts-tmp:/tmp
@@ -37,7 +39,7 @@ services:
           chmod 644 /shared/status.json 2>/dev/null || true;
 
           if grep -q 'NeedsLogin' /shared/status.json 2>/dev/null; then
-            rm -f /shared/website_shown 2>/dev/null || true;
+            rm -f /shared/website_shown /shared/serve_done 2>/dev/null || true;
             if [ ! -s /shared/login_url.txt ]; then
               if [ ! -f /shared/login_pid ] || ! kill -0 $$(cat /shared/login_pid 2>/dev/null) 2>/dev/null; then
                 tailscale login > /shared/login_raw.txt 2>&1 &
@@ -56,12 +58,21 @@ services:
             fi;
           else
             rm -f /shared/login_url.txt /shared/login_raw.txt /shared/login_pid 2>/dev/null || true;
+
+            if [ "$${TS_SERVE_HTTPS:-true}" = "true" ] && [ ! -f /shared/serve_done ]; then
+              if tailscale serve --bg --https=443 http://localhost:8000 >/shared/serve_raw.txt 2>&1; then
+                touch /shared/serve_done;
+              fi;
+            fi;
+
             if [ ! -f /shared/website_shown ]; then
 
               DNS_NAME=$$(grep -o '"DNSName": *"[^"]*"' /shared/status.json | head -1 | cut -d'"' -f4 | sed 's/\.$$//');
               if [ -n "$$DNS_NAME" ]; then
                 echo "================================================";
-                echo "  WEBSITE: http://$${DNS_NAME}:8000";
+                if [ -f /shared/serve_done ]; then
+                  echo "  WEBSITE: https://$${DNS_NAME}";
+                fi;
                 echo "================================================";
                 touch /shared/website_shown;
               fi;

@@ -43,6 +43,18 @@
         >
           <i data-lucide="settings" style="width: 16px; height: 16px"></i>
         </a>
+        {% if request.session.get("authed") %}
+        <form method="post" action="/logout" style="display: inline; margin-left: 0.5rem">
+          <button
+            type="submit"
+            class="nav-link-btn"
+            aria-label="Log out"
+            title="Log out"
+          >
+            <i data-lucide="log-out" style="width: 16px; height: 16px"></i>
+          </button>
+        </form>
+        {% endif %}
       </div>
     </nav>
     <div class="container" hx-ext="sse" sse-connect="/api/events">
@@ -63,6 +75,14 @@
       document.body.addEventListener("htmx:afterSwap", function () {
         lucide.createIcons();
       });
+
+      function togglePassword(id){
+        const i=document.getElementById(id);
+        const show=i.type==='password';
+        i.type=show?'text':'password';
+        i.parentElement.querySelector('.password-toggle i').setAttribute('data-lucide',show?'eye-off':'eye');
+        lucide.createIcons();
+      }
 
       (function () {
         var sseRetries = 0;

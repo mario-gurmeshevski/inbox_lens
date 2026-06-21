@@ -10,5 +10,6 @@ src/data/emails.db
 src/data/emails.db-shm
 src/data/emails.db-wal
 src/data/.secret.key
+src/data/.session.key
 tailscale-state/
 .coverage

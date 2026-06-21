@@ -1,10 +1,27 @@
 import hashlib
 import json
 import sqlite3
-import time
 import pytest
 
 from src.scripts import cache
+
+
+def _save_fetched(email, db):
+    cache.save_headers_batch([email], db)
+    cache.update_bodies_batch([(email["message_id"], email.get("body", ""))], db)
+    h = cache._hash_message_id(email["message_id"])
+    keyword_matches = email.get("keyword_matches")
+    keyword_json = json.dumps(keyword_matches, ensure_ascii=False) if keyword_matches else None
+    with cache._connect(db) as conn:
+        conn.execute(
+            "UPDATE emails SET category = ?, keyword_matches = ? WHERE message_id_hash = ?",
+            (email.get("_category"), keyword_json, h),
+        )
+
+
+def _save_fetched_batch(emails, db):
+    for e in emails:
+        _save_fetched(e, db)
 
 
 class TestHashMessageId:
@@ -87,47 +104,9 @@ class TestInitDb:
         assert count == 0
 
 
-class TestSaveEmail:
-    def test_inserts_new_email_returns_true(self, tmp_db, sample_email):
-        result = cache.save_email(sample_email, tmp_db)
-        assert result is True
-
-    def test_rejects_empty_message_id_returns_false(self, tmp_db):
-        result = cache.save_email({"message_id": ""}, tmp_db)
-        assert result is False
-
-    def test_duplicate_insert_returns_false(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
-        result = cache.save_email(sample_email, tmp_db)
-        assert result is False
-
-    def test_stores_all_fields_correctly(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
-        with cache._connect(tmp_db) as conn:
-            row = conn.execute("SELECT * FROM emails WHERE message_id_hash = ?",
-                               (cache._hash_message_id(sample_email["message_id"]),)).fetchone()
-        assert row["message_id"] == sample_email["message_id"]
-        assert row["sender"] == sample_email["from"]
-        assert row["subject"] == sample_email["subject"]
-        assert row["body"] == sample_email["body"]
-        assert row["category"] == "8"
-        assert row["thread_id"] == "abc123def456"
-
-    def test_updates_keyword_matches_on_existing(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
-        sample_email["keyword_matches"] = {"10": ["important"]}
-        sample_email["_category"] = "10"
-        cache.save_email(sample_email, tmp_db)
-        with cache._connect(tmp_db) as conn:
-            row = conn.execute("SELECT * FROM emails WHERE message_id_hash = ?",
-                               (cache._hash_message_id(sample_email["message_id"]),)).fetchone()
-        assert json.loads(row["keyword_matches"]) == {"10": ["important"]}
-        assert row["category"] == "10"
-
-
 class TestBatchExistingHashes:
     def test_returns_set_of_existing_hashes(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
+        _save_fetched(sample_email, tmp_db)
         h = cache._hash_message_id(sample_email["message_id"])
         with cache._connect(tmp_db) as conn:
             result = cache._batch_existing_hashes(conn, [h, "nonexistent"])
@@ -141,67 +120,14 @@ class TestBatchExistingHashes:
         assert isinstance(result, set)
 
 
-class TestSaveEmailsBatch:
-    def test_inserts_multiple_new_emails(self, tmp_db, sample_emails_batch):
-        count = cache.save_emails_batch(sample_emails_batch, tmp_db)
-        assert count == 5
-
-    def test_returns_count_of_new_inserts(self, tmp_db, sample_emails_batch):
-        count = cache.save_emails_batch(sample_emails_batch, tmp_db)
-        assert count == 5
-        count2 = cache.save_emails_batch(sample_emails_batch, tmp_db)
-        assert count2 == 0
-
-    def test_skips_existing_hashes(self, tmp_db, sample_emails_batch):
-        cache.save_emails_batch(sample_emails_batch, tmp_db)
-        count = cache.save_emails_batch(sample_emails_batch, tmp_db)
-        assert count == 0
-
-    def test_updates_keyword_matches_for_existing(self, tmp_db, sample_emails_batch):
-        cache.save_emails_batch(sample_emails_batch, tmp_db)
-        for e in sample_emails_batch:
-            e["keyword_matches"] = {"10": ["important"]}
-            e["_category"] = "10"
-        cache.save_emails_batch(sample_emails_batch, tmp_db)
-        h = cache._hash_message_id(sample_emails_batch[0]["message_id"])
-        with cache._connect(tmp_db) as conn:
-            row = conn.execute("SELECT * FROM emails WHERE message_id_hash = ?", (h,)).fetchone()
-        assert row["category"] == "10"
-
-    def test_empty_list_returns_zero(self, tmp_db):
-        assert cache.save_emails_batch([], tmp_db) == 0
-
-    def test_emails_without_message_id_are_skipped(self, tmp_db):
-        count = cache.save_emails_batch([{"from": "a@b.com"}], tmp_db)
-        assert count == 0
-
-
 class TestReadEmails:
     def test_returns_all_emails_ordered_by_date_desc(self, tmp_db, sample_emails_batch):
-        cache.save_emails_batch(sample_emails_batch, tmp_db)
+        _save_fetched_batch(sample_emails_batch, tmp_db)
         emails = cache.read_emails(tmp_db)
         assert len(emails) == 5
 
-    def test_respects_max_emails_limit(self, tmp_db, sample_emails_batch):
-        cache.save_emails_batch(sample_emails_batch, tmp_db)
-        emails = cache.read_emails(tmp_db, max_emails=2)
-        assert len(emails) == 2
-
-    def test_filters_by_since_date(self, tmp_db, sample_email):
-        sample_email["date"] = "Mon, 01 Jan 2024 10:00:00 +0000"
-        cache.save_email(sample_email, tmp_db)
-        emails = cache.read_emails(tmp_db, since_date="01-Jan-2024")
-        assert len(emails) >= 1
-        emails_future = cache.read_emails(tmp_db, since_date="01-Jan-2030")
-        assert len(emails_future) == 0
-
-    def test_invalid_since_date_ignored(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
-        emails = cache.read_emails(tmp_db, since_date="invalid-date")
-        assert len(emails) == 1
-
     def test_returns_dicts_with_correct_keys(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
+        _save_fetched(sample_email, tmp_db)
         emails = cache.read_emails(tmp_db)
         assert len(emails) == 1
         e = emails[0]
@@ -215,7 +141,7 @@ class TestReadEmails:
 
 class TestDeleteEmail:
     def test_deletes_existing_email_returns_true(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
+        _save_fetched(sample_email, tmp_db)
         result = cache.delete_email(sample_email["message_id"], tmp_db)
         assert result is True
 
@@ -302,7 +228,7 @@ class TestScanAndUpdate:
 
 class TestGetEmailByHash:
     def test_returns_email_dict_for_existing(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
+        _save_fetched(sample_email, tmp_db)
         h = cache._hash_message_id(sample_email["message_id"])
         result = cache.get_email_by_hash(tmp_db, h)
         assert result is not None
@@ -314,81 +240,25 @@ class TestGetEmailByHash:
         assert cache.get_email_by_hash(tmp_db, "nonexistent") is None
 
 
-class TestListOrderedEmails:
-    def _seed_checked(self, tmp_db):
-        emails = [
-            {"message_id": f"<o{i}@example.com>", "from": f"s{i}@e.com", "subject": f"Sub {i}",
-             "date": f"Mon, 0{i+1} Jan 2024 10:00:00 +0000", "body": "body"}
-            for i in range(4)
-        ]
-        categories = ["10", "7", "7", "3"]
-        for e, cat in zip(emails, categories):
-            e["_category"] = cat
-            e["keyword_matches"] = {cat: ["word"]}
-        cache.save_emails_batch(emails, tmp_db)
-        h_list = [cache._hash_message_id(e["message_id"]) for e in emails]
-        with cache._connect(tmp_db) as conn:
-            conn.executemany(
-                "UPDATE emails SET status = 'checked', keyword_matches = ?, category = ? WHERE message_id_hash = ?",
-                [(json.dumps(e.get("keyword_matches")), e.get("_category"), h) for e, h in zip(emails, h_list)],
-            )
-
-    def test_returns_checked_emails_sorted(self, tmp_db):
-        self._seed_checked(tmp_db)
-        results = cache.list_ordered_emails(tmp_db)
-        assert len(results) == 4
-        cats = [r["_category"] for r in results]
-        assert cats == sorted(cats, key=lambda x: int(x) if x.isdigit() else 0, reverse=True)
-
-    def test_filters_by_priority_level(self, tmp_db):
-        self._seed_checked(tmp_db)
-        results = cache.list_ordered_emails(tmp_db, priority_level="7")
-        assert all(r["_category"] == "7" for r in results)
-
-    def test_returns_empty_when_no_checked_emails(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
-        assert cache.list_ordered_emails(tmp_db) == []
-
-
-class TestGetOrderedLevels:
-    def test_returns_distinct_categories_sorted_desc(self, tmp_db):
-        emails = [
-            {"message_id": f"<l{i}@e.com>", "subject": "s", "date": "Mon, 01 Jan 2024 00:00:00 +0000", "body": "b", "_category": cat}
-            for i, cat in enumerate(["3", "10", "7"])
-        ]
-        cache.save_emails_batch(emails, tmp_db)
-        hashes = [cache._hash_message_id(e["message_id"]) for e in emails]
-        with cache._connect(tmp_db) as conn:
-            conn.executemany(
-                "UPDATE emails SET status = 'checked' WHERE message_id_hash = ?",
-                [(h,) for h in hashes],
-            )
-        levels = cache.get_ordered_levels(tmp_db)
-        assert levels == ["10", "7", "3"]
-
-    def test_returns_empty_list_when_no_checked(self, tmp_db):
-        assert cache.get_ordered_levels(tmp_db) == []
-
-
 class TestGetPriorityCounts:
     def test_returns_category_counts(self, tmp_db):
         for i in range(3):
             e = {"message_id": f"<pc{i}@e.com>", "subject": "s", "date": "Mon, 01 Jan 2024 00:00:00 +0000", "body": "b", "_category": "7"}
-            cache.save_email(e, tmp_db)
+            _save_fetched(e, tmp_db)
         with cache._connect(tmp_db) as conn:
             conn.execute("UPDATE emails SET status = 'checked', category = '7'")
         counts = cache.get_priority_counts(tmp_db)
         assert counts.get("7") == 3
 
     def test_excludes_unchecked(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
+        _save_fetched(sample_email, tmp_db)
         counts = cache.get_priority_counts(tmp_db)
         assert counts == {}
 
 
 class TestGetCounts:
     def test_returns_status_breakdown(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
+        _save_fetched(sample_email, tmp_db)
         counts = cache.get_counts(tmp_db)
         assert counts["fetched"] == 1
         assert counts["checked"] == 0
@@ -398,21 +268,6 @@ class TestGetCounts:
         assert counts["headers_only"] == 0
         assert counts["fetched"] == 0
         assert counts["checked"] == 0
-
-
-class TestCountUnscanned:
-    def test_counts_non_checked_emails(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
-        assert cache.count_unscanned(tmp_db) == 1
-
-    def test_filters_by_since_date(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
-        assert cache.count_unscanned(tmp_db, since_date="01-Jan-2024") >= 1
-        assert cache.count_unscanned(tmp_db, since_date="01-Jan-2030") == 0
-
-    def test_invalid_date_returns_all_unscanned(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
-        assert cache.count_unscanned(tmp_db, since_date="bad-date") == 1
 
 
 class TestSaveHeadersBatch:
@@ -452,7 +307,7 @@ class TestUpdateBodiesBatch:
         assert row["status"] == "fetched"
 
     def test_updates_any_body(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
+        _save_fetched(sample_email, tmp_db)
         updated = cache.update_bodies_batch(
             [(sample_email["message_id"], "new body")], tmp_db
         )
@@ -469,25 +324,9 @@ class TestGetHeadersOnlyMessageIds:
         assert len(result) == 3
 
     def test_excludes_other_statuses(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
+        _save_fetched(sample_email, tmp_db)
         result = cache.get_headers_only_message_ids(tmp_db)
         assert len(result) == 0
-
-
-class TestUpdateEmailBody:
-    def test_updates_body_and_status(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
-        result = cache.update_email_body(sample_email["message_id"], "new body", tmp_db)
-        assert result is True
-        h = cache._hash_message_id(sample_email["message_id"])
-        with cache._connect(tmp_db) as conn:
-            row = conn.execute("SELECT body, status FROM emails WHERE message_id_hash = ?", (h,)).fetchone()
-        assert row["body"] == "new body"
-        assert row["status"] == "fetched"
-
-    def test_nonexistent_returns_false(self, tmp_db):
-        result = cache.update_email_body("<nope@example.com>", "body", tmp_db)
-        assert result is False
 
 
 class TestGetRecentEmails:
@@ -497,12 +336,12 @@ class TestGetRecentEmails:
              "date": f"Mon, 0{i+1} Jan 2024 10:00:00 +0000", "body": "b"}
             for i in range(10)
         ]
-        cache.save_emails_batch(emails, tmp_db)
+        _save_fetched_batch(emails, tmp_db)
         result = cache.get_recent_emails(tmp_db, limit=3)
         assert len(result) == 3
 
     def test_includes_keyword_matches(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
+        _save_fetched(sample_email, tmp_db)
         h = cache._hash_message_id(sample_email["message_id"])
         with cache._connect(tmp_db) as conn:
             conn.execute("UPDATE emails SET status = 'checked' WHERE message_id_hash = ?", (h,))
@@ -518,7 +357,7 @@ class TestSearchEmails:
              "body": "body", "_category": "7" if i % 2 == 0 else "3"}
             for i in range(10)
         ]
-        cache.save_emails_batch(emails, tmp_db)
+        _save_fetched_batch(emails, tmp_db)
         hashes = [cache._hash_message_id(e["message_id"]) for e in emails]
         with cache._connect(tmp_db) as conn:
             conn.executemany(
@@ -568,7 +407,7 @@ class TestSearchEmails:
 
 class TestRowToDict:
     def test_converts_row_to_dict_with_all_fields(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
+        _save_fetched(sample_email, tmp_db)
         with cache._connect(tmp_db) as conn:
             row = conn.execute("SELECT * FROM emails LIMIT 1").fetchone()
         d = cache._row_to_dict(row)
@@ -604,37 +443,11 @@ class TestRowToDict:
         assert d["keyword_matches"] == {}
 
 
-class TestGetConnConnectionAging:
-    def test_reuses_cached_connection_within_max_age(self, tmp_db):
+class TestGetConnReuse:
+    def test_reuses_cached_connection(self, tmp_db):
         conn1 = cache._get_conn(tmp_db)
         conn2 = cache._get_conn(tmp_db)
         assert conn1 is conn2
-
-    def test_closes_and_replaces_stale_connection(self, tmp_db, monkeypatch):
-        from src.scripts.cache import db as db_mod
-
-        monkeypatch.setattr(db_mod, "_CONNECTION_MAX_AGE", 0)
-        conn1 = cache._get_conn(tmp_db)
-        conn2 = cache._get_conn(tmp_db)
-        assert conn1 is not conn2
-
-    def test_close_failure_swallowed(self, tmp_db, monkeypatch):
-        from unittest.mock import MagicMock
-
-        from src.scripts.cache import db as db_mod
-
-        monkeypatch.setattr(db_mod, "_CONNECTION_MAX_AGE", 0)
-        fake = MagicMock()
-        fake.close.side_effect = RuntimeError("close failed")
-        fake.commit = MagicMock()
-        fake.rollback = MagicMock()
-        key = f"_conn_{tmp_db}"
-        ts_key = f"_conn_ts_{tmp_db}"
-        setattr(db_mod._local, key, fake)
-        setattr(db_mod._local, ts_key, time.monotonic() - 1000)
-        conn = cache._get_conn(tmp_db)
-        fake.close.assert_called_once()
-        assert conn is not fake
 
 
 class TestConnectRollbackFailure:
@@ -649,9 +462,7 @@ class TestConnectRollbackFailure:
         fake.rollback.side_effect = RuntimeError("rollback broken")
         fake.close = MagicMock()
         key = f"_conn_{tmp_db}"
-        ts_key = f"_conn_ts_{tmp_db}"
         setattr(db_mod._local, key, fake)
-        setattr(db_mod._local, ts_key, time.monotonic())
 
         with pytest.raises(RuntimeError, match="app error"):
             with cache._connect(tmp_db):
@@ -663,80 +474,11 @@ class TestConnectRollbackFailure:
 
 
 class TestMigrateThreadId:
-    def test_idempotent_on_already_migrated_db(self, tmp_db):
-        cache._migrate_thread_id(tmp_db)
-        cache._migrate_thread_id(tmp_db)
+    def test_init_db_creates_thread_columns(self, tmp_db):
         with cache._connect(tmp_db) as conn:
             cols = [r["name"] for r in conn.execute("PRAGMA table_info(emails)").fetchall()]
         assert "thread_id" in cols
         assert "in_reply_to" in cols
-
-
-class TestSaveEmailsBatchUpdateBuckets:
-    def test_updates_keyword_only(self, tmp_db):
-        e = {"message_id": "<kwonly@e.com>", "subject": "s", "date": "d", "body": "b"}
-        cache.save_emails_batch([e], tmp_db)
-        e2 = {**e, "keyword_matches": {"7": ["word"]}}
-        count = cache.save_emails_batch([e2], tmp_db)
-        assert count == 0
-        h = cache._hash_message_id(e["message_id"])
-        with cache._connect(tmp_db) as conn:
-            row = conn.execute(
-                "SELECT keyword_matches, category FROM emails WHERE message_id_hash = ?", (h,)
-            ).fetchone()
-        assert json.loads(row["keyword_matches"]) == {"7": ["word"]}
-        assert row["category"] is None
-
-    def test_updates_category_only(self, tmp_db):
-        e = {"message_id": "<catonly@e.com>", "subject": "s", "date": "d", "body": "b"}
-        cache.save_emails_batch([e], tmp_db)
-        e2 = {**e, "_category": "5"}
-        cache.save_emails_batch([e2], tmp_db)
-        h = cache._hash_message_id(e["message_id"])
-        with cache._connect(tmp_db) as conn:
-            row = conn.execute(
-                "SELECT keyword_matches, category FROM emails WHERE message_id_hash = ?", (h,)
-            ).fetchone()
-        assert row["keyword_matches"] is None
-        assert row["category"] == "5"
-
-    def test_updates_both_keyword_and_category(self, tmp_db):
-        e = {"message_id": "<both@e.com>", "subject": "s", "date": "d", "body": "b"}
-        cache.save_emails_batch([e], tmp_db)
-        e2 = {**e, "keyword_matches": {"10": ["important"]}, "_category": "10"}
-        cache.save_emails_batch([e2], tmp_db)
-        h = cache._hash_message_id(e["message_id"])
-        with cache._connect(tmp_db) as conn:
-            row = conn.execute(
-                "SELECT keyword_matches, category FROM emails WHERE message_id_hash = ?", (h,)
-            ).fetchone()
-        assert json.loads(row["keyword_matches"]) == {"10": ["important"]}
-        assert row["category"] == "10"
-
-    def test_no_updates_when_no_keyword_or_category(self, tmp_db):
-        e = {"message_id": "<none@e.com>", "subject": "s", "date": "d", "body": "b"}
-        cache.save_emails_batch([e], tmp_db)
-        cache.save_emails_batch([e], tmp_db)
-        h = cache._hash_message_id(e["message_id"])
-        with cache._connect(tmp_db) as conn:
-            row = conn.execute("SELECT * FROM emails WHERE message_id_hash = ?", (h,)).fetchone()
-        assert row["subject"] == "s"
-
-
-class TestReadEmailsIncludeBodyFalse:
-    def test_read_emails_excludes_body_when_requested(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
-        results = cache.read_emails(tmp_db, include_body=False)
-        assert len(results) == 1
-        assert results[0]["body"] == ""
-
-    def test_row_to_dict_include_body_false_returns_empty_body(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
-        with cache._connect(tmp_db) as conn:
-            row = conn.execute("SELECT * FROM emails LIMIT 1").fetchone()
-        d = cache._row_to_dict(row, include_body=False)
-        assert d["body"] == ""
-        assert d["subject"] == sample_email["subject"]
 
 
 class TestCheckHashesExist:
@@ -744,7 +486,7 @@ class TestCheckHashesExist:
         assert cache.check_hashes_exist(tmp_db, []) == set()
 
     def test_returns_only_existing_hashes(self, tmp_db, sample_email):
-        cache.save_email(sample_email, tmp_db)
+        _save_fetched(sample_email, tmp_db)
         h = cache._hash_message_id(sample_email["message_id"])
         result = cache.check_hashes_exist(tmp_db, [h, "missing"])
         assert result == {h}
@@ -755,7 +497,7 @@ class TestGetTotalCount:
         assert cache.get_total_count(tmp_db) == 0
 
     def test_counts_all_rows(self, tmp_db, sample_emails_batch):
-        cache.save_emails_batch(sample_emails_batch, tmp_db)
+        _save_fetched_batch(sample_emails_batch, tmp_db)
         assert cache.get_total_count(tmp_db) == 5
 
 
@@ -767,7 +509,7 @@ class TestSearchEmailsStatusBranches:
                  "subject": f"Subject {i}", "date": "Mon, 01 Jan 2024 00:00:00 +0000",
                  "body": "b"}
             emails.append(e)
-        cache.save_emails_batch(emails, tmp_db)
+        _save_fetched_batch(emails, tmp_db)
         hashes = [cache._hash_message_id(e["message_id"]) for e in emails]
         statuses = ["checked", "headers_only"]
         with cache._connect(tmp_db) as conn:
@@ -792,7 +534,7 @@ class TestSearchEmailsStatusBranches:
              "body": "b", "_category": "7" if i < 2 else "3"}
             for i in range(4)
         ]
-        cache.save_emails_batch(emails, tmp_db)
+        _save_fetched_batch(emails, tmp_db)
         hashes = [cache._hash_message_id(e["message_id"]) for e in emails]
         with cache._connect(tmp_db) as conn:
             conn.executemany("UPDATE emails SET status = 'checked' WHERE message_id_hash = ?",
@@ -832,7 +574,7 @@ class TestScanAndUpdateExtraBranches:
 
     def test_unclassified_fallback_when_no_matches(self, tmp_db, compiled_patterns):
         email = {"message_id": "<nomatch@e.com>", "subject": "nothing here", "body": "xyz"}
-        cache.save_email(email, tmp_db)
+        _save_fetched(email, tmp_db)
         result = cache.scan_and_update([email], tmp_db, compiled_patterns)
         assert result["scanned"] == 1
         assert not result["emails_with_matches"]

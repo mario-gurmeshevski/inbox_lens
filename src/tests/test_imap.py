@@ -81,19 +81,13 @@ class TestParseFetchedEmail:
 class TestGetEmailIds:
     def test_returns_split_ids_on_success(self, fake_mail):
         fake_mail.uid.return_value = ("OK", [b"1 2 3 4"])
-        result = email_reader._get_email_ids(fake_mail, None)
+        result = email_reader._get_email_ids(fake_mail)
         assert result == [b"1", b"2", b"3", b"4"]
         fake_mail.select.assert_called_with("INBOX")
 
-    def test_uses_since_criteria_when_provided(self, fake_mail):
-        fake_mail.uid.return_value = ("OK", [b"1"])
-        email_reader._get_email_ids(fake_mail, "01-Jan-2024")
-        args = fake_mail.uid.call_args
-        assert "SINCE" in str(args)
-
     def test_returns_empty_on_non_ok_status(self, fake_mail):
         fake_mail.uid.return_value = ("BAD", [b""])
-        assert email_reader._get_email_ids(fake_mail, None) == []
+        assert email_reader._get_email_ids(fake_mail) == []
 
 
 class TestFetchHeadersBulk:
@@ -156,14 +150,6 @@ class TestFindTrashFolder:
     def test_detects_trash_flag(self, fake_mail):
         fake_mail.list.return_value = ("OK", [b'(\\Trash \\HasNoChildren) "/" "Trash"'])
         assert email_reader.find_trash_folder(fake_mail) == "Trash"
-
-    def test_detects_locale_name_fallback(self, fake_mail):
-        fake_mail.list.return_value = ("OK", [b'(\\HasNoChildren) "/" "Papelera"'])
-        assert email_reader.find_trash_folder(fake_mail) == "Papelera"
-
-    def test_detects_english_bin_name(self, fake_mail):
-        fake_mail.list.return_value = ("OK", [b'(\\HasNoChildren) "/" "Deleted Messages"'])
-        assert email_reader.find_trash_folder(fake_mail) == "Deleted Messages"
 
     def test_prefers_first_match(self, fake_mail):
         fake_mail.list.return_value = (
@@ -412,94 +398,6 @@ class TestTestConnection:
         assert result["inbox_count"] == 0
 
 
-class TestFetchSingleBody:
-    def test_no_credentials_returns_error(self, monkeypatch):
-        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: False)
-        result = email_reader.fetch_single_body("<m@e.com>", db_path="/tmp/nonexistent.db")
-        assert "error" in result
-
-    def test_uid_not_found_returns_error(self, monkeypatch, tmp_db):
-        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
-        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: None)
-        fake = MagicMock()
-
-        class FakeSession:
-            def __enter__(self):
-                return fake
-
-            def __exit__(self, *a):
-                return None
-
-        monkeypatch.setattr(imap_mod, "imap_session", lambda db_path=None: FakeSession())
-        result = email_reader.fetch_single_body("<m@e.com>", db_path=tmp_db)
-        assert result["error"] == "Email not found on server"
-
-    def test_fetch_failure_returns_error(self, monkeypatch, tmp_db):
-        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
-        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: b"1")
-        fake = MagicMock()
-        fake.uid.return_value = ("BAD", None)
-
-        class FakeSession:
-            def __enter__(self):
-                return fake
-
-            def __exit__(self, *a):
-                return None
-
-        monkeypatch.setattr(imap_mod, "imap_session", lambda db_path=None: FakeSession())
-        result = email_reader.fetch_single_body("<m@e.com>", db_path=tmp_db)
-        assert "error" in result
-
-    def test_success_returns_body_and_updates_db(self, monkeypatch, tmp_db):
-        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
-        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: b"1")
-        cache.save_email({"message_id": "<m@e.com>", "subject": "s", "date": "d", "body": ""}, tmp_db)
-        fake = MagicMock()
-        raw = b"From: a@b.com\r\nSubject: s\r\nMessage-ID: <m@e.com>\r\n\r\nfetched body\r\n"
-        fake.uid.return_value = ("OK", [(b"env", raw)])
-
-        class FakeSession:
-            def __enter__(self):
-                return fake
-
-            def __exit__(self, *a):
-                return None
-
-        monkeypatch.setattr(imap_mod, "imap_session", lambda db_path=None: FakeSession())
-        result = email_reader.fetch_single_body("<m@e.com>", db_path=tmp_db)
-        assert result["body"] == "fetched body"
-        emails = cache.read_emails(tmp_db)
-        assert any(e["body"] == "fetched body" for e in emails)
-
-    def test_empty_parse_returns_error(self, monkeypatch, tmp_db):
-        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
-        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: b"1")
-        fake = MagicMock()
-        fake.uid.return_value = ("OK", [b"non-tuple"])
-
-        class FakeSession:
-            def __enter__(self):
-                return fake
-
-            def __exit__(self, *a):
-                return None
-
-        monkeypatch.setattr(imap_mod, "imap_session", lambda db_path=None: FakeSession())
-        result = email_reader.fetch_single_body("<m@e.com>", db_path=tmp_db)
-        assert "error" in result
-
-    def test_generic_exception_returns_error(self, monkeypatch, tmp_db):
-        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
-
-        def boom(*a, **kw):
-            raise OSError("network down")
-
-        monkeypatch.setattr(imap_mod, "imap_session", boom)
-        result = email_reader.fetch_single_body("<m@e.com>", db_path=tmp_db)
-        assert "network down" in result["error"]
-
-
 class TestFetchHeadersAndCache:
     def test_no_credentials_returns_error(self, monkeypatch):
         monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: False)
@@ -573,7 +471,7 @@ class TestDeleteEmail:
 
     def test_success_returns_deleted_true(self, monkeypatch, tmp_db):
         monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
-        cache.save_email({"message_id": "<m@e.com>", "subject": "s", "date": "d", "body": "b"}, tmp_db)
+        cache.save_headers_batch([{"message_id": "<m@e.com>", "subject": "s", "date": "d"}], tmp_db)
         fake = MagicMock()
 
         class FakeSession:

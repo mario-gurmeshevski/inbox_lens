@@ -1,4 +1,4 @@
-.PHONY: install uninstall dev-install web test test-cov lint clean reset up up-ts down tailscale-up tailscale-status tailscale-ip tailscale-logout purge
+.PHONY: install uninstall dev-install web test test-cov lint clean reset up up-ts down stop start tailscale-up tailscale-status tailscale-ip tailscale-logout purge
 
 PYTHON ?= python3
 VENV := .venv
@@ -40,7 +40,7 @@ clean:
 	find . -type f -name "*.pyc" -delete
 
 reset: clean
-	rm -f src/data/emails.db src/data/emails.db-shm src/data/emails.db-wal src/data/.secret.key
+	rm -f src/data/emails.db src/data/emails.db-shm src/data/emails.db-wal src/data/.secret.key src/data/.session.key
 
 up:
 	@HOST_IP=$$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{for(i=1;i<=NF;i++)if($$i=="src")print $$(i+1)}' | head -1); \
@@ -53,6 +53,21 @@ up-ts:
 
 down:
 	docker compose down --rmi local --volumes --remove-orphans
+
+stop:
+	docker compose $(COMPOSE_FILES_TS) stop
+
+start:
+	docker compose $(COMPOSE_FILES_TS) start
+	@DNS=$$(docker compose $(COMPOSE_FILES_TS) exec -T tailscale sh -c "tailscale status --json 2>/dev/null | grep -o '\"DNSName\": *\"[^\"]*\"' | head -1 | cut -d'\"' -f4 | sed 's/\.$$//'"); \
+	if [ -n "$$DNS" ] && docker compose $(COMPOSE_FILES_TS) exec -T web test -f /shared/serve_done 2>/dev/null; then \
+	  echo "Website: https://$$DNS"; \
+	elif [ -n "$$DNS" ]; then \
+	  IP=$$(docker compose $(COMPOSE_FILES_TS) exec -T tailscale tailscale ip -4 2>/dev/null); \
+	  echo "Website: http://$${IP}:8000"; \
+	else \
+	  echo "Tailscale not logged in. Run: make tailscale-up"; \
+	fi
 
 tailscale-up:
 	@echo "Tailscale logs (look for login URL on first run):"

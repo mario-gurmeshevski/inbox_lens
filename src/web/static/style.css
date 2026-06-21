@@ -142,6 +142,23 @@ nav a.nav-spacer {
   margin-left: auto;
 }
 
+.nav-link-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-sm);
+  transition: var(--transition);
+  display: flex;
+  align-items: center;
+}
+
+.nav-link-btn:hover {
+  color: var(--text);
+  background: var(--bg-surface);
+}
+
 .container {
   max-width: 1200px;
   margin: 0 auto;
@@ -1006,6 +1023,40 @@ td a:hover {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.password-field {
+  position: relative;
+}
+
+.password-field input {
+  padding-right: 2.5rem;
+}
+
+.password-toggle {
+  position: absolute;
+  right: 0.4rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: 0;
+  padding: 0.25rem;
+  cursor: pointer;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm, 4px);
+  line-height: 0;
+}
+
+.password-toggle:hover {
+  color: var(--text);
+}
+
+.password-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .form-hint {

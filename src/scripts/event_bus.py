@@ -27,16 +27,9 @@ class EventBus:
         msg = {"type": event_type, "data": data or {}}
         with self._lock:
             subscribers = list(self._subscribers)
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
         for q in subscribers:
             try:
-                if loop and loop.is_running():
-                    loop.call_soon_threadsafe(q.put_nowait, msg)
-                else:
-                    q.put_nowait(msg)
+                q.put_nowait(msg)
             except Exception:
                 logger.warning("Failed to publish event to subscriber", exc_info=True)
 

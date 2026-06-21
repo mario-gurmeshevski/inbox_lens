@@ -10,6 +10,19 @@ def _raise(exc):
     raise exc
 
 
+def _save_fetched_batch(emails, db):
+    for email in emails:
+        cache.save_headers_batch([email], db)
+        cache.update_bodies_batch([(email["message_id"], email.get("body", ""))], db)
+        if email.get("_category") is not None:
+            h = cache._hash_message_id(email["message_id"])
+            with cache._connect(db) as conn:
+                conn.execute(
+                    "UPDATE emails SET category = ? WHERE message_id_hash = ?",
+                    (email["_category"], h),
+                )
+
+
 class TestFormatDate:
     def test_valid_date(self):
         result = web._format_date("Mon, 01 Jan 2024 10:00:00 +0000")
@@ -50,7 +63,7 @@ class TestWebEndpoints:
             }
             for i in range(n)
         ]
-        cache.save_emails_batch(emails, self.db_path)
+        _save_fetched_batch(emails, self.db_path)
         return emails
 
     def test_dashboard_returns_200(self):
@@ -277,6 +290,29 @@ class TestWebHelpers:
         monkeypatch.setattr(web, "TS_LOGIN_URL_FILE", "/nonexistent/login.txt")
         assert web._get_tailscale_login_url() == ""
 
+    def test_get_tailscale_serve_url_empty_when_not_tailscale(self, monkeypatch):
+        monkeypatch.setattr(web, "_is_tailscale_mode", lambda: False)
+        assert web._get_tailscale_serve_url() == ""
+
+    def test_get_tailscale_serve_url_empty_without_dns(self, monkeypatch):
+        monkeypatch.setattr(web, "_is_tailscale_mode", lambda: True)
+        monkeypatch.setattr(web, "_get_tailscale_dns_name", lambda: "")
+        assert web._get_tailscale_serve_url() == ""
+
+    def test_get_tailscale_serve_url_empty_when_serve_not_done(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(web, "_is_tailscale_mode", lambda: True)
+        monkeypatch.setattr(web, "_get_tailscale_dns_name", lambda: "host.tailnet.ts.net")
+        monkeypatch.setattr(web, "TS_SERVE_DONE_FILE", str(tmp_path / "missing"))
+        assert web._get_tailscale_serve_url() == ""
+
+    def test_get_tailscale_serve_url_returns_https_when_done(self, monkeypatch, tmp_path):
+        done = tmp_path / "serve_done"
+        done.write_text("")
+        monkeypatch.setattr(web, "_is_tailscale_mode", lambda: True)
+        monkeypatch.setattr(web, "_get_tailscale_dns_name", lambda: "inbox-lens.tailnet.ts.net")
+        monkeypatch.setattr(web, "TS_SERVE_DONE_FILE", str(done))
+        assert web._get_tailscale_serve_url() == "https://inbox-lens.tailnet.ts.net"
+
 
 class TestSetupGuardMiddleware:
     @pytest.fixture(autouse=True)
@@ -295,10 +331,21 @@ class TestSetupGuardMiddleware:
             resp = client.get("/setup", follow_redirects=False)
         assert resp.status_code == 200
 
-    def test_redirects_to_setup_when_no_credentials(self):
+    def test_redirects_to_setup_dashboard_when_no_credentials_and_no_password(self):
         with patch.object(web, "DB_PATH", self.db_path), \
              patch("src.scripts.cache.has_email_credentials", return_value=False):
             client = self._make_client()
+            resp = client.get("/emails", follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/setup-dashboard"
+
+    def test_redirects_to_setup_when_no_credentials_but_password_set(self):
+        from src.scripts import auth
+        auth.set_password("somepassword", self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path), \
+             patch("src.scripts.cache.has_email_credentials", return_value=False):
+            client = self._make_client()
+            client.post("/login", data={"password": "somepassword", "next": "/"}, follow_redirects=False)
             resp = client.get("/emails", follow_redirects=False)
         assert resp.status_code == 303
         assert resp.headers["location"] == "/setup"
@@ -342,7 +389,7 @@ class TestWebExtraEndpoints:
             }
             for i in range(n)
         ]
-        cache.save_emails_batch(emails, self.db_path)
+        _save_fetched_batch(emails, self.db_path)
         return emails
 
     def test_health_endpoint(self):
@@ -405,7 +452,7 @@ class TestWebExtraEndpoints:
             client = self._make_client()
             resp = client.get("/account", follow_redirects=False)
         assert resp.status_code == 303
-        assert resp.headers["location"] == "/setup"
+        assert resp.headers["location"] == "/setup-dashboard"
 
     def test_account_disconnect_clears_credentials(self):
         with patch.object(web, "DB_PATH", self.db_path):
@@ -483,7 +530,7 @@ class TestDashboardPriorityDistribution:
             {"message_id": "<l1@e.com>", "subject": "s", "date": "Mon, 01 Jan 2024 00:00:00 +0000", "body": "b", "_category": "2"},
             {"message_id": "<u1@e.com>", "subject": "s", "date": "Mon, 01 Jan 2024 00:00:00 +0000", "body": "b"},
         ]
-        cache.save_emails_batch(emails, self.db_path)
+        _save_fetched_batch(emails, self.db_path)
         hashes = [cache._hash_message_id(e["message_id"]) for e in emails]
         with cache._connect(self.db_path) as conn:
             conn.executemany(
@@ -579,3 +626,295 @@ class TestSseEvents:
 
         asyncio.run(drive())
         assert q not in event_bus.bus._subscribers
+
+
+class TestResolveBindHost:
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path):
+        self.db_path = str(tmp_path / "bindhost.db")
+        cache.init_db(self.db_path)
+
+    def test_loopback_requested_returned_as_is(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            assert web._resolve_bind_host("127.0.0.1") == "127.0.0.1"
+            assert web._resolve_bind_host("localhost") == "localhost"
+
+    def test_forces_loopback_when_no_password(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            assert web._resolve_bind_host("0.0.0.0") == "127.0.0.1"
+
+    def test_allows_external_when_password_set(self):
+        from src.scripts import auth
+
+        auth.set_password("somepassword", self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            assert web._resolve_bind_host("0.0.0.0") == "0.0.0.0"
+
+    def test_falls_back_to_requested_on_db_error(self):
+        with patch.object(web, "DB_PATH", self.db_path), \
+             patch("src.scripts.web.cache.init_db", side_effect=RuntimeError("boom")):
+            assert web._resolve_bind_host("0.0.0.0") == "0.0.0.0"
+
+
+class TestAuthMiddleware:
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path):
+        from src.scripts import auth
+
+        self.db_path = str(tmp_path / "auth_mw.db")
+        cache.init_db(self.db_path)
+        cache.save_email_credentials("test@test.com", "testpass", self.db_path)
+        auth.set_password("dashboardpw", self.db_path)
+        auth.login_rate_limiter = auth.LoginRateLimiter()
+
+    def _make_client(self):
+        from fastapi.testclient import TestClient
+        return TestClient(web.app)
+
+    def _login(self, client, password="dashboardpw"):
+        client.post("/login", data={"password": password, "next": "/"}, follow_redirects=False)
+
+    def test_unauthenticated_html_redirects_to_login(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/", headers={"accept": "text/html"}, follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"].startswith("/login?next=/")
+
+    def test_unauthenticated_api_returns_401(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/", headers={"accept": "application/json"}, follow_redirects=False)
+        assert resp.status_code == 401
+        assert resp.json()["detail"] == "Not authenticated."
+
+    def test_login_grants_access(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            self._login(client)
+            resp = client.get("/", follow_redirects=False)
+        assert resp.status_code == 200
+
+    def test_api_key_grants_access(self):
+        from src.scripts import auth
+
+        token = auth.generate_api_key()
+        auth.save_api_key(token, self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get(
+                "/",
+                headers={"accept": "text/html", "authorization": f"Bearer {token}"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 200
+
+    def test_bad_api_key_rejected(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get(
+                "/",
+                headers={"accept": "application/json", "authorization": "Bearer wrong"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 401
+
+    def test_logout_clears_session(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            self._login(client)
+            resp = client.post("/logout", follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/login"
+        with patch.object(web, "DB_PATH", self.db_path):
+            resp = client.get("/", headers={"accept": "text/html"}, follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"].startswith("/login?next=/")
+
+    def test_csrf_rejects_bad_origin(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            self._login(client)
+            resp = client.post(
+                "/settings/network-access",
+                data={"enabled": "false"},
+                headers={"origin": "http://evil.com"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 403
+
+    def test_csrf_allows_matching_origin(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            self._login(client)
+            resp = client.post(
+                "/settings/network-access",
+                data={"enabled": "false"},
+                headers={"origin": "http://testserver", "host": "testserver"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 200
+
+    def test_setup_dashboard_redirects_when_configured(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            self._login(client)
+            resp = client.get("/setup-dashboard", follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/"
+
+
+class TestAuthRoutes:
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path):
+        from src.scripts import auth
+
+        self.db_path = str(tmp_path / "auth_routes.db")
+        cache.init_db(self.db_path)
+        cache.save_email_credentials("test@test.com", "testpass", self.db_path)
+        auth.login_rate_limiter = auth.LoginRateLimiter()
+
+    def _make_client(self):
+        from fastapi.testclient import TestClient
+        return TestClient(web.app)
+
+    def test_setup_dashboard_get_when_not_configured(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/setup-dashboard", follow_redirects=False)
+        assert resp.status_code == 200
+        assert "Set Password" in resp.text
+
+    def test_setup_dashboard_creates_password_and_logs_in(self):
+        from src.scripts import auth
+
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post(
+                "/setup-dashboard",
+                data={"password": "newpass12", "confirm": "newpass12"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 303
+        assert auth.is_auth_configured(self.db_path) is True
+        with patch.object(web, "DB_PATH", self.db_path):
+            resp = client.get("/", headers={"accept": "text/html"}, follow_redirects=False)
+        assert resp.status_code != 303 or not resp.headers["location"].startswith("/login")
+
+    def test_setup_dashboard_password_mismatch(self):
+        from src.scripts import auth
+
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post(
+                "/setup-dashboard",
+                data={"password": "newpass12", "confirm": "different12"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 200
+        assert "do not match" in resp.text
+        assert auth.is_auth_configured(self.db_path) is False
+
+    def test_setup_dashboard_short_password(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post(
+                "/setup-dashboard",
+                data={"password": "short", "confirm": "short"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 200
+        assert "at least 8" in resp.text
+
+    def test_setup_dashboard_generates_api_key(self):
+        from src.scripts import auth
+
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post(
+                "/setup-dashboard",
+                data={"password": "newpass12", "confirm": "newpass12", "generate_api_key": "on"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 200
+        assert auth.get_api_key_created_at(self.db_path) is not None
+        assert "Continue to Dashboard" in resp.text
+
+    def test_login_wrong_password(self):
+        from src.scripts import auth
+
+        auth.set_password("dashboardpw", self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post("/login", data={"password": "wrong", "next": "/"}, follow_redirects=False)
+        assert resp.status_code == 200
+        assert "Incorrect" in resp.text
+
+    def test_login_correct_password(self):
+        from src.scripts import auth
+
+        auth.set_password("dashboardpw", self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post("/login", data={"password": "dashboardpw", "next": "/"}, follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/"
+        assert "inbox_lens_session" in resp.cookies
+
+    def test_login_open_redirect_prevented(self):
+        from src.scripts import auth
+
+        auth.set_password("dashboardpw", self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post(
+                "/login",
+                data={"password": "dashboardpw", "next": "//evil.com"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/"
+
+    def test_login_rate_limiting(self):
+        from src.scripts import auth
+
+        auth.set_password("dashboardpw", self.db_path)
+        auth.login_rate_limiter = auth.LoginRateLimiter(max_attempts=3, window_seconds=60)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            for _ in range(3):
+                client.post("/login", data={"password": "wrong", "next": "/"}, follow_redirects=False)
+            resp = client.post("/login", data={"password": "wrong", "next": "/"}, follow_redirects=False)
+        assert resp.status_code == 200
+        assert "Too many" in resp.text
+
+    def test_settings_password_change(self):
+        from src.scripts import auth
+
+        auth.set_password("oldpass12", self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            client.post("/login", data={"password": "oldpass12", "next": "/"}, follow_redirects=False)
+            resp = client.post(
+                "/settings/password",
+                data={"old_password": "oldpass12", "new_password": "brandnew1", "confirm_password": "brandnew1"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 200
+        assert auth.verify_password("brandnew1", self.db_path) is True
+
+    def test_settings_api_key_regenerate_and_revoke(self):
+        from src.scripts import auth
+
+        auth.set_password("dashboardpw", self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            client.post("/login", data={"password": "dashboardpw", "next": "/"}, follow_redirects=False)
+            resp = client.post("/settings/api-key/regenerate", follow_redirects=False)
+        assert resp.status_code == 200
+        assert auth.get_api_key_created_at(self.db_path) is not None
+        assert "Bearer" in resp.text
+        with patch.object(web, "DB_PATH", self.db_path):
+            resp = client.post("/settings/api-key/revoke", follow_redirects=False)
+        assert resp.status_code == 200
+        assert auth.get_api_key_created_at(self.db_path) is None

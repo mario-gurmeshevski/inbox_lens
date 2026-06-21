@@ -30,40 +30,22 @@
       ></span
     >
   </div>
-  {% elif ts_state == "running" %} {% if tailscale_dns_name %}
+  {% elif ts_state == "running" %} {% if tailscale_serve_url %}
   <div class="settings-url">
-    <code>http://{{ tailscale_dns_name }}:{{ port }}</code>
+    <code>{{ tailscale_serve_url }}</code>
     <button
       type="button"
       class="btn btn-sm"
-      onclick="navigator.clipboard.writeText('http://{{ tailscale_dns_name }}:{{ port }}')"
+      onclick="navigator.clipboard.writeText('{{ tailscale_serve_url }}')"
     >
       <i data-lucide="copy" style="width: 14px; height: 14px"></i>
       Copy
     </button>
   </div>
-  {% endif %}
-  <div class="settings-url">
-    <code>http://{{ tailscale_host }}:{{ port }}</code>
-    <button
-      type="button"
-      class="btn btn-sm"
-      onclick="navigator.clipboard.writeText('http://{{ tailscale_host }}:{{ port }}')"
-    >
-      <i data-lucide="copy" style="width: 14px; height: 14px"></i>
-      Copy
-    </button>
+  {% else %}
+  <div class="settings-hint">
+    <i data-lucide="loader" style="width: 14px; height: 14px" class="spin"></i>
+    <span>Enabling HTTPS access...</span>
   </div>
-  <div class="settings-url">
-    <code>http://{{ tailscale_ip }}:{{ port }}</code>
-    <button
-      type="button"
-      class="btn btn-sm"
-      onclick="navigator.clipboard.writeText('http://{{ tailscale_ip }}:{{ port }}')"
-    >
-      <i data-lucide="copy" style="width: 14px; height: 14px"></i>
-      Copy
-    </button>
-  </div>
-  {% endif %}
+  {% endif %} {% endif %}
 </div>

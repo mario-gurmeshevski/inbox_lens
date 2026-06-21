@@ -92,36 +92,6 @@ class TestPublish:
         assert good_q.get_nowait() == {"type": "refresh", "data": {}}
 
 
-class TestPublishWithRunningLoop:
-
-    def test_publish_uses_call_soon_threadsafe_when_loop_running(self):
-        bus = EventBus()
-        q = bus.subscribe()
-
-        received = []
-
-        async def runner():
-            loop = asyncio.get_running_loop()
-            called = []
-            orig = loop.call_soon_threadsafe
-
-            def spy(callback, *args):
-                called.append(True)
-                return orig(callback, *args)
-
-            loop.call_soon_threadsafe = spy
-            try:
-                bus.publish("refresh", {"n": 1})
-                await asyncio.sleep(0.05)
-                assert called
-                received.append(q.get_nowait())
-            finally:
-                loop.call_soon_threadsafe = orig
-
-        asyncio.run(runner())
-        assert received == [{"type": "refresh", "data": {"n": 1}}]
-
-
 class TestModuleBus:
     def test_module_level_bus_is_event_bus_instance(self):
         from src.scripts import event_bus

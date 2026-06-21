@@ -101,4 +101,161 @@
   </div>
   {% endif %}
 </div>
+
+<div class="detail-card" style="margin-top: 1.25rem">
+  <div class="settings-row">
+    <div class="settings-info">
+      <div class="settings-label">
+        <i data-lucide="shield" style="width: 16px; height: 16px"></i>
+        Authentication
+      </div>
+      <p class="settings-desc">
+        {% if auth_enabled %} A dashboard password is set. Visitors must log in
+        to access the dashboard. {% else %} No password set — the dashboard
+        binds to <code>localhost</code> only. Set a password to expose it
+        safely. {% endif %}
+      </p>
+    </div>
+  </div>
+
+  {% if password_msg %}
+  <div
+    class="status-box {% if password_ok %}status-done{% else %}status-error{% endif %}"
+    style="margin-top: 1rem"
+  >
+    <i
+      data-lucide="{% if password_ok %}check-circle{% else %}alert-circle{% endif %}"
+      style="width: 18px; height: 18px; flex-shrink: 0"
+    ></i>
+    <span>{{ password_msg }}</span>
+  </div>
+  {% endif %}
+
+  {% if auth_enabled %}
+  <div class="settings-network-info">
+    <div class="section-title">
+      <i data-lucide="key" style="width: 16px; height: 16px"></i>
+      Change Password
+    </div>
+    <form method="post" action="/settings/password" class="setup-form" style="max-width: 100%">
+      <div class="form-group">
+        <label for="old_password">Current Password</label>
+        <div class="password-field">
+          <input type="password" id="old_password" name="old_password" required />
+          <button
+            type="button"
+            class="password-toggle"
+            onclick="togglePassword('old_password')"
+            aria-label="Show password"
+          >
+            <i data-lucide="eye" style="width: 16px; height: 16px"></i>
+          </button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="new_password">New Password</label>
+        <div class="password-field">
+          <input
+            type="password"
+            id="new_password"
+            name="new_password"
+            minlength="8"
+            required
+          />
+          <button
+            type="button"
+            class="password-toggle"
+            onclick="togglePassword('new_password')"
+            aria-label="Show password"
+          >
+            <i data-lucide="eye" style="width: 16px; height: 16px"></i>
+          </button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="confirm_password">Confirm New Password</label>
+        <div class="password-field">
+          <input
+            type="password"
+            id="confirm_password"
+            name="confirm_password"
+            minlength="8"
+            required
+          />
+          <button
+            type="button"
+            class="password-toggle"
+            onclick="togglePassword('confirm_password')"
+            aria-label="Show password"
+          >
+            <i data-lucide="eye" style="width: 16px; height: 16px"></i>
+          </button>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary">
+        <i data-lucide="save" style="width: 16px; height: 16px"></i>
+        Update Password
+      </button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+
+<div class="detail-card">
+  <div class="settings-row">
+    <div class="settings-info">
+      <div class="settings-label">
+        <i data-lucide="terminal" style="width: 16px; height: 16px"></i>
+        API Key
+      </div>
+      <p class="settings-desc">
+        {% if api_key_created_at %} Programmatic access is enabled (created
+        {{ api_key_created_at }}). Pass it via the
+        <code>Authorization: Bearer &lt;key&gt;</code> header on
+        <code>/api/*</code>. {% else %} No API key configured. {% endif %}
+      </p>
+    </div>
+    {% if api_key_created_at %}
+    <form method="post" action="/settings/api-key/revoke" class="settings-toggle-form">
+      <button
+        type="submit"
+        class="btn btn-danger btn-sm"
+        onclick="return confirm('Revoke the API key? Programmatic access will stop immediately.');"
+      >
+        <i data-lucide="trash-2" style="width: 14px; height: 14px"></i>
+        Revoke
+      </button>
+    </form>
+    {% endif %}
+  </div>
+
+  {% if api_key_msg %}
+  <div class="status-box status-done" style="margin-top: 1rem">
+    <i data-lucide="info" style="width: 18px; height: 18px; flex-shrink: 0"></i>
+    <span>{{ api_key_msg }}</span>
+  </div>
+  {% endif %} {% if new_api_key %}
+  <div class="settings-url" style="margin-top: 0.75rem">
+    <code>{{ new_api_key }}</code>
+    <button
+      type="button"
+      class="btn btn-sm"
+      onclick="navigator.clipboard.writeText('{{ new_api_key }}')"
+    >
+      <i data-lucide="copy" style="width: 14px; height: 14px"></i>
+      Copy
+    </button>
+  </div>
+  {% endif %}
+
+  <div class="settings-network-info">
+    <form method="post" action="/settings/api-key/regenerate">
+      <button type="submit" class="btn btn-warning btn-sm">
+        <i data-lucide="refresh-cw" style="width: 14px; height: 14px"></i>
+        {% if api_key_created_at %}Regenerate API Key{% else %}Generate API
+        Key{% endif %}
+      </button>
+    </form>
+  </div>
+</div>
 {% endblock %}

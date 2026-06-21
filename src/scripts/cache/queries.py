@@ -29,40 +29,6 @@ def get_email_by_hash(db_path: str, message_id_hash: str) -> dict | None:
     return d
 
 
-def list_ordered_emails(db_path: str, priority_level: str | None = None) -> list[dict]:
-    from src.scripts.cache.db import _row_to_dict
-    with _connect(db_path) as conn:
-        if priority_level is not None:
-            rows = conn.execute(
-                f"SELECT {_LIST_COLUMNS} FROM emails WHERE status = 'checked' AND category = ? "
-                "ORDER BY CAST(category AS INTEGER) DESC, date_parsed DESC",
-                (str(priority_level),),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                f"SELECT {_LIST_COLUMNS} FROM emails WHERE status = 'checked' "
-                "ORDER BY CAST(category AS INTEGER) DESC, date_parsed DESC"
-            ).fetchall()
-
-    results = []
-    for row in rows:
-        d = _row_to_dict(row, include_body=False)
-        d["_file_hash"] = row["message_id_hash"]
-        d["_category"] = row["category"] or "unclassified"
-        results.append(d)
-
-    return results
-
-
-def get_ordered_levels(db_path: str) -> list[str]:
-    with _connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT category FROM emails WHERE status = 'checked' AND category IS NOT NULL"
-        ).fetchall()
-    levels = {row["category"] for row in rows}
-    return sorted(levels, key=lambda x: int(x) if x.isdigit() else 0, reverse=True)
-
-
 def get_priority_counts(db_path: str) -> dict[str, int]:
     with _connect(db_path) as conn:
         rows = conn.execute(
@@ -81,22 +47,6 @@ def get_counts(db_path: str) -> dict:
         if row["status"] in counts:
             counts[row["status"]] = row["cnt"]
     return counts
-
-
-def count_unscanned(db_path: str, since_date: str | None = None) -> int:
-    from datetime import datetime, timezone
-    with _connect(db_path) as conn:
-        if since_date:
-            try:
-                since_dt = datetime.strptime(since_date, "%d-%b-%Y").replace(tzinfo=timezone.utc)
-                since_iso = since_dt.isoformat()
-                return conn.execute(
-                    "SELECT COUNT(*) FROM emails WHERE status != 'checked' AND date_parsed >= ?",
-                    (since_iso,),
-                ).fetchone()[0]
-            except ValueError:
-                pass
-        return conn.execute("SELECT COUNT(*) FROM emails WHERE status != 'checked'").fetchone()[0]
 
 
 def get_recent_emails(db_path: str, limit: int = 10) -> list[dict]:

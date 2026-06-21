@@ -1,6 +1,5 @@
 import hashlib
 import json
-from datetime import datetime, timezone
 from email import message_from_string
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -224,25 +223,6 @@ class TestExtractUid:
     def test_returns_none_for_no_match(self):
         result = email_reader._extract_uid("no uid here")
         assert result is None
-
-
-class TestParseSince:
-    def test_today_returns_formatted_date(self):
-        result = email_reader.parse_since("today")
-        now = datetime.now(timezone.utc)
-        expected = now.strftime("%d-%b-%Y")
-        assert result == expected
-
-    def test_yesterday_returns_formatted_date(self):
-        result = email_reader.parse_since("yesterday")
-        assert result is not None
-
-    def test_valid_date_string(self):
-        result = email_reader.parse_since("2024-01-15")
-        assert result == "15-Jan-2024"
-
-    def test_invalid_returns_none(self):
-        assert email_reader.parse_since("not-a-date") is None
 
 
 class TestSanitizeImapSearch:

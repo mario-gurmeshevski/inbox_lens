@@ -19,9 +19,8 @@ IDLE_RENEW_INTERVAL = 25 * 60
 
 
 class IdleMonitor:
-    def __init__(self, db_path=None, on_new_emails=None, on_refresh=None):
+    def __init__(self, db_path=None, on_refresh=None):
         self.db_path = db_path or DB_PATH
-        self.on_new_emails = on_new_emails
         self.on_refresh = on_refresh
         self._stop = threading.Event()
         self._thread = None
@@ -197,13 +196,12 @@ class IdleMonitor:
             run_initial_fetch(
                 db_path=self.db_path,
                 on_refresh=self.on_refresh,
-                on_new_emails=self.on_new_emails,
             )
         except Exception:
             logger.exception("Auto-fetch failed")
 
 
-def run_initial_fetch(db_path=None, on_refresh=None, on_new_emails=None):
+def run_initial_fetch(db_path=None, on_refresh=None):
     db_path = db_path or DB_PATH
     try:
         result = email_reader.fetch_headers_and_cache(db_path=db_path)
@@ -231,7 +229,7 @@ def run_initial_fetch(db_path=None, on_refresh=None, on_new_emails=None):
             except Exception:
                 logger.warning("on_refresh callback error in initial fetch (after bodies)", exc_info=True)
 
-        emails = cache.read_emails(db_path, None)
+        emails = cache.read_emails(db_path)
         if emails:
             email_reader.scan_emails(emails, KEYWORDS_FILE, db_path)
 
@@ -246,14 +244,6 @@ def run_initial_fetch(db_path=None, on_refresh=None, on_new_emails=None):
                 on_refresh()
             except Exception:
                 logger.warning("on_refresh callback error in initial fetch (after scan)", exc_info=True)
-
-        if on_new_emails:
-            new_count = result.get("new_count", 0)
-            if new_count > 0 and emails:
-                try:
-                    on_new_emails(result, emails)
-                except Exception:
-                    logger.warning("on_new_emails callback error", exc_info=True)
 
         return result
     except Exception:

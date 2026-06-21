@@ -1,10 +1,11 @@
 import logging
+import secrets
 from pathlib import Path
 
 from cryptography.fernet import Fernet
 
 from src.scripts.cache.db import _connect
-from src.scripts.constants import DB_PATH, SECRET_KEY_PATH
+from src.scripts.constants import DB_PATH, SECRET_KEY_PATH, SESSION_SECRET_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -84,3 +85,14 @@ def _encrypt(plaintext: str) -> str:
 
 def _decrypt(ciphertext: str) -> str:
     return _get_fernet().decrypt(ciphertext.encode()).decode()
+
+
+def _ensure_session_key() -> str:
+    path = Path(SESSION_SECRET_PATH)
+    path.resolve().parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        return path.read_text().strip()
+    key = secrets.token_urlsafe(64)
+    path.write_text(key)
+    logger.info("Generated new session secret at %s", SESSION_SECRET_PATH)
+    return key

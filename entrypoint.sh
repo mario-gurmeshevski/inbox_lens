@@ -10,16 +10,27 @@ fi
 
 DB="$DATA_DIR/emails.db"
 HOST="0.0.0.0"
+if [ -d /shared ]; then
+    exec uvicorn src.scripts.web:app --host "$HOST" --port 8000
+fi
+
 if [ -f "$DB" ]; then
     VAL=$(python3 -c "
 import sqlite3
 try:
-    r = sqlite3.connect('$DB').execute(\"SELECT value FROM settings WHERE key='network_access'\").fetchone()
-    print(r[0] if r else 'true')
+    c = sqlite3.connect('$DB')
+    pwd = c.execute(\"SELECT value FROM settings WHERE key='dashboard_password_hash'\").fetchone()
+    net = c.execute(\"SELECT value FROM settings WHERE key='network_access'\").fetchone()
+    if not pwd or not pwd[0]:
+        print('localhost')
+    elif net and net[0] == 'false':
+        print('localhost')
+    else:
+        print('open')
 except Exception:
-    print('true')
-" 2>/dev/null || echo "true")
-    if [ "$VAL" = "false" ]; then
+    print('localhost')
+" 2>/dev/null || echo "localhost")
+    if [ "$VAL" = "localhost" ]; then
         HOST="127.0.0.1"
     fi
 fi

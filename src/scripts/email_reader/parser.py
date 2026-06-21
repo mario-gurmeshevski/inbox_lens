@@ -44,9 +44,7 @@ _RE_NBSP = re.compile(r'&nbsp;')
 _RE_SPACES = re.compile(r'[ \t]+')
 _RE_BLANK_LINE = re.compile(r'\n[ \t]+\n')
 _RE_NEWLINES = re.compile(r'\n{3,}')
-_RE_DASHES = re.compile(r'-{3,}')
-_RE_UNDERSCORES = re.compile(r'_{3,}')
-_RE_STARS = re.compile(r'\*{3,}')
+_RE_RUNS = re.compile(r'([-*_])\1{2,}')
 _RE_PREFIX = re.compile(r'^(Re|Fwd|Fw|Reply)\s*:\s*', re.IGNORECASE)
 
 
@@ -60,9 +58,7 @@ def _clean_body(text: str) -> str:
     text = _RE_SPACES.sub(' ', text)
     text = _RE_BLANK_LINE.sub('\n\n', text)
     text = _RE_NEWLINES.sub('\n\n', text)
-    text = _RE_DASHES.sub('---', text)
-    text = _RE_UNDERSCORES.sub('___', text)
-    text = _RE_STARS.sub('***', text)
+    text = _RE_RUNS.sub(r'\1\1\1', text)
     cleaned = []
     for is_blank, grp in groupby(text.split('\n'), key=lambda line: not line.strip()):
         if is_blank:

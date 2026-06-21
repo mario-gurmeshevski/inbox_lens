@@ -9,10 +9,12 @@ def tmp_db(tmp_path):
     cache.init_db(db_path)
     return db_path
 
+
 @pytest.fixture(autouse=True)
 def cleanup_db_connections():
     yield
     from src.scripts.cache.db import close_all_connections
+
     close_all_connections()
 
 
@@ -51,7 +53,6 @@ def fake_mail():
     return mail
 
 
-
 @pytest.fixture
 def sample_email():
     return {
@@ -74,7 +75,7 @@ def sample_emails_batch():
             "message_id": f"<batch{i}@example.com>",
             "from": f"sender{i}@example.com",
             "subject": f"Batch subject {i}",
-            "date": f"Mon, 0{i+1} Jan 2024 10:00:00 +0000",
+            "date": f"Mon, 0{i + 1} Jan 2024 10:00:00 +0000",
             "body": f"Body {i}",
             "keyword_matches": {"7": ["problem"]} if i % 2 == 0 else None,
             "_category": "7" if i % 2 == 0 else None,
@@ -103,7 +104,7 @@ def sample_headers_batch():
             "message_id": f"<header{i}@example.com>",
             "from": f"sender{i}@example.com",
             "subject": f"Header subject {i}",
-            "date": f"Mon, 0{i+1} Jan 2024 10:00:00 +0000",
+            "date": f"Mon, 0{i + 1} Jan 2024 10:00:00 +0000",
             "thread_id": f"thread_{i}",
             "in_reply_to": None,
         }

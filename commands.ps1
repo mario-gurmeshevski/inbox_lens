@@ -19,6 +19,7 @@ if (-not $Task) {
     Write-Host "  test             Run tests"
     Write-Host "  test-cov         Run tests with coverage"
     Write-Host "  lint             Run linter"
+    Write-Host "  format         Format Python code (ruff format)"
     Write-Host "  clean            Remove caches and compiled files"
     Write-Host "  reset            Clean + remove DB and secret key"
     Write-Host "  up               Start Docker Compose (auto-detect host IP)"
@@ -91,6 +92,7 @@ switch ($Task) {
     "test" { & $VENV_PYTHON -m pytest src/tests/ -v }
     "test-cov" { & $VENV_PYTHON -m pytest src/tests/ --cov=src/scripts --cov-report=term-missing }
     "lint" { & $VENV_PYTHON -m ruff check src/ }
+    "format" { & $VENV_PYTHON -m ruff format src/ }
 
     "clean" {
         Invoke-Clean

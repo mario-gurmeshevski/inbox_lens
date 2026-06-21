@@ -11,6 +11,7 @@ Fetch emails from a Gmail inbox via IMAP, cache them in a local SQLite database,
 - [Authentication](#authentication)
 - [Remote Access](#remote-access)
 - [Configuration](#configuration)
+- [Updates](#updates)
 - [Workflow](#workflow)
 - [Performance](#performance)
 - [Database](#database)
@@ -103,7 +104,7 @@ Fetch emails from a Gmail inbox via IMAP, cache them in a local SQLite database,
 
 ## Testing
 
-The project includes 423 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
+The project includes 466 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
 
 ```bash
 
@@ -117,18 +118,19 @@ make test-cov   # For Mac/Linux
 
 ### Test structure
 
-| File                   | Tests | Coverage                                            |
-| ---------------------- | ----- | --------------------------------------------------- |
-| `test_cache.py`        | 73    | DB ops, hashing, scanning, search, threads          |
-| `test_email_reader.py` | 61    | Parsing, body cleaning, thread extraction, keywords |
-| `test_web.py`          | 85    | FastAPI endpoints, SSE, Tailscale, auth middleware  |
-| `test_auth.py`         | 42    | Password hashing, API keys, sessions, rate limiting |
-| `test_imap.py`         | 58    | IMAP helpers, connection, fetch, delete             |
-| `test_idle_monitor.py` | 57    | IDLE loop, ConnectionLost, run_initial_fetch        |
-| `test_crypto.py`       | 22    | Encryption, settings, credentials                   |
-| `test_event_bus.py`    | 12    | Pub/sub dispatch                                    |
-| `test_utils.py`        | 8     | Keyword parsing, priority buckets                   |
-| `test_constants.py`    | 5     | Env var defaults and overrides                      |
+| File                   | Tests | Coverage                                                    |
+| ---------------------- | ----- | ----------------------------------------------------------- |
+| `test_cache.py`        | 73    | DB ops, hashing, scanning, search, threads                  |
+| `test_email_reader.py` | 61    | Parsing, body cleaning, thread extraction, keywords         |
+| `test_web.py`          | 94    | FastAPI endpoints, SSE, Tailscale, auth middleware, updates |
+| `test_auth.py`         | 42    | Password hashing, API keys, sessions, rate limiting         |
+| `test_imap.py`         | 58    | IMAP helpers, connection, fetch, delete                     |
+| `test_idle_monitor.py` | 57    | IDLE loop, ConnectionLost, run_initial_fetch                |
+| `test_crypto.py`       | 22    | Encryption, settings, credentials                           |
+| `test_event_bus.py`    | 12    | Pub/sub dispatch                                            |
+| `test_utils.py`        | 8     | Keyword parsing, priority buckets                           |
+| `test_constants.py`    | 5     | Env var defaults and overrides                              |
+| `test_updater.py`      | 34    | Version checking, semver compare, Docker self-update        |
 
 ### Linting
 
@@ -241,6 +243,8 @@ Opens at `http://localhost:8000`. Set `WEB_HOST` and `WEB_PORT` in `.env` to cus
 - **Email detail** — full body view, colored keyword tags, delete button
 
 - **Settings page** — toggle network access (bind to `0.0.0.0` vs `127.0.0.1`), view local IPs and access URLs
+
+- **In-app updates** — Docker deployments get a dismissible update banner, a Settings panel with version check, and optional one-click self-update (pulls the new image and recreates the container). See [Updates](#updates).
 
 - **Account page** — view connected email address, masked password, disconnect button
 
@@ -431,6 +435,37 @@ When a keyword is found, the email is tagged with the matching priority level an
 
 - **Light gray** — unclassified
 
+## Updates
+
+### Docker
+
+The app checks for updates every 6 hours. An **update banner** appears when one is available, and **Settings → Updates** lets you manually check or trigger an update.
+
+**One-click update** — if the Docker socket is mounted, **Update Now** pulls the latest image and recreates the container in place. The app is briefly unavailable during the swap.
+
+> **Security note:** mounting `/var/run/docker.sock` grants host-level Docker control. Remove it from `docker-compose.yaml` to disable one-click updates.
+
+**Socket permissions:**
+
+```yaml
+user: root # Option A
+group_add: ["<host docker gid>"] # Option B
+```
+
+**No socket?** The button shows the manual command instead:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+### Non-Docker
+
+In-app updates are disabled. Submit a Pull Request to update.
+
+### Releases
+
+Bump `version` in `pyproject.toml`, commit, and push to `main` — the rest is automated (image build, version tag, GitHub Release). Run `docker compose pull` once after the first release to switch to the published image.
+
 ## Workflow
 
 Use the **web dashboard** (`make web`) to fetch, scan, and manage emails.
@@ -476,6 +511,7 @@ All emails are stored in a SQLite database (`emails.db` by default) with the fol
 | `make start`            | Restart containers previously stopped with `make stop`       |
 | `make test`             | Run the test suite                                           |
 | `make lint`             | Run the linter                                               |
+| `make prettier`         | Format Python code (`ruff format`)                           |
 | `make clean`            | Remove build artifacts                                       |
 | `make reset`            | Delete DB, WAL files, and secret key                         |
 | `make tailscale-up`     | Show Tailscale logs (login URL on first run)                 |
@@ -499,6 +535,7 @@ All emails are stored in a SQLite database (`emails.db` by default) with the fol
 | `./commands.ps1 start`            | Restart containers previously stopped with `stop`            |
 | `./commands.ps1 test`             | Run the test suite                                           |
 | `./commands.ps1 lint`             | Run the linter                                               |
+| `./commands.ps1 prettier`         | Format Python code (`ruff format`)                           |
 | `./commands.ps1 clean`            | Remove build artifacts                                       |
 | `./commands.ps1 reset`            | Delete DB, WAL files, and secret key                         |
 | `./commands.ps1 tailscale-up`     | Show Tailscale logs (login URL on first run)                 |

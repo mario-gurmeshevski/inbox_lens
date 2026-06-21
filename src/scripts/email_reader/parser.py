@@ -15,7 +15,7 @@ _html2text_local = threading.local()
 
 
 def _get_html2text():
-    converter = getattr(_html2text_local, 'converter', None)
+    converter = getattr(_html2text_local, "converter", None)
     if converter is None:
         converter = _html2text_mod.HTML2Text()
         converter.ignore_links = False
@@ -38,34 +38,34 @@ def decode_str(value):
     return "".join(parts)
 
 
-_RE_IMG = re.compile(r'<img[^>]*>', re.IGNORECASE)
-_RE_STYLE = re.compile(r'<style[^>]*>.*?</style>', re.IGNORECASE | re.DOTALL)
-_RE_NBSP = re.compile(r'&nbsp;')
-_RE_SPACES = re.compile(r'[ \t]+')
-_RE_BLANK_LINE = re.compile(r'\n[ \t]+\n')
-_RE_NEWLINES = re.compile(r'\n{3,}')
-_RE_RUNS = re.compile(r'([-*_])\1{2,}')
-_RE_PREFIX = re.compile(r'^(Re|Fwd|Fw|Reply)\s*:\s*', re.IGNORECASE)
+_RE_IMG = re.compile(r"<img[^>]*>", re.IGNORECASE)
+_RE_STYLE = re.compile(r"<style[^>]*>.*?</style>", re.IGNORECASE | re.DOTALL)
+_RE_NBSP = re.compile(r"&nbsp;")
+_RE_SPACES = re.compile(r"[ \t]+")
+_RE_BLANK_LINE = re.compile(r"\n[ \t]+\n")
+_RE_NEWLINES = re.compile(r"\n{3,}")
+_RE_RUNS = re.compile(r"([-*_])\1{2,}")
+_RE_PREFIX = re.compile(r"^(Re|Fwd|Fw|Reply)\s*:\s*", re.IGNORECASE)
 
 
 def _clean_body(text: str) -> str:
     if not text:
         return ""
-    text = _RE_IMG.sub('', text)
-    text = _RE_STYLE.sub('', text)
-    text = _RE_NBSP.sub(' ', text)
+    text = _RE_IMG.sub("", text)
+    text = _RE_STYLE.sub("", text)
+    text = _RE_NBSP.sub(" ", text)
     text = html.unescape(text)
-    text = _RE_SPACES.sub(' ', text)
-    text = _RE_BLANK_LINE.sub('\n\n', text)
-    text = _RE_NEWLINES.sub('\n\n', text)
-    text = _RE_RUNS.sub(r'\1\1\1', text)
+    text = _RE_SPACES.sub(" ", text)
+    text = _RE_BLANK_LINE.sub("\n\n", text)
+    text = _RE_NEWLINES.sub("\n\n", text)
+    text = _RE_RUNS.sub(r"\1\1\1", text)
     cleaned = []
-    for is_blank, grp in groupby(text.split('\n'), key=lambda line: not line.strip()):
+    for is_blank, grp in groupby(text.split("\n"), key=lambda line: not line.strip()):
         if is_blank:
-            cleaned.append('')
+            cleaned.append("")
         else:
             cleaned.extend(line.strip() for line in grp)
-    return '\n'.join(cleaned).strip()
+    return "\n".join(cleaned).strip()
 
 
 def _html_to_text(html_body: str) -> str:
@@ -103,7 +103,7 @@ def _hash_thread_id(value: str) -> str:
 
 
 def _normalize_subject(subject: str) -> str:
-    stripped = _RE_PREFIX.sub('', subject).strip()
+    stripped = _RE_PREFIX.sub("", subject).strip()
     return stripped.lower() if stripped else ""
 
 

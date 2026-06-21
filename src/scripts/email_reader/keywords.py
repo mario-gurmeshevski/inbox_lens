@@ -34,7 +34,7 @@ def build_compiled_patterns(categories):
     compiled = {}
     for category, words in categories.items():
         escaped = [re.escape(w.lower()) for w in words]
-        pattern = re.compile(r'\b(' + '|'.join(escaped) + r')\b')
+        pattern = re.compile(r"\b(" + "|".join(escaped) + r")\b")
         compiled[category] = (words, pattern)
     return compiled
 

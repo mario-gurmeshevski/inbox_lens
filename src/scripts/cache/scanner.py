@@ -25,7 +25,7 @@ def scan_and_update(emails: list[dict], db_path: str, compiled_patterns: dict) -
         if hashes_map:
             hash_list = list(hashes_map.keys())
             for i in range(0, len(hash_list), 500):
-                chunk = hash_list[i:i + 500]
+                chunk = hash_list[i : i + 500]
                 placeholders = ",".join("?" * len(chunk))
                 rows = conn.execute(
                     f"SELECT message_id_hash, keyword_matches, status FROM emails WHERE message_id_hash IN ({placeholders})",
@@ -42,7 +42,7 @@ def scan_and_update(emails: list[dict], db_path: str, compiled_patterns: dict) -
         if message_id_hash and message_id_hash in existing_status:
             status, kw_json = existing_status[message_id_hash]
             if status == "checked" and kw_json:
-                if kw_json in ('{}', '[]', '""'):
+                if kw_json in ("{}", "[]", '""'):
                     e["keyword_matches"] = {}
                     already_checked += 1
                     continue
@@ -68,6 +68,7 @@ def scan_and_update(emails: list[dict], db_path: str, compiled_patterns: dict) -
                 matches = _scan_keywords(scan_text, compiled_patterns)
                 scan_results[id(e)] = (e, message_id_hash, matches)
         else:
+
             def _scan_one(item):
                 e, message_id_hash = item
                 scan_text = f"{e.get('subject', '')} {e.get('body', '')}"
@@ -99,7 +100,13 @@ def scan_and_update(emails: list[dict], db_path: str, compiled_patterns: dict) -
                 update_rows,
             )
 
-    return {"emails_with_matches": emails_with_matches, "total": len(emails), "scanned": scanned, "already_checked": already_checked, "skipped_no_body": skipped_no_body}
+    return {
+        "emails_with_matches": emails_with_matches,
+        "total": len(emails),
+        "scanned": scanned,
+        "already_checked": already_checked,
+        "skipped_no_body": skipped_no_body,
+    }
 
 
 def _scan_keywords(text: str, compiled_patterns: dict) -> dict:

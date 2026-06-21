@@ -29,7 +29,7 @@ class TestCleanBody:
         assert "<img" not in email_reader._clean_body('text <img src="x"> more')
 
     def test_removes_style_tags(self):
-        text = 'before <style>body{color:red}</style> after'
+        text = "before <style>body{color:red}</style> after"
         result = email_reader._clean_body(text)
         assert "<style>" not in result
         assert "before" in result
@@ -181,9 +181,7 @@ class TestNormalizeSubject:
 
 class TestExtractThreadInfo:
     def test_uses_references_first(self):
-        msg = message_from_string(
-            "References: <ref1@mail.com> <ref2@mail.com>\nIn-Reply-To: <reply@mail.com>\n\n"
-        )
+        msg = message_from_string("References: <ref1@mail.com> <ref2@mail.com>\nIn-Reply-To: <reply@mail.com>\n\n")
         result = email_reader.extract_thread_info(msg)
         assert result["thread_id"] == email_reader._hash_thread_id("<ref1@mail.com>")
         assert result["in_reply_to"] == "<reply@mail.com>"
@@ -216,7 +214,7 @@ class TestExtractThreadInfo:
 
 class TestExtractUid:
     def test_extracts_uid_from_envelope(self):
-        envelope = b'UID 12345 (BODY[])'
+        envelope = b"UID 12345 (BODY[])"
         result = email_reader._extract_uid(envelope.decode())
         assert result == b"12345"
 
@@ -365,6 +363,3 @@ class TestGetTextBodyErrorPaths:
         msg.attach(MIMEText("real body", "plain"))
         result = email_reader.get_text_body(msg)
         assert "real body" in result
-
-
-

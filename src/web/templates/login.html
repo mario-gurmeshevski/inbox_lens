@@ -60,11 +60,13 @@
     </div>
     <script>
       lucide.createIcons();
-      function togglePassword(id){
-        const i=document.getElementById(id);
-        const show=i.type==='password';
-        i.type=show?'text':'password';
-        i.parentElement.querySelector('.password-toggle i').setAttribute('data-lucide',show?'eye-off':'eye');
+      function togglePassword(id) {
+        const i = document.getElementById(id);
+        const show = i.type === "password";
+        i.type = show ? "text" : "password";
+        i.parentElement
+          .querySelector(".password-toggle i")
+          .setAttribute("data-lucide", show ? "eye-off" : "eye");
         lucide.createIcons();
       }
     </script>

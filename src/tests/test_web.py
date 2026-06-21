@@ -49,6 +49,7 @@ class TestWebEndpoints:
 
     def _make_client(self):
         from fastapi.testclient import TestClient
+
         return TestClient(web.app)
 
     def _seed_emails(self, n=5):
@@ -57,7 +58,7 @@ class TestWebEndpoints:
                 "message_id": f"<web{i}@e.com>",
                 "from": f"sender{i}@e.com",
                 "subject": f"Web subject {i}",
-                "date": f"Mon, 0{i+1} Jan 2024 10:00:00 +0000",
+                "date": f"Mon, 0{i + 1} Jan 2024 10:00:00 +0000",
                 "body": f"Body {i}",
                 "_category": "7" if i % 2 == 0 else "3",
             }
@@ -124,8 +125,7 @@ class TestWebEndpoints:
     def test_delete_email_redirects(self):
         self._seed_emails(1)
         email_hash = cache._hash_message_id("<web0@e.com>")
-        with patch.object(web, "DB_PATH", self.db_path), \
-             patch("src.scripts.email_reader.delete_email") as mock_del:
+        with patch.object(web, "DB_PATH", self.db_path), patch("src.scripts.email_reader.delete_email") as mock_del:
             mock_del.return_value = {"deleted": True, "message_id": "<web0@e.com>"}
             client = self._make_client()
             resp = client.post(f"/emails/{email_hash}/delete", follow_redirects=False)
@@ -138,8 +138,10 @@ class TestWebEndpoints:
         assert resp.status_code == 303
 
     def test_setup_page_no_credentials(self):
-        with patch.object(web, "DB_PATH", self.db_path), \
-             patch("src.scripts.cache.has_email_credentials", return_value=False):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch("src.scripts.cache.has_email_credentials", return_value=False),
+        ):
             client = self._make_client()
             resp = client.get("/setup")
         assert resp.status_code == 200
@@ -322,18 +324,23 @@ class TestSetupGuardMiddleware:
 
     def _make_client(self):
         from fastapi.testclient import TestClient
+
         return TestClient(web.app)
 
     def test_exempt_setup_path_no_credentials(self):
-        with patch.object(web, "DB_PATH", self.db_path), \
-             patch("src.scripts.cache.has_email_credentials", return_value=False):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch("src.scripts.cache.has_email_credentials", return_value=False),
+        ):
             client = self._make_client()
             resp = client.get("/setup", follow_redirects=False)
         assert resp.status_code == 200
 
     def test_redirects_to_setup_dashboard_when_no_credentials_and_no_password(self):
-        with patch.object(web, "DB_PATH", self.db_path), \
-             patch("src.scripts.cache.has_email_credentials", return_value=False):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch("src.scripts.cache.has_email_credentials", return_value=False),
+        ):
             client = self._make_client()
             resp = client.get("/emails", follow_redirects=False)
         assert resp.status_code == 303
@@ -341,9 +348,12 @@ class TestSetupGuardMiddleware:
 
     def test_redirects_to_setup_when_no_credentials_but_password_set(self):
         from src.scripts import auth
+
         auth.set_password("somepassword", self.db_path)
-        with patch.object(web, "DB_PATH", self.db_path), \
-             patch("src.scripts.cache.has_email_credentials", return_value=False):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch("src.scripts.cache.has_email_credentials", return_value=False),
+        ):
             client = self._make_client()
             client.post("/login", data={"password": "somepassword", "next": "/"}, follow_redirects=False)
             resp = client.get("/emails", follow_redirects=False)
@@ -358,8 +368,10 @@ class TestSetupGuardMiddleware:
         assert resp.status_code == 200
 
     def test_exempt_health_endpoint(self):
-        with patch.object(web, "DB_PATH", self.db_path), \
-             patch("src.scripts.cache.has_email_credentials", return_value=False):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch("src.scripts.cache.has_email_credentials", return_value=False),
+        ):
             client = self._make_client()
             resp = client.get("/health")
         assert resp.status_code == 200
@@ -375,6 +387,7 @@ class TestWebExtraEndpoints:
 
     def _make_client(self):
         from fastapi.testclient import TestClient
+
         return TestClient(web.app)
 
     def _seed_emails(self, n=5):
@@ -383,7 +396,7 @@ class TestWebExtraEndpoints:
                 "message_id": f"<web{i}@e.com>",
                 "from": f"sender{i}@e.com",
                 "subject": f"Web subject {i}",
-                "date": f"Mon, 0{i+1} Jan 2024 10:00:00 +0000",
+                "date": f"Mon, 0{i + 1} Jan 2024 10:00:00 +0000",
                 "body": f"Body {i}",
                 "_category": "7" if i % 2 == 0 else "3",
             }
@@ -399,18 +412,24 @@ class TestWebExtraEndpoints:
         assert resp.json() == {"status": "ok"}
 
     def test_setup_submit_validation_error(self):
-        with patch.object(web, "DB_PATH", self.db_path), \
-             patch("src.scripts.cache.has_email_credentials", return_value=False):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch("src.scripts.cache.has_email_credentials", return_value=False),
+        ):
             client = self._make_client()
             resp = client.post("/setup", data={"email_user": "", "email_pass": ""}, follow_redirects=False)
         assert resp.status_code == 200
         assert "required" in resp.text.lower()
 
     def test_setup_submit_invalid_email_format(self):
-        with patch.object(web, "DB_PATH", self.db_path), \
-             patch("src.scripts.cache.has_email_credentials", return_value=False), \
-             patch("src.scripts.email_reader.test_connection",
-                   return_value={"success": False, "error": "Invalid email or password."}):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch("src.scripts.cache.has_email_credentials", return_value=False),
+            patch(
+                "src.scripts.email_reader.test_connection",
+                return_value={"success": False, "error": "Invalid email or password."},
+            ),
+        ):
             client = self._make_client()
             resp = client.post(
                 "/setup",
@@ -421,12 +440,13 @@ class TestWebExtraEndpoints:
         assert "Invalid" in resp.text
 
     def test_setup_submit_success_redirects(self):
-        with patch.object(web, "DB_PATH", self.db_path), \
-             patch("src.scripts.cache.has_email_credentials", return_value=False), \
-             patch("src.scripts.email_reader.test_connection",
-                   return_value={"success": True, "inbox_count": 0}), \
-             patch("src.scripts.idle_monitor.IdleMonitor") as MockMonitor, \
-             patch("src.scripts.idle_monitor.run_initial_fetch"):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch("src.scripts.cache.has_email_credentials", return_value=False),
+            patch("src.scripts.email_reader.test_connection", return_value={"success": True, "inbox_count": 0}),
+            patch("src.scripts.idle_monitor.IdleMonitor") as MockMonitor,
+            patch("src.scripts.idle_monitor.run_initial_fetch"),
+        ):
             mock_instance = MockMonitor.return_value
             client = self._make_client()
             resp = client.post(
@@ -519,15 +539,46 @@ class TestDashboardPriorityDistribution:
 
     def _make_client(self):
         from fastapi.testclient import TestClient
+
         return TestClient(web.app)
 
     def _seed_with_categories(self):
         emails = [
-            {"message_id": "<c1@e.com>", "subject": "s", "date": "Mon, 01 Jan 2024 00:00:00 +0000", "body": "b", "_category": "10"},
-            {"message_id": "<c2@e.com>", "subject": "s", "date": "Mon, 01 Jan 2024 00:00:00 +0000", "body": "b", "_category": "9"},
-            {"message_id": "<h1@e.com>", "subject": "s", "date": "Mon, 01 Jan 2024 00:00:00 +0000", "body": "b", "_category": "7"},
-            {"message_id": "<m1@e.com>", "subject": "s", "date": "Mon, 01 Jan 2024 00:00:00 +0000", "body": "b", "_category": "5"},
-            {"message_id": "<l1@e.com>", "subject": "s", "date": "Mon, 01 Jan 2024 00:00:00 +0000", "body": "b", "_category": "2"},
+            {
+                "message_id": "<c1@e.com>",
+                "subject": "s",
+                "date": "Mon, 01 Jan 2024 00:00:00 +0000",
+                "body": "b",
+                "_category": "10",
+            },
+            {
+                "message_id": "<c2@e.com>",
+                "subject": "s",
+                "date": "Mon, 01 Jan 2024 00:00:00 +0000",
+                "body": "b",
+                "_category": "9",
+            },
+            {
+                "message_id": "<h1@e.com>",
+                "subject": "s",
+                "date": "Mon, 01 Jan 2024 00:00:00 +0000",
+                "body": "b",
+                "_category": "7",
+            },
+            {
+                "message_id": "<m1@e.com>",
+                "subject": "s",
+                "date": "Mon, 01 Jan 2024 00:00:00 +0000",
+                "body": "b",
+                "_category": "5",
+            },
+            {
+                "message_id": "<l1@e.com>",
+                "subject": "s",
+                "date": "Mon, 01 Jan 2024 00:00:00 +0000",
+                "body": "b",
+                "_category": "2",
+            },
             {"message_id": "<u1@e.com>", "subject": "s", "date": "Mon, 01 Jan 2024 00:00:00 +0000", "body": "b"},
         ]
         _save_fetched_batch(emails, self.db_path)
@@ -540,9 +591,10 @@ class TestDashboardPriorityDistribution:
 
     def test_priority_counts_render_in_dashboard(self):
         self._seed_with_categories()
-        with patch.object(web, "DB_PATH", self.db_path), \
-             patch("src.scripts.cache.get_priority_counts",
-                   return_value={"10": 2, "9": 0, "7": 1, "5": 1, "2": 1}):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch("src.scripts.cache.get_priority_counts", return_value={"10": 2, "9": 0, "7": 1, "5": 1, "2": 1}),
+        ):
             client = self._make_client()
             resp = client.get("/")
         assert resp.status_code == 200
@@ -567,6 +619,7 @@ class TestSseEvents:
         type("R", (), {"is_disconnected": lambda self: False})()
 
         web.sse_events.__wrapped__ if hasattr(web.sse_events, "__wrapped__") else None
+
         async def event_stream():
             try:
                 while True:
@@ -651,8 +704,10 @@ class TestResolveBindHost:
             assert web._resolve_bind_host("0.0.0.0") == "0.0.0.0"
 
     def test_falls_back_to_requested_on_db_error(self):
-        with patch.object(web, "DB_PATH", self.db_path), \
-             patch("src.scripts.web.cache.init_db", side_effect=RuntimeError("boom")):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch("src.scripts.web.cache.init_db", side_effect=RuntimeError("boom")),
+        ):
             assert web._resolve_bind_host("0.0.0.0") == "0.0.0.0"
 
 
@@ -669,6 +724,7 @@ class TestAuthMiddleware:
 
     def _make_client(self):
         from fastapi.testclient import TestClient
+
         return TestClient(web.app)
 
     def _login(self, client, password="dashboardpw"):
@@ -776,6 +832,7 @@ class TestAuthRoutes:
 
     def _make_client(self):
         from fastapi.testclient import TestClient
+
         return TestClient(web.app)
 
     def test_setup_dashboard_get_when_not_configured(self):
@@ -918,3 +975,132 @@ class TestAuthRoutes:
             resp = client.post("/settings/api-key/revoke", follow_redirects=False)
         assert resp.status_code == 200
         assert auth.get_api_key_created_at(self.db_path) is None
+
+
+class TestUpdateEndpoints:
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path):
+        self.db_path = str(tmp_path / "test_update.db")
+        cache.init_db(self.db_path)
+        cache.save_email_credentials("test@test.com", "testpass", self.db_path)
+
+    def _make_client(self):
+        from fastapi.testclient import TestClient
+
+        return TestClient(web.app)
+
+    def test_update_status_returns_fields(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web.updater, "get_current_version", lambda: "1.2.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: "v1.3.0"),
+        ):
+            client = self._make_client()
+            resp = client.get("/api/update/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["current_version"] == "1.2.0"
+        assert data["latest_version"] == "v1.3.0"
+        assert data["update_available"] is True
+        assert "phase" in data["update_state"]
+
+    def test_banner_partial_hidden_in_non_docker(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web.updater, "get_current_version", lambda: "1.2.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: "v1.3.0"),
+        ):
+            client = self._make_client()
+            resp = client.get("/partials/update-banner")
+        assert resp.status_code == 200
+        assert b"A new update is available" not in resp.content
+
+    def test_banner_partial_shown_in_docker_when_update_available(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: True),
+            patch.object(web.updater, "get_current_version", lambda: "1.2.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: "v1.3.0"),
+        ):
+            client = self._make_client()
+            resp = client.get("/partials/update-banner")
+        assert resp.status_code == 200
+        assert b"A new update is available" in resp.content
+
+    def test_dismiss_persists_latest_version(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: True),
+            patch.object(web.updater, "get_current_version", lambda: "1.2.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: "v1.3.0"),
+        ):
+            client = self._make_client()
+            resp = client.post("/api/update/dismiss")
+        assert resp.status_code == 200
+        assert cache.get_setting(web.updater.DISMISSED_VERSION_KEY, self.db_path) == "v1.3.0"
+
+    def test_check_endpoint_forces_refresh(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web.updater, "fetch_latest_version") as mock_fetch,
+            patch.object(web.updater, "get_current_version", lambda: "1.3.0"),
+        ):
+            mock_fetch.return_value = "v1.3.0"
+            client = self._make_client()
+            resp = client.post("/api/update/check")
+        assert resp.status_code == 200
+        # The endpoint must trigger a forced refresh (cache bypass).
+        assert any(call.kwargs.get("force") for call in mock_fetch.call_args_list)
+
+    def test_run_endpoint_triggers_update_when_managed(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web.updater, "is_docker_managed", lambda: True),
+            patch.object(web.updater, "trigger_update", return_value=True) as mock_trigger,
+            patch.object(web.updater, "get_current_version", lambda: "1.2.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: "v1.3.0"),
+        ):
+            client = self._make_client()
+            resp = client.post("/api/update/run")
+        assert resp.status_code == 200
+        mock_trigger.assert_called_once()
+
+    def test_run_endpoint_skips_trigger_when_not_managed(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web.updater, "is_docker_managed", lambda: False),
+            patch.object(web.updater, "trigger_update") as mock_trigger,
+            patch.object(web.updater, "get_current_version", lambda: "1.2.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: "v1.3.0"),
+        ):
+            client = self._make_client()
+            resp = client.post("/api/update/run")
+        assert resp.status_code == 200
+        mock_trigger.assert_not_called()
+
+    def test_settings_page_non_docker_shows_pr_message(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web.updater, "is_docker_environment", lambda: False),
+            patch.object(web.updater, "get_current_version", lambda: "1.2.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: "v1.3.0"),
+        ):
+            client = self._make_client()
+            resp = client.get("/settings")
+        assert resp.status_code == 200
+        assert b"Pull Request" in resp.content
+
+    def test_settings_page_docker_shows_update_panel(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: True),
+            patch.object(web.updater, "is_docker_environment", lambda: True),
+            patch.object(web.updater, "get_current_version", lambda: "1.2.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: "v1.3.0"),
+        ):
+            client = self._make_client()
+            resp = client.get("/settings")
+        assert resp.status_code == 200
+        assert b"Update Now" in resp.content or b"docker compose pull" in resp.content

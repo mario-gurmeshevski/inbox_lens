@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 class ConnectionLost(Exception):
     pass
 
+
 RECONNECT_DELAY = 30
 IDLE_CHECK_INTERVAL = 30
 IDLE_RENEW_INTERVAL = 25 * 60
@@ -156,9 +157,7 @@ class IdleMonitor:
                     break
 
                 try:
-                    readable, _, _ = select.select(
-                        [conn.socket()], [], [], IDLE_CHECK_INTERVAL
-                    )
+                    readable, _, _ = select.select([conn.socket()], [], [], IDLE_CHECK_INTERVAL)
                 except (OSError, ValueError):
                     self._end_idle(conn, tag)
                     raise ConnectionLost()

@@ -44,7 +44,11 @@
           <i data-lucide="settings" style="width: 16px; height: 16px"></i>
         </a>
         {% if request.session.get("authed") %}
-        <form method="post" action="/logout" style="display: inline; margin-left: 0.5rem">
+        <form
+          method="post"
+          action="/logout"
+          style="display: inline; margin-left: 0.5rem"
+        >
           <button
             type="submit"
             class="nav-link-btn"
@@ -58,6 +62,12 @@
       </div>
     </nav>
     <div class="container" hx-ext="sse" sse-connect="/api/events">
+      <div
+        id="update-banner"
+        hx-get="/partials/update-banner"
+        hx-trigger="load, sse:update_available from:/api/events"
+        hx-swap="outerHTML"
+      ></div>
       <div id="action-status">
         {% if task_running %}
         <div
@@ -76,11 +86,13 @@
         lucide.createIcons();
       });
 
-      function togglePassword(id){
-        const i=document.getElementById(id);
-        const show=i.type==='password';
-        i.type=show?'text':'password';
-        i.parentElement.querySelector('.password-toggle i').setAttribute('data-lucide',show?'eye-off':'eye');
+      function togglePassword(id) {
+        const i = document.getElementById(id);
+        const show = i.type === "password";
+        i.type = show ? "text" : "password";
+        i.parentElement
+          .querySelector(".password-toggle i")
+          .setAttribute("data-lucide", show ? "eye-off" : "eye");
         lucide.createIcons();
       }
 

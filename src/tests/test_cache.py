@@ -206,16 +206,19 @@ class TestScanAndUpdate:
         with cache._connect(tmp_db) as conn:
             conn.execute(
                 "INSERT INTO emails (message_id_hash, message_id, sender, subject, date, body, status) VALUES (?,?,?,?,?,'','headers_only')",
-                (h, email["message_id"], "", "test", "", ),
+                (
+                    h,
+                    email["message_id"],
+                    "",
+                    "test",
+                    "",
+                ),
             )
         result = cache.scan_and_update([email], tmp_db, compiled_patterns)
         assert result["skipped_no_body"] == 1
 
     def test_returns_correct_stats(self, tmp_db, compiled_patterns):
-        emails = [
-            {"message_id": f"<x{i}@example.com>", "subject": "problem", "body": "test"}
-            for i in range(3)
-        ]
+        emails = [{"message_id": f"<x{i}@example.com>", "subject": "problem", "body": "test"} for i in range(3)]
         result = cache.scan_and_update(emails, tmp_db, compiled_patterns)
         assert result["total"] == 3
         assert result["scanned"] == 3
@@ -243,7 +246,13 @@ class TestGetEmailByHash:
 class TestGetPriorityCounts:
     def test_returns_category_counts(self, tmp_db):
         for i in range(3):
-            e = {"message_id": f"<pc{i}@e.com>", "subject": "s", "date": "Mon, 01 Jan 2024 00:00:00 +0000", "body": "b", "_category": "7"}
+            e = {
+                "message_id": f"<pc{i}@e.com>",
+                "subject": "s",
+                "date": "Mon, 01 Jan 2024 00:00:00 +0000",
+                "body": "b",
+                "_category": "7",
+            }
             _save_fetched(e, tmp_db)
         with cache._connect(tmp_db) as conn:
             conn.execute("UPDATE emails SET status = 'checked', category = '7'")
@@ -308,9 +317,7 @@ class TestUpdateBodiesBatch:
 
     def test_updates_any_body(self, tmp_db, sample_email):
         _save_fetched(sample_email, tmp_db)
-        updated = cache.update_bodies_batch(
-            [(sample_email["message_id"], "new body")], tmp_db
-        )
+        updated = cache.update_bodies_batch([(sample_email["message_id"], "new body")], tmp_db)
         assert updated == 1
 
     def test_empty_list_returns_zero(self, tmp_db):
@@ -332,8 +339,13 @@ class TestGetHeadersOnlyMessageIds:
 class TestGetRecentEmails:
     def test_returns_recent_emails_limited(self, tmp_db):
         emails = [
-            {"message_id": f"<r{i}@e.com>", "from": "s@e.com", "subject": f"Sub {i}",
-             "date": f"Mon, 0{i+1} Jan 2024 10:00:00 +0000", "body": "b"}
+            {
+                "message_id": f"<r{i}@e.com>",
+                "from": "s@e.com",
+                "subject": f"Sub {i}",
+                "date": f"Mon, 0{i + 1} Jan 2024 10:00:00 +0000",
+                "body": "b",
+            }
             for i in range(10)
         ]
         _save_fetched_batch(emails, tmp_db)
@@ -352,9 +364,14 @@ class TestGetRecentEmails:
 class TestSearchEmails:
     def _seed_search_data(self, tmp_db):
         emails = [
-            {"message_id": f"<se{i}@e.com>", "from": f"sender{i}@e.com",
-             "subject": f"Subject about topic{i}", "date": f"Mon, 0{i+1} Jan 2024 10:00:00 +0000",
-             "body": "body", "_category": "7" if i % 2 == 0 else "3"}
+            {
+                "message_id": f"<se{i}@e.com>",
+                "from": f"sender{i}@e.com",
+                "subject": f"Subject about topic{i}",
+                "date": f"Mon, 0{i + 1} Jan 2024 10:00:00 +0000",
+                "body": "body",
+                "_category": "7" if i % 2 == 0 else "3",
+            }
             for i in range(10)
         ]
         _save_fetched_batch(emails, tmp_db)
@@ -451,7 +468,6 @@ class TestGetConnReuse:
 
 
 class TestConnectRollbackFailure:
-
     def test_clears_thread_local_when_rollback_fails(self, tmp_db, monkeypatch):
         from unittest.mock import MagicMock
 
@@ -505,9 +521,13 @@ class TestSearchEmailsStatusBranches:
     def _seed(self, tmp_db):
         emails = []
         for i, status in enumerate(["fetched", "checked", "headers_only"]):
-            e = {"message_id": f"<st{i}@e.com>", "from": "s@e.com",
-                 "subject": f"Subject {i}", "date": "Mon, 01 Jan 2024 00:00:00 +0000",
-                 "body": "b"}
+            e = {
+                "message_id": f"<st{i}@e.com>",
+                "from": "s@e.com",
+                "subject": f"Subject {i}",
+                "date": "Mon, 01 Jan 2024 00:00:00 +0000",
+                "body": "b",
+            }
             emails.append(e)
         _save_fetched_batch(emails, tmp_db)
         hashes = [cache._hash_message_id(e["message_id"]) for e in emails]
@@ -529,16 +549,20 @@ class TestSearchEmailsStatusBranches:
 
     def test_combined_status_and_priority_filters(self, tmp_db):
         emails = [
-            {"message_id": f"<c{i}@e.com>", "from": "s@e.com",
-             "subject": f"Sub {i}", "date": "Mon, 01 Jan 2024 00:00:00 +0000",
-             "body": "b", "_category": "7" if i < 2 else "3"}
+            {
+                "message_id": f"<c{i}@e.com>",
+                "from": "s@e.com",
+                "subject": f"Sub {i}",
+                "date": "Mon, 01 Jan 2024 00:00:00 +0000",
+                "body": "b",
+                "_category": "7" if i < 2 else "3",
+            }
             for i in range(4)
         ]
         _save_fetched_batch(emails, tmp_db)
         hashes = [cache._hash_message_id(e["message_id"]) for e in emails]
         with cache._connect(tmp_db) as conn:
-            conn.executemany("UPDATE emails SET status = 'checked' WHERE message_id_hash = ?",
-                             [(h,) for h in hashes])
+            conn.executemany("UPDATE emails SET status = 'checked' WHERE message_id_hash = ?", [(h,) for h in hashes])
         _, total, _ = cache.search_emails(tmp_db, status="checked", priority="7")
         assert total == 2
 
@@ -550,7 +574,7 @@ class TestSearchEmailsStatusBranches:
 
 class TestScanAndUpdateExtraBranches:
     def test_skips_already_checked_with_empty_json_variants(self, tmp_db, compiled_patterns):
-        for empty_json in ('{}', '[]', '""'):
+        for empty_json in ("{}", "[]", '""'):
             email = {"message_id": f"<empty{empty_json}@e.com>", "subject": "test", "body": "x"}
             h = cache._hash_message_id(email["message_id"])
             with cache._connect(tmp_db) as conn:
@@ -564,10 +588,7 @@ class TestScanAndUpdateExtraBranches:
             assert email["keyword_matches"] == {}
 
     def test_threadpool_path_used_for_many_emails(self, tmp_db, compiled_patterns):
-        emails = [
-            {"message_id": f"<tp{i}@e.com>", "subject": f"problem {i}", "body": "test"}
-            for i in range(8)
-        ]
+        emails = [{"message_id": f"<tp{i}@e.com>", "subject": f"problem {i}", "body": "test"} for i in range(8)]
         result = cache.scan_and_update(emails, tmp_db, compiled_patterns)
         assert result["scanned"] == 8
         assert result["emails_with_matches"]
@@ -580,9 +601,7 @@ class TestScanAndUpdateExtraBranches:
         assert not result["emails_with_matches"]
         h = cache._hash_message_id("<nomatch@e.com>")
         with cache._connect(tmp_db) as conn:
-            row = conn.execute(
-                "SELECT status, category FROM emails WHERE message_id_hash = ?", (h,)
-            ).fetchone()
+            row = conn.execute("SELECT status, category FROM emails WHERE message_id_hash = ?", (h,)).fetchone()
         assert row["status"] == "checked"
         assert row["category"] == "unclassified"
 

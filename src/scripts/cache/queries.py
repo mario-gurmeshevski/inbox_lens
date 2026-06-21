@@ -16,6 +16,7 @@ def get_total_count(db_path: str) -> int:
 
 def get_email_by_hash(db_path: str, message_id_hash: str) -> dict | None:
     from src.scripts.cache.db import _row_to_dict
+
     with _connect(db_path) as conn:
         row = conn.execute(
             "SELECT * FROM emails WHERE message_id_hash = ?",

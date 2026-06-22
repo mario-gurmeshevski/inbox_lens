@@ -32,6 +32,7 @@ __all__ = [
     "_fetch_headers_bulk",
     "_parse_fetched_email",
     "load_keywords",
+    "save_keywords",
     "build_compiled_patterns",
     "scan_emails",
 ]
@@ -74,6 +75,7 @@ from src.scripts.email_reader.imap import (
 )
 from src.scripts.email_reader.keywords import (
     load_keywords,
+    save_keywords,
     build_compiled_patterns,
     scan_emails,
 )

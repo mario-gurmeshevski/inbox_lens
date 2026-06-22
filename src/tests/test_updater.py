@@ -70,7 +70,7 @@ class TestFetchLatestVersion:
                 return self._buf.read()
 
         payload = json.dumps([{"name": "v1.4.0"}, {"name": "v1.3.0"}]).encode()
-        monkeypatch.setattr(updater.urllib.request, "urlopen", lambda req, timeout=10: FakeResp(payload))
+        monkeypatch.setattr(updater.urllib.request, "urlopen", lambda req, timeout=10, **k: FakeResp(payload))
         updater._latest_cache["value"] = None
         result = updater.fetch_latest_version(force=True)
         assert result == "v1.4.0"
@@ -89,7 +89,7 @@ class TestFetchLatestVersion:
             def read(self):
                 return self._buf.read()
 
-        monkeypatch.setattr(updater.urllib.request, "urlopen", lambda req, timeout=10: FakeResp(b"[]"))
+        monkeypatch.setattr(updater.urllib.request, "urlopen", lambda req, timeout=10, **k: FakeResp(b"[]"))
         updater._latest_cache["value"] = None
         assert updater.fetch_latest_version(force=True) is None
 

@@ -1,0 +1,172 @@
+{% if kw_msg %}
+<div
+  id="kw-status"
+  class="status-box kw-status-dismissable {% if kw_msg_ok %}status-done{% else %}status-error{% endif %}"
+>
+  <i
+    data-lucide="{% if kw_msg_ok %}check-circle{% else %}alert-circle{% endif %}"
+    style="width: 18px; height: 18px; flex-shrink: 0"
+  ></i>
+  <span>{{ kw_msg }}</span>
+  <button
+    type="button"
+    class="kw-status-close"
+    aria-label="Dismiss"
+    onclick="this.parentElement.remove()"
+  >
+    <i data-lucide="x" style="width: 14px; height: 14px"></i>
+  </button>
+</div>
+<script>
+  (function () {
+    var box = document.getElementById("kw-status");
+    if (!box) return;
+    try {
+      var url = new URL(window.location.href);
+      if (url.searchParams.has("import")) {
+        url.searchParams.delete("import");
+        window.history.replaceState({}, "", url.toString());
+      }
+    } catch (e) {}
+    setTimeout(function () {
+      if (!document.body.contains(box)) return;
+      box.style.transition = "opacity 0.3s ease";
+      box.style.opacity = "0";
+      setTimeout(function () {
+        if (box.parentElement) box.remove();
+      }, 300);
+    }, 6000);
+  })();
+</script>
+{% endif %}
+
+<form
+  hx-post="/keywords/category/add"
+  hx-target="#keywords-cards"
+  hx-swap="innerHTML"
+  class="kw-add-cat-form"
+>
+  <input
+    type="number"
+    name="level"
+    min="1"
+    placeholder="Priority level (e.g. 8)"
+    required
+  />
+  <button type="submit" class="btn btn-sm">
+    <i data-lucide="folder-plus" style="width: 14px; height: 14px"></i>
+    Add category
+  </button>
+</form>
+
+<div class="kw-cards">
+  {% for level in levels %}
+  <div class="detail-card kw-card">
+    <div class="kw-card-header">
+      <div class="kw-card-header-label">
+        <span class="badge badge-{{ level | priority_bucket }}"
+          >Priority {{ level }}</span
+        >
+        <span class="kw-count">{{ categories[level] | length }} word(s)</span>
+      </div>
+      <form
+        hx-post="/keywords/category/remove"
+        hx-target="#keywords-cards"
+        hx-swap="innerHTML"
+        class="kw-inline-form"
+      >
+        <input type="hidden" name="level" value="{{ level }}" />
+        <button
+          type="submit"
+          class="btn btn-danger btn-sm"
+          onclick="return confirm('Remove priority {{ level }} and all its words?');"
+          style="margin-left: 1rem"
+        >
+          <i data-lucide="trash-2" style="width: 14px; height: 14px"></i>
+          Remove
+        </button>
+      </form>
+    </div>
+
+    <div class="kw-words">
+      {% for word in categories[level] %}
+      <div class="kw-chip">
+        <span
+          class="kw-word"
+          tabindex="0"
+          role="button"
+          title="Click to edit"
+          onclick="kwEdit(this)"
+          onkeydown="
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              kwEdit(this);
+            }
+          "
+          >{{ word }}</span
+        >
+        <form
+          hx-post="/keywords/word/edit"
+          hx-target="#keywords-cards"
+          hx-swap="innerHTML"
+          class="kw-edit-form"
+        >
+          <input type="hidden" name="level" value="{{ level }}" />
+          <input type="hidden" name="old_word" value="{{ word }}" />
+          <input
+            type="text"
+            name="new_word"
+            value="{{ word }}"
+            class="kw-edit-input"
+            autocomplete="off"
+            onkeydown="kwEditKey(event)"
+            onblur="kwCancelEdit(this)"
+          />
+        </form>
+        <form
+          hx-post="/keywords/word/remove"
+          hx-target="#keywords-cards"
+          hx-swap="innerHTML"
+          class="kw-inline-form"
+        >
+          <input type="hidden" name="level" value="{{ level }}" />
+          <input type="hidden" name="word" value="{{ word }}" />
+          <button
+            type="submit"
+            class="kw-remove-btn"
+            aria-label="Remove word"
+            title="Remove"
+          >
+            <i data-lucide="x" style="width: 14px; height: 14px"></i>
+          </button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+
+    <form
+      hx-post="/keywords/word/add"
+      hx-target="#keywords-cards"
+      hx-swap="innerHTML"
+      class="kw-add-form"
+    >
+      <input type="hidden" name="level" value="{{ level }}" />
+      <input
+        type="text"
+        name="word"
+        class="kw-add-input"
+        placeholder="Add word or phrase…"
+        required
+      />
+      <button type="submit" class="btn btn-sm">
+        <i data-lucide="plus" style="width: 14px; height: 14px"></i>
+        Add
+      </button>
+    </form>
+  </div>
+  {% endfor %} {% if not levels %}
+  <div class="detail-card">
+    <p class="settings-desc">No priority categories. Add one above.</p>
+  </div>
+  {% endif %}
+</div>

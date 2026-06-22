@@ -1,0 +1,48 @@
+{% extends "base.html" %} {% block title %}Priority Keywords — Email Reader
+{% endblock %} {% block content %}
+<h1>Priority Keywords</h1>
+<p class="settings-desc" style="margin-top: 0.25rem">
+  Manage the keywords used to prioritize emails. Changes apply to newly fetched
+  emails immediately; use re-scan to re-evaluate already-cached emails.
+</p>
+
+<div class="kw-toolbar">
+  <form hx-post="/keywords/rescan" hx-target="#keywords-cards" hx-swap="innerHTML">
+    <button type="submit" class="btn">
+      <i data-lucide="refresh-cw" style="width: 16px; height: 16px"></i>
+      Re-scan cached emails
+    </button>
+  </form>
+  <a href="/keywords/export" class="btn btn-sm">
+    <i data-lucide="download" style="width: 14px; height: 14px"></i>
+    Export
+  </a>
+  <form
+    method="post"
+    action="/keywords/import"
+    enctype="multipart/form-data"
+    class="kw-import-form"
+  >
+    <input
+      type="file"
+      id="kw-import-file"
+      name="file"
+      accept="application/json,.json"
+      class="kw-file-input"
+    />
+    <label for="kw-import-file" class="btn btn-sm">
+      <i data-lucide="folder-open" style="width: 14px; height: 14px"></i>
+      Browse…
+    </label>
+    <span class="kw-file-name" data-empty="No file chosen">No file chosen</span>
+    <button type="submit" class="btn btn-sm">
+      <i data-lucide="upload" style="width: 14px; height: 14px"></i>
+      Import
+    </button>
+  </form>
+</div>
+
+<div id="keywords-cards" hx-target="#keywords-cards" hx-swap="innerHTML">
+  {% include "partials/keywords.html" %}
+</div>
+{% endblock %}

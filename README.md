@@ -72,9 +72,17 @@ Fetch emails from a Gmail inbox via IMAP, cache them in a local SQLite database,
 
    Open `http://localhost:8000` — on first visit you'll be prompted to connect your email account. You'll need a Gmail [App Password](https://myaccount.google.com/apppasswords) (2-Step Verification must be enabled).
 
-4. **Define your keywords** (optional):
+4. **Customize your keywords** (optional):
 
-   `keywords.json` is **auto-created** from `keywords.example.json` (with sensible defaults) on the first scan — works for both Docker and local dev. Edit it to customize priority levels:
+   Priority keywords are **managed from the dashboard** at **Keywords** (`/keywords`) — no file editing required. On first run the database is auto-filled from `keywords.json` if it exists (handy for carrying over a prior config), otherwise from the bundled `keywords.example.json` defaults. From the editor you can:
+   - Add, edit, and remove individual words inline for any priority level
+   - Add or remove entire priority categories (arbitrary positive-integer levels, defaults 1–10)
+   - Import / export the configuration as JSON
+   - Re-scan already-cached emails to apply new keywords retroactively
+
+   Changes apply to newly fetched emails immediately. The keyword config is stored in the database (in Docker: `/app/src/data/emails.db`), so it persists across restarts with no extra setup.
+
+   Categories are **numeric priority levels**, where **higher is more urgent** (e.g. **10 is highest priority** and **1 is lowest**). Each level contains words or phrases to match against email subjects and bodies. An example config looks like:
 
    ```json
    {
@@ -90,21 +98,11 @@ Fetch emails from a Gmail inbox via IMAP, cache them in a local SQLite database,
    }
    ```
 
-   To pre-create or edit it before the first scan (optional):
-
-   ```bash
-
-   cp src/data/keywords.example.json src/data/keywords.json
-
-   ```
-
-   Categories are **numeric priority levels from 1 to 10**, where **10 is highest priority** and **1 is lowest**. Each level contains words or phrases to match against email subjects and bodies.
-
    For running without Docker, remote access via Tailscale, and other options, see [Host Web](#host-web) and [Remote Access](#remote-access).
 
 ## Testing
 
-The project includes 466 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
+The project includes 489 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
 
 ```bash
 
@@ -121,15 +119,15 @@ make test-cov   # For Mac/Linux
 | File                   | Tests | Coverage                                                    |
 | ---------------------- | ----- | ----------------------------------------------------------- |
 | `test_cache.py`        | 73    | DB ops, hashing, scanning, search, threads                  |
-| `test_email_reader.py` | 61    | Parsing, body cleaning, thread extraction, keywords         |
-| `test_web.py`          | 94    | FastAPI endpoints, SSE, Tailscale, auth middleware, updates |
+| `test_email_reader.py` | 71    | Parsing, body cleaning, thread extraction, keywords         |
+| `test_web.py`          | 106   | FastAPI endpoints, SSE, Tailscale, auth middleware, updates |
 | `test_auth.py`         | 42    | Password hashing, API keys, sessions, rate limiting         |
 | `test_imap.py`         | 58    | IMAP helpers, connection, fetch, delete                     |
 | `test_idle_monitor.py` | 57    | IDLE loop, ConnectionLost, run_initial_fetch                |
 | `test_crypto.py`       | 22    | Encryption, settings, credentials                           |
 | `test_event_bus.py`    | 12    | Pub/sub dispatch                                            |
 | `test_utils.py`        | 8     | Keyword parsing, priority buckets                           |
-| `test_constants.py`    | 5     | Env var defaults and overrides                              |
+| `test_constants.py`    | 6     | Env var defaults and overrides                              |
 | `test_updater.py`      | 34    | Version checking, semver compare, Docker self-update        |
 
 ### Linting
@@ -174,19 +172,19 @@ make up-ts # For Mac/Linux
 
 On first visit you'll be redirected to the setup page to connect your email account.
 
-**Data persistence** — `docker-compose.yaml` mounts `./src/data:/app/src/data` so the database, encryption key, and keywords survive container restarts and image updates.
+**Data persistence** — `docker-compose.yaml` mounts `./src/data:/app/src/data` so the database (including keyword configuration), encryption key, and session secret survive container restarts and image updates.
 
 **Compose files** — `make up` auto-loads `docker-compose.override.yaml` on top of `docker-compose.yaml`, which publishes port `8000` to the host. `make up-ts` instead uses `-f docker-compose.yaml -f docker-compose.tailscale.yaml`, deliberately skipping the override so no host port is exposed and the dashboard is reachable only via your [tailnet](#remote-access).
 
 **Healthcheck** — the container defines a Docker `HEALTHCHECK` against `GET /health` (served by the FastAPI app), so `docker ps` and orchestrators report live status.
 
-**Updating keywords** — `keywords.json` is auto-created from `keywords.example.json` on the first scan (Docker and local). Edit `./src/data/keywords.json` at any time — changes are picked up on the next scan (no rebuild needed).
+**Managing keywords** — keywords are configured from the dashboard's **Keywords** page (`/keywords`) and stored in the database. Changes apply to newly fetched emails immediately, and the **Re-scan** action re-evaluates already-cached emails — no rebuild needed.
 
 To stop the container:
 
 ```bash
 
-make stop # For Mac/Linux — halt containers (data preserved)
+make stop # For Mac/Linux
 
 ./commands.ps1 stop # For Windows
 
@@ -241,6 +239,8 @@ Opens at `http://localhost:8000`. Set `WEB_HOST` and `WEB_PORT` in `.env` to cus
 - **Email list** — filterable by status, priority, and search text; paginated; responsive card layout on mobile
 
 - **Email detail** — full body view, colored keyword tags, delete button
+
+- **Keyword editor** — manage priority keywords from the dashboard: inline add/edit/remove words, add/remove priority categories, import/export JSON config, and re-scan cached emails to apply changes retroactively
 
 - **Settings page** — toggle network access (bind to `0.0.0.0` vs `127.0.0.1`), view local IPs and access URLs
 
@@ -403,11 +403,11 @@ The dashboard is now available at `https://<hostname>.<tailnet-name>.ts.net` wit
 | `SESSION_COOKIE_SECURE`  | `false`          | Set `true` to mark the session cookie `Secure` (use behind HTTPS)          |
 | `SESSION_COOKIE_MAX_AGE` | `2592000`        | Session lifetime in seconds (default 30 days)                              |
 
-The database, encryption key, and keywords file live under `src/data/` (`/app/src/data/` in Docker) and are fixed to that location — they are not configurable via `.env`. Email credentials are configured at runtime via the web setup page — not in `.env`.
+The database (which holds keyword configuration), encryption key, and session secret live under `src/data/` (`/app/src/data/` in Docker) and are fixed to that location — they are not configurable via `.env`. Email credentials are configured at runtime via the web setup page — not in `.env`.
 
-### `keywords.json` file
+### Priority keywords
 
-Define priority levels as numeric keys (1-10), each containing a list of words or phrases to scan for. Emails are scanned against the subject and full body text.
+Define priority levels as numeric keys, each containing a list of words or phrases to scan for. Emails are scanned against the subject and full body text. Keywords are managed from the dashboard at **Keywords** (`/keywords`) and stored in the database; the JSON shape below is what **Import** / **Export** use:
 
 ```json
 {
@@ -422,6 +422,8 @@ Define priority levels as numeric keys (1-10), each containing a list of words o
   }
 }
 ```
+
+Levels are positive integers (defaults 1–10, but arbitrary higher levels are allowed) — **higher numbers are more urgent**. On first run, the database is auto-filled from `keywords.json` if present (e.g. a config from a prior install), otherwise from the bundled `keywords.example.json`.
 
 When a keyword is found, the email is tagged with the matching priority level and the specific words matched. Tags are color-coded:
 
@@ -460,7 +462,13 @@ docker compose pull && docker compose up -d
 
 ### Non-Docker
 
-In-app updates are disabled. Submit a Pull Request to update.
+The Settings page still checks for new releases and shows the current vs. latest version, but one-click self-update isn't available (no container to recreate). To update a local checkout:
+
+```bash
+git pull && make install(or `./commands.ps1 install` on Windows).
+```
+
+Then restart `make web` (or `./commands.ps1 web` on Windows).
 
 ### Releases
 

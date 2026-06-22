@@ -22,6 +22,7 @@ __all__ = [
     "get_recent_emails",
     "search_emails",
     "scan_and_update",
+    "rescan_all",
     "_scan_keywords",
     "save_setting",
     "get_setting",
@@ -65,6 +66,7 @@ from src.scripts.cache.queries import (
 )
 from src.scripts.cache.scanner import (
     scan_and_update,
+    rescan_all,
     _scan_keywords,
 )
 from src.scripts.cache.crypto import (

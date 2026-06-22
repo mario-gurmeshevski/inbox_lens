@@ -152,6 +152,125 @@ class TestWebEndpoints:
             resp = client.get("/account")
         assert resp.status_code == 200
 
+    def test_keywords_page_returns_200_and_seeds(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/keywords")
+        assert resp.status_code == 200
+        assert "Priority Keywords" in resp.text
+        assert "10" in cache.get_setting("keywords", self.db_path)
+
+    def test_keywords_page_renders_words_as_static_chips(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            client.post("/keywords/word/add", data={"level": "8", "word": "zebra"})
+            resp = client.get("/keywords")
+        assert 'class="kw-word"' in resp.text
+        assert "zebra" in resp.text
+        assert 'class="kw-edit-input"' in resp.text
+
+    def test_keywords_add_word(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post("/keywords/word/add", data={"level": "8", "word": "supercalifragilistic"})
+        assert resp.status_code == 200
+        cats = cache.get_setting("keywords", self.db_path)
+        assert "supercalifragilistic" in cats
+
+    def test_keywords_add_word_duplicate_shows_error(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            client.post("/keywords/word/add", data={"level": "8", "word": "dup"})
+            resp = client.post("/keywords/word/add", data={"level": "8", "word": "dup"})
+        assert resp.status_code == 200
+        assert "already exists" in resp.text
+
+    def test_keywords_edit_word(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            client.post("/keywords/word/add", data={"level": "8", "word": "oldword"})
+            resp = client.post(
+                "/keywords/word/edit",
+                data={"level": "8", "old_word": "oldword", "new_word": "newword"},
+            )
+        assert resp.status_code == 200
+        cats = cache.get_setting("keywords", self.db_path)
+        assert "newword" in cats and "oldword" not in cats
+
+    def test_keywords_remove_word(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            client.post("/keywords/word/add", data={"level": "7", "word": "deleteme"})
+            resp = client.post("/keywords/word/remove", data={"level": "7", "word": "deleteme"})
+        assert resp.status_code == 200
+        cats = cache.get_setting("keywords", self.db_path)
+        assert "deleteme" not in cats
+
+    def test_keywords_add_category_arbitrary_level(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post("/keywords/category/add", data={"level": "11"})
+        assert resp.status_code == 200
+        cats = json.loads(cache.get_setting("keywords", self.db_path))["categories"]
+        assert "11" in cats
+
+    def test_keywords_add_category_invalid_level(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post("/keywords/category/add", data={"level": "notanumber"})
+        assert resp.status_code == 200
+        assert "must be an integer" in resp.text
+
+    def test_keywords_remove_category(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post("/keywords/category/remove", data={"level": "2"})
+        assert resp.status_code == 200
+        cats = json.loads(cache.get_setting("keywords", self.db_path))["categories"]
+        assert "2" not in cats
+
+    def test_keywords_export_returns_json(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/keywords/export")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("application/json")
+        data = json.loads(resp.content)
+        assert "categories" in data
+
+    def test_keywords_import_valid_redirects(self):
+        payload = json.dumps({"categories": {"9": ["urgent"]}}).encode()
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post(
+                "/keywords/import",
+                files={"file": ("keywords.json", payload, "application/json")},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("?import=ok")
+        cats = json.loads(cache.get_setting("keywords", self.db_path))["categories"]
+        assert cats == {"9": ["urgent"]}
+
+    def test_keywords_import_invalid_redirects(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post(
+                "/keywords/import",
+                files={"file": ("keywords.json", b"not json {{{", "application/json")},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("?import=invalid")
+
+    def test_keywords_rescan_returns_partial(self):
+        self._seed_emails(1)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post("/keywords/rescan")
+        assert resp.status_code == 200
+        assert "Re-scanned" in resp.text
+
 
 class TestWebHelpers:
     def test_is_docker_returns_bool(self):
@@ -1078,7 +1197,7 @@ class TestUpdateEndpoints:
         assert resp.status_code == 200
         mock_trigger.assert_not_called()
 
-    def test_settings_page_non_docker_shows_pr_message(self):
+    def test_settings_page_non_docker_shows_git_pull_hint(self):
         with (
             patch.object(web, "DB_PATH", self.db_path),
             patch.object(web, "_is_docker", lambda: False),
@@ -1089,7 +1208,8 @@ class TestUpdateEndpoints:
             client = self._make_client()
             resp = client.get("/settings")
         assert resp.status_code == 200
-        assert b"Pull Request" in resp.content
+        assert b"git pull" in resp.content
+        assert b"A new version is available" in resp.content
 
     def test_settings_page_docker_shows_update_panel(self):
         with (

@@ -537,9 +537,7 @@ class TestRunInitialFetch:
         monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: [])
         monkeypatch.setattr(cache, "read_emails", lambda db_path, limit=None: [{"message_id": "<m@e.com>"}])
         scans = []
-        monkeypatch.setattr(
-            email_reader, "scan_emails", lambda emails, keywords_file, db_path=None: scans.append(emails)
-        )
+        monkeypatch.setattr(email_reader, "scan_emails", lambda emails, db_path=None: scans.append(emails))
         run_initial_fetch(db_path="/db")
         assert len(scans) == 1
 

@@ -5,7 +5,7 @@ import threading
 import time
 
 from src.scripts import cache, email_reader
-from src.scripts.constants import DB_PATH, KEYWORDS_FILE
+from src.scripts.constants import DB_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -230,7 +230,7 @@ def run_initial_fetch(db_path=None, on_refresh=None):
 
         emails = cache.read_emails(db_path)
         if emails:
-            email_reader.scan_emails(emails, KEYWORDS_FILE, db_path)
+            email_reader.scan_emails(emails, db_path)
 
         logger.info(
             "Initial fetch complete: %d new, %d existing",

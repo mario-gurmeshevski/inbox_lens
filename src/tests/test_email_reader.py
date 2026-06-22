@@ -4,6 +4,8 @@ from email import message_from_string
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+import pytest
+
 from src.scripts import email_reader
 
 
@@ -242,30 +244,67 @@ class TestParseListFolderName:
 
 
 class TestLoadKeywords:
-    def test_loads_valid_json(self, tmp_path):
-        kw_file = tmp_path / "keywords.json"
-        kw_file.write_text(json.dumps({"categories": {"5": ["test"]}}))
-        result = email_reader.load_keywords(str(kw_file))
+    def test_loads_stored_categories(self, tmp_db):
+        email_reader.save_keywords({"5": ["test"]}, tmp_db)
+        result = email_reader.load_keywords(tmp_db)
         assert "5" in result
         assert "test" in result["5"]
 
-    def test_returns_empty_for_missing_file(self):
-        result = email_reader.load_keywords("/nonexistent/path/keywords.json")
-        assert result == {}
+    def test_seeds_from_keywords_json_when_present(self, tmp_db, tmp_path, monkeypatch):
+        from src.scripts.email_reader import keywords as kw_mod
 
-    def test_returns_empty_for_invalid_json(self, tmp_path):
-        bad_file = tmp_path / "bad.json"
-        bad_file.write_text("not valid json {{{")
-        result = email_reader.load_keywords(str(bad_file))
-        assert result == {}
+        kw_file = tmp_path / "keywords.json"
+        kw_file.write_text(json.dumps({"categories": {"9": ["urgent"]}}))
+        monkeypatch.setattr(kw_mod, "KEYWORDS_FILE", str(kw_file))
+        monkeypatch.setattr(kw_mod, "KEYWORDS_EXAMPLE_FILE", "/nonexistent/example.json")
 
-    def test_auto_creates_from_example_when_missing(self, tmp_path):
+        result = email_reader.load_keywords(tmp_db)
+        assert result == {"9": ["urgent"]}
+
+    def test_seeds_from_example_when_no_keywords_json(self, tmp_db, tmp_path, monkeypatch):
+        from src.scripts.email_reader import keywords as kw_mod
+
         example = tmp_path / "keywords.example.json"
         example.write_text(json.dumps({"categories": {"8": ["invoice"]}}))
-        kw_file = tmp_path / "keywords.json"
-        result = email_reader.load_keywords(str(kw_file))
+        monkeypatch.setattr(kw_mod, "KEYWORDS_FILE", "/nonexistent/keywords.json")
+        monkeypatch.setattr(kw_mod, "KEYWORDS_EXAMPLE_FILE", str(example))
+
+        result = email_reader.load_keywords(tmp_db)
         assert "8" in result and "invoice" in result["8"]
-        assert kw_file.exists()
+
+    def test_prefers_keywords_json_over_example(self, tmp_db, tmp_path, monkeypatch):
+        from src.scripts.email_reader import keywords as kw_mod
+
+        kw_file = tmp_path / "keywords.json"
+        kw_file.write_text(json.dumps({"categories": {"7": ["from-file"]}}))
+        example = tmp_path / "keywords.example.json"
+        example.write_text(json.dumps({"categories": {"10": ["from-example"]}}))
+        monkeypatch.setattr(kw_mod, "KEYWORDS_FILE", str(kw_file))
+        monkeypatch.setattr(kw_mod, "KEYWORDS_EXAMPLE_FILE", str(example))
+
+        result = email_reader.load_keywords(tmp_db)
+        assert result == {"7": ["from-file"]}
+
+    def test_returns_empty_when_neither_exists(self, tmp_db, monkeypatch):
+        from src.scripts.email_reader import keywords as kw_mod
+
+        monkeypatch.setattr(kw_mod, "KEYWORDS_FILE", "/nonexistent/keywords.json")
+        monkeypatch.setattr(kw_mod, "KEYWORDS_EXAMPLE_FILE", "/nonexistent/example.json")
+        result = email_reader.load_keywords(tmp_db)
+        assert result == {}
+
+    def test_corrupt_stored_value_reseeds(self, tmp_db, tmp_path, monkeypatch):
+        from src.scripts import cache
+        from src.scripts.email_reader import keywords as kw_mod
+
+        kw_file = tmp_path / "keywords.json"
+        kw_file.write_text(json.dumps({"categories": {"10": ["urgent"]}}))
+        monkeypatch.setattr(kw_mod, "KEYWORDS_FILE", str(kw_file))
+        monkeypatch.setattr(kw_mod, "KEYWORDS_EXAMPLE_FILE", "/nonexistent/example.json")
+
+        cache.save_setting("keywords", "not valid json {{{", tmp_db)
+        result = email_reader.load_keywords(tmp_db)
+        assert result and "10" in result
 
 
 class TestBuildCompiledPatterns:
@@ -309,51 +348,121 @@ class TestChunkList:
 
 
 class TestLoadKeywordsSeeding:
-    def test_seeding_failure_returns_empty(self, tmp_path, monkeypatch):
+    def test_seeded_value_persists_for_subsequent_loads(self, tmp_db, tmp_path, monkeypatch):
         from src.scripts.email_reader import keywords as kw_mod
 
-        example = tmp_path / "keywords.example.json"
-        example.write_text(json.dumps({"categories": {"8": ["invoice"]}}))
         kw_file = tmp_path / "keywords.json"
+        kw_file.write_text(json.dumps({"categories": {"8": ["invoice"]}}))
+        monkeypatch.setattr(kw_mod, "KEYWORDS_FILE", str(kw_file))
+        monkeypatch.setattr(kw_mod, "KEYWORDS_EXAMPLE_FILE", "/nonexistent/example.json")
+
+        result = email_reader.load_keywords(tmp_db)
+        assert "8" in result and "invoice" in result["8"]
+
+        # Even with both source files gone, the DB persists the value.
+        monkeypatch.setattr(kw_mod, "KEYWORDS_FILE", "/nonexistent/keywords.json")
+        again = email_reader.load_keywords(tmp_db)
+        assert "8" in again and "invoice" in again["8"]
+
+    def test_seeding_failure_returns_empty(self, tmp_db, monkeypatch):
+        from src.scripts.email_reader import keywords as kw_mod
 
         def boom(*args, **kwargs):
             raise OSError("disk full")
 
-        monkeypatch.setattr(kw_mod.Path, "write_text", boom)
-        result = kw_mod.load_keywords(str(kw_file))
+        monkeypatch.setattr(kw_mod, "KEYWORDS_FILE", "/nonexistent/keywords.json")
+        monkeypatch.setattr(kw_mod, "KEYWORDS_EXAMPLE_FILE", "/nonexistent/example.json")
+        monkeypatch.setattr(kw_mod, "save_keywords", boom)
+        result = kw_mod.load_keywords(tmp_db)
         assert result == {}
-        assert not kw_file.exists()
-
-    def test_seeding_returns_empty_when_no_example(self, tmp_path):
-        kw_file = tmp_path / "absent.json"
-        assert email_reader.load_keywords(str(kw_file)) == {}
-        assert not kw_file.exists()
 
 
 class TestScanEmailsIntegration:
-    def test_pipeline_finds_matches(self, tmp_path, tmp_db):
-        kw_file = tmp_path / "keywords.json"
-        kw_file.write_text(json.dumps({"categories": {"10": ["important"], "7": ["mistake"]}}))
+    def test_pipeline_finds_matches(self, tmp_db):
+        email_reader.save_keywords({"10": ["important"], "7": ["mistake"]}, tmp_db)
 
         emails = [
             {"message_id": "<a@e.com>", "subject": "important!", "body": "hello"},
             {"message_id": "<b@e.com>", "subject": "normal", "body": "nothing"},
         ]
-        result = email_reader.scan_emails(emails, str(kw_file), tmp_db)
+        result = email_reader.scan_emails(emails, tmp_db)
         assert result["scanned"] == 2
         assert result["emails_with_matches"]
 
-    def test_pipeline_with_missing_keywords_file(self, tmp_db):
+    def test_pipeline_with_no_keywords(self, tmp_db, monkeypatch):
+        from src.scripts.email_reader import keywords as kw_mod
+
+        monkeypatch.setattr(kw_mod, "KEYWORDS_EXAMPLE_FILE", "/nonexistent/keywords.example.json")
+        email_reader.load_keywords(tmp_db)
         emails = [{"message_id": "<x@e.com>", "subject": "important", "body": "test"}]
-        result = email_reader.scan_emails(emails, "/nonexistent/kw.json", tmp_db)
+        result = email_reader.scan_emails(emails, tmp_db)
         assert result["scanned"] == 1
         assert not result["emails_with_matches"]
 
-    def test_pipeline_initializes_db(self, tmp_path, tmp_db):
-        kw_file = tmp_path / "k.json"
-        kw_file.write_text(json.dumps({"categories": {}}))
-        result = email_reader.scan_emails([], str(kw_file), tmp_db)
+    def test_pipeline_initializes_db(self, tmp_db):
+        result = email_reader.scan_emails([], tmp_db)
         assert result["total"] == 0
+
+
+class TestSaveKeywords:
+    def test_validates_and_strips(self, tmp_db):
+        cleaned = email_reader.save_keywords({"8": ["  Invoice ", "invoice", ""]}, tmp_db)
+        assert cleaned == {"8": ["Invoice"]}
+        assert email_reader.load_keywords(tmp_db) == {"8": ["Invoice"]}
+
+    def test_rejects_non_dict(self, tmp_db):
+        with pytest.raises(ValueError):
+            email_reader.save_keywords([("8", ["x"])], tmp_db)
+
+    def test_rejects_non_integer_level(self, tmp_db):
+        with pytest.raises(ValueError):
+            email_reader.save_keywords({"high": ["x"]}, tmp_db)
+
+    def test_rejects_level_below_one(self, tmp_db):
+        with pytest.raises(ValueError):
+            email_reader.save_keywords({"0": ["x"]}, tmp_db)
+
+    def test_rejects_non_list_words(self, tmp_db):
+        with pytest.raises(ValueError):
+            email_reader.save_keywords({"8": "invoice"}, tmp_db)
+
+    def test_accepts_arbitrary_high_level(self, tmp_db):
+        cleaned = email_reader.save_keywords({"11": ["critical"]}, tmp_db)
+        assert cleaned == {"11": ["critical"]}
+
+
+class TestRescanAll:
+    def test_recomputes_already_checked_rows(self, tmp_db):
+        from src.scripts import cache
+
+        email_reader.save_keywords({"10": ["urgent"]}, tmp_db)
+        emails = [
+            {"message_id": "<a@e.com>", "subject": "urgent fix", "body": "now"},
+            {"message_id": "<b@e.com>", "subject": "hello", "body": "nothing"},
+        ]
+        cache.save_headers_batch(emails, tmp_db)
+        cache.update_bodies_batch([(e["message_id"], e["body"]) for e in emails], tmp_db)
+        with cache._connect(tmp_db) as conn:
+            conn.execute("UPDATE emails SET status = 'checked', category = 'unclassified', keyword_matches = NULL")
+
+        patterns = email_reader.build_compiled_patterns(email_reader.load_keywords(tmp_db))
+        result = cache.rescan_all(tmp_db, patterns)
+        assert result["scanned"] == 2
+
+        with cache._connect(tmp_db) as conn:
+            rows = {
+                r["message_id"]: (r["category"], r["keyword_matches"])
+                for r in conn.execute("SELECT message_id, category, keyword_matches FROM emails")
+            }
+        assert rows["<a@e.com>"][0] == "10"
+        assert rows["<b@e.com>"][0] == "unclassified"
+
+    def test_no_bodies_returns_zero(self, tmp_db):
+        from src.scripts import cache
+
+        cache.save_headers_batch([{"message_id": "<h@e.com>"}], tmp_db)  # headers only, no body
+        patterns = email_reader.build_compiled_patterns({"10": ["x"]})
+        assert cache.rescan_all(tmp_db, patterns) == {"scanned": 0}
 
 
 class TestGetTextBodyErrorPaths:

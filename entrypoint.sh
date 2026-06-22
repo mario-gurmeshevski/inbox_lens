@@ -3,11 +3,6 @@ set -e
 DATA_DIR="/app/src/data"
 mkdir -p "$DATA_DIR" 2>/dev/null || true
 
-KEYWORDS="$DATA_DIR/keywords.json"
-if [ ! -f "$KEYWORDS" ]; then
-    cp /app/src/data/keywords.example.json "$KEYWORDS" 2>/dev/null || true
-fi
-
 DB="$DATA_DIR/emails.db"
 HOST="0.0.0.0"
 if [ -d /shared ]; then

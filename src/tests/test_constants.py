@@ -9,6 +9,12 @@ class TestConstants:
     def test_keywords_file_default(self):
         assert constants.KEYWORDS_FILE is not None
         assert isinstance(constants.KEYWORDS_FILE, str)
+        assert constants.KEYWORDS_FILE.endswith("keywords.json")
+
+    def test_keywords_example_file_default(self):
+        assert constants.KEYWORDS_EXAMPLE_FILE is not None
+        assert isinstance(constants.KEYWORDS_EXAMPLE_FILE, str)
+        assert constants.KEYWORDS_EXAMPLE_FILE.endswith("keywords.example.json")
 
     def test_secret_key_path_default(self):
         assert constants.SECRET_KEY_PATH is not None

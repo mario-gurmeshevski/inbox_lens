@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import socket
+import ssl
 import threading
 import time
 import urllib.parse
@@ -74,6 +75,23 @@ def is_newer(latest: str, current: str) -> bool:
 _latest_cache: dict = {"value": None, "at": 0.0}
 _cache_lock = threading.Lock()
 
+_ssl_context: ssl.SSLContext | None = None
+
+
+def _build_ssl_context() -> ssl.SSLContext:
+    global _ssl_context
+    if _ssl_context is not None:
+        return _ssl_context
+    ctx = ssl.create_default_context()
+    try:
+        import certifi
+
+        ctx.load_verify_locations(cafile=certifi.where())
+    except Exception:
+        logger.debug("certifi unavailable; falling back to system CA store")
+    _ssl_context = ctx
+    return ctx
+
 
 def fetch_latest_version(force: bool = False) -> str | None:
     now = time.monotonic()
@@ -89,7 +107,7 @@ def fetch_latest_version(force: bool = False) -> str | None:
                 "User-Agent": "inbox-lens-updater",
             },
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=10, context=_build_ssl_context()) as resp:
             tags = json.loads(resp.read().decode("utf-8"))
         if not isinstance(tags, list) or not tags:
             return None

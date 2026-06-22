@@ -31,6 +31,13 @@
           <span class="nav-label">Emails</span>
         </a>
         <a
+          href="/keywords"
+          class="{% if '/keywords' in request.url.path %}active{% endif %}"
+        >
+          <i data-lucide="tags" style="width: 16px; height: 16px"></i>
+          <span class="nav-label">Keywords</span>
+        </a>
+        <a
           href="/account"
           class="{% if request.url.path == '/account' %}active{% endif %}"
         >
@@ -95,6 +102,75 @@
           .setAttribute("data-lucide", show ? "eye-off" : "eye");
         lucide.createIcons();
       }
+
+      function kwEdit(span) {
+        const chip = span.closest(".kw-chip");
+        if (!chip) return;
+        span.style.display = "none";
+        const form = chip.querySelector(".kw-edit-form");
+        if (!form) return;
+        form.classList.add("is-editing");
+        const input = form.querySelector(".kw-edit-input");
+        input.setAttribute(
+          "size",
+          Math.max(4, Math.min(20, input.value.length + 1))
+        );
+        input.focus();
+        const val = input.value.length;
+        input.setSelectionRange(val, val);
+      }
+
+      function kwEditKey(e) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.target.blur();
+        }
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.target.closest("form").requestSubmit();
+        }
+      }
+
+      function kwCancelEdit(input) {
+        const form = input.closest(".kw-edit-form");
+        if (!form) return;
+        const old = form.querySelector('input[name="old_word"]');
+        if (old) input.value = old.value;
+        form.classList.remove("is-editing");
+        const chip = form.closest(".kw-chip");
+        const span = chip && chip.querySelector(".kw-word");
+        if (span) span.style.display = "";
+      }
+
+      (function () {
+        var fileInput = document.getElementById("kw-import-file");
+        if (!fileInput) return;
+        var form = fileInput.closest(".kw-import-form");
+        var label = fileInput.parentElement.querySelector(".kw-file-name");
+
+        fileInput.addEventListener("change", function () {
+          var name = fileInput.files && fileInput.files[0]
+            ? fileInput.files[0].name
+            : "No file chosen";
+          if (label) {
+            label.textContent = name;
+            label.style.color = "";
+          }
+        });
+
+        if (form) {
+          form.addEventListener("submit", function (e) {
+            if (!fileInput.files || !fileInput.files[0]) {
+              e.preventDefault();
+              if (label) {
+                label.textContent = "Please choose a file first.";
+                label.style.color = "var(--danger, #dc2626)";
+              }
+              fileInput.focus();
+            }
+          });
+        }
+      })();
 
       (function () {
         var sseRetries = 0;

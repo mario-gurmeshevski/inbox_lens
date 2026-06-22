@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Query
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from email.utils import parsedate_to_datetime
@@ -44,6 +44,7 @@ async def lifespan(app: FastAPI):
     cache._ensure_secret_key()
     cache._ensure_session_key()
     cache.init_db(DB_PATH)
+    email_reader.load_keywords(DB_PATH)
 
     if cache.has_email_credentials(DB_PATH):
         _monitor = idle_monitor.IdleMonitor(
@@ -75,6 +76,7 @@ app = FastAPI(title="Email Reader Dashboard", lifespan=lifespan)
 _WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 templates = Jinja2Templates(directory=str(_WEB_DIR / "templates"))
 templates.env.filters["format_date"] = lambda d: _format_date(d)
+templates.env.filters["priority_bucket"] = lambda lvl: _priority_bucket(lvl) or "none"
 app.mount("/static", StaticFiles(directory=str(_WEB_DIR / "static")), name="static")
 
 
@@ -574,6 +576,187 @@ async def settings_api_key_revoke(request: Request):
     return templates.TemplateResponse(
         request, "settings.html", _settings_context(DB_PATH, api_key_msg="API key revoked.")
     )
+
+
+def _level_sort_key(level):
+    try:
+        return (0, int(level))
+    except (ValueError, TypeError):
+        return (1, str(level))
+
+
+def _keywords_context(db_path: str, msg: str | None = None, msg_ok: bool = False) -> dict:
+    categories = email_reader.load_keywords(db_path)
+    levels = sorted(categories.keys(), key=_level_sort_key, reverse=True)
+    return {
+        "categories": categories,
+        "levels": levels,
+        "kw_msg": msg,
+        "kw_msg_ok": msg_ok,
+    }
+
+
+def _keywords_partial(request: Request, db_path: str, msg: str | None = None, msg_ok: bool = False):
+    return templates.TemplateResponse(
+        request, "partials/keywords.html", _keywords_context(db_path, msg=msg, msg_ok=msg_ok)
+    )
+
+
+@app.get("/keywords", response_class=HTMLResponse)
+async def keywords_page(request: Request):
+    import_status = request.query_params.get("import")
+    msg: str | None = None
+    msg_ok = False
+    if import_status == "ok":
+        msg = "Keywords imported successfully."
+        msg_ok = True
+    elif import_status == "invalid":
+        msg = 'Import failed: file must be valid JSON shaped as {"categories": {"level": ["words"]}}.'
+    elif import_status == "error":
+        msg = "Import failed: no file selected."
+    return templates.TemplateResponse(request, "keywords.html", _keywords_context(DB_PATH, msg=msg, msg_ok=msg_ok))
+
+
+@app.post("/keywords/word/add", response_class=HTMLResponse)
+async def keywords_word_add(request: Request):
+    form = await request.form()
+    level = str(form.get("level", "")).strip()
+    word = str(form.get("word", "")).strip()
+    categories = email_reader.load_keywords(DB_PATH)
+    msg, ok = None, False
+    if not word:
+        msg = "Word cannot be empty."
+    elif word.lower() in {w.lower() for w in categories.get(level, [])}:
+        msg = f"“{word}” already exists in priority {level}."
+    else:
+        categories.setdefault(level, []).append(word)
+        try:
+            email_reader.save_keywords(categories, DB_PATH)
+            ok = True
+        except ValueError as e:
+            msg = str(e)
+    return _keywords_partial(request, DB_PATH, msg=msg, msg_ok=ok)
+
+
+@app.post("/keywords/word/edit", response_class=HTMLResponse)
+async def keywords_word_edit(request: Request):
+    form = await request.form()
+    level = str(form.get("level", "")).strip()
+    old_word = str(form.get("old_word", "")).strip()
+    new_word = str(form.get("new_word", "")).strip()
+    categories = email_reader.load_keywords(DB_PATH)
+    msg, ok = None, False
+    words = categories.get(level, [])
+    if not new_word:
+        msg = "Word cannot be empty."
+    elif old_word not in words:
+        msg = "That word no longer exists."
+    elif new_word.lower() in {w.lower() for w in words if w != old_word}:
+        msg = f"“{new_word}” already exists in priority {level}."
+    else:
+        categories[level] = [new_word if w == old_word else w for w in words]
+        try:
+            email_reader.save_keywords(categories, DB_PATH)
+            ok = True
+        except ValueError as e:
+            msg = str(e)
+    return _keywords_partial(request, DB_PATH, msg=msg, msg_ok=ok)
+
+
+@app.post("/keywords/word/remove", response_class=HTMLResponse)
+async def keywords_word_remove(request: Request):
+    form = await request.form()
+    level = str(form.get("level", "")).strip()
+    word = str(form.get("word", "")).strip()
+    categories = email_reader.load_keywords(DB_PATH)
+    words = categories.get(level, [])
+    msg, ok = None, False
+    if word in words:
+        categories[level] = [w for w in words if w != word]
+        try:
+            email_reader.save_keywords(categories, DB_PATH)
+            ok = True
+        except ValueError as e:
+            msg = str(e)
+    return _keywords_partial(request, DB_PATH, msg=msg, msg_ok=ok)
+
+
+@app.post("/keywords/category/add", response_class=HTMLResponse)
+async def keywords_category_add(request: Request):
+    form = await request.form()
+    level = str(form.get("level", "")).strip()
+    categories = email_reader.load_keywords(DB_PATH)
+    msg, ok = None, False
+    try:
+        n = int(level)
+    except ValueError:
+        msg = "Priority level must be an integer."
+        return _keywords_partial(request, DB_PATH, msg=msg, msg_ok=ok)
+    if n < 1:
+        msg = "Priority level must be >= 1."
+    elif str(n) in categories:
+        msg = f"Priority {n} already exists."
+    else:
+        categories[str(n)] = []
+        try:
+            email_reader.save_keywords(categories, DB_PATH)
+            ok = True
+        except ValueError as e:
+            msg = str(e)
+    return _keywords_partial(request, DB_PATH, msg=msg, msg_ok=ok)
+
+
+@app.post("/keywords/category/remove", response_class=HTMLResponse)
+async def keywords_category_remove(request: Request):
+    form = await request.form()
+    level = str(form.get("level", "")).strip()
+    categories = email_reader.load_keywords(DB_PATH)
+    msg, ok = None, False
+    if level in categories:
+        del categories[level]
+        try:
+            email_reader.save_keywords(categories, DB_PATH)
+            ok = True
+        except ValueError as e:
+            msg = str(e)
+    return _keywords_partial(request, DB_PATH, msg=msg, msg_ok=ok)
+
+
+@app.get("/keywords/export")
+async def keywords_export(request: Request):
+    categories = email_reader.load_keywords(DB_PATH)
+    payload = json.dumps({"categories": categories}, ensure_ascii=False, indent=2)
+    return Response(
+        content=payload,
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="keywords.json"'},
+    )
+
+
+@app.post("/keywords/import")
+async def keywords_import(request: Request):
+    form = await request.form()
+    upload = form.get("file")
+    if upload is None or not getattr(upload, "filename", ""):
+        return RedirectResponse("/keywords?import=error", status_code=303)
+    try:
+        data = json.loads(await upload.read())
+    except Exception:
+        return RedirectResponse("/keywords?import=invalid", status_code=303)
+    categories = data.get("categories", data) if isinstance(data, dict) else None
+    try:
+        email_reader.save_keywords(categories, DB_PATH)
+    except (ValueError, TypeError):
+        return RedirectResponse("/keywords?import=invalid", status_code=303)
+    return RedirectResponse("/keywords?import=ok", status_code=303)
+
+
+@app.post("/keywords/rescan", response_class=HTMLResponse)
+async def keywords_rescan(request: Request):
+    categories = email_reader.load_keywords(DB_PATH)
+    compiled = email_reader.build_compiled_patterns(categories)
+    result = cache.rescan_all(DB_PATH, compiled)
+    return _keywords_partial(request, DB_PATH, msg=f"Re-scanned {result['scanned']} cached email(s).", msg_ok=True)
 
 
 @app.get("/partials/update-banner", response_class=HTMLResponse)

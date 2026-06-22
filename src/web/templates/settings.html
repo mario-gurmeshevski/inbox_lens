@@ -11,20 +11,50 @@
   <div class="settings-row">
     <div class="settings-info">
       <div class="settings-label">
-        <i data-lucide="git-pull-request" style="width: 16px; height: 16px"></i>
+        <i data-lucide="refresh-cw" style="width: 16px; height: 16px"></i>
         Updates
       </div>
       <p class="settings-desc">
-        This instance is running outside Docker (version
-        <strong>{{ update.current_version }}</strong>). In-app updates are
-        unavailable. To update, submit a Pull Request at
-        <a
-          href="https://github.com/mario-gurmeshevski/inbox_lens"
-          target="_blank"
-          rel="noopener"
-          >github.com/mario-gurmeshevski/inbox_lens</a
-        >.
+        Current version: <strong>{{ update.current_version }}</strong>{% if
+        update.latest_version %} &middot; Latest:
+        <strong>{{ update.latest_version }}</strong>{% endif %}
       </p>
+      {% if update.update_error %}
+      <div class="status-box status-error" style="margin-top: 1rem">
+        <i
+          data-lucide="wifi-off"
+          style="width: 18px; height: 18px; flex-shrink: 0"
+        ></i>
+        <span>Couldn't reach the version source. Check your connection.</span>
+      </div>
+      {% elif update.update_available %}
+      <div class="status-box status-warning" style="margin-top: 1rem">
+        <i
+          data-lucide="arrow-up-circle"
+          style="width: 18px; height: 18px; flex-shrink: 0"
+        ></i>
+        <span>A new version is available.</span>
+      </div>
+      <div class="settings-hint" style="margin-top: 0.75rem">
+        <i
+          data-lucide="info"
+          style="width: 14px; height: 14px; flex-shrink: 0"
+        ></i>
+        <span>
+          Update from your checkout with:
+          <code>git pull && make install or ./commands.ps1 install .</code> then
+          restart the server.
+        </span>
+      </div>
+      {% else %}
+      <div class="status-box status-done" style="margin-top: 1rem">
+        <i
+          data-lucide="check-circle"
+          style="width: 18px; height: 18px; flex-shrink: 0"
+        ></i>
+        <span>You're up to date.</span>
+      </div>
+      {% endif %}
     </div>
   </div>
 </div>

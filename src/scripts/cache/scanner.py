@@ -119,3 +119,55 @@ def _scan_keywords(text: str, compiled_patterns: dict) -> dict:
         if found:
             matches[category] = list(dict.fromkeys(found))
     return matches
+
+
+def rescan_all(db_path: str, compiled_patterns: dict) -> dict:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT message_id_hash, subject, body FROM emails WHERE body IS NOT NULL AND body != ''"
+        ).fetchall()
+
+    if not rows:
+        return {"scanned": 0}
+
+    items = [(r["message_id_hash"], f"{r['subject'] or ''} {r['body'] or ''}") for r in rows]
+
+    def _scan_one(item):
+        h, text = item
+        return h, _scan_keywords(text, compiled_patterns)
+
+    results: dict[str, dict] = {}
+    workers = min(4, len(items))
+    if workers <= 1:
+        for item in items:
+            h, matches = _scan_one(item)
+            results[h] = matches
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(_scan_one, item): item for item in items}
+            for future in as_completed(futures):
+                h, matches = future.result()
+                results[h] = matches
+
+    update_rows = []
+    scanned = 0
+    for h, matches in results.items():
+        scanned += 1
+        if matches:
+            highest = max(matches.keys(), key=lambda k: int(k) if str(k).isdigit() else 0)
+            keyword_json = json.dumps(matches, ensure_ascii=False)
+        else:
+            highest = "unclassified"
+            keyword_json = None
+        update_rows.append(("checked", highest, keyword_json, h))
+
+    if update_rows:
+        with _connect(db_path) as conn:
+            conn.executemany(
+                """UPDATE emails
+                   SET status = ?, category = ?, keyword_matches = ?
+                   WHERE message_id_hash = ?""",
+                update_rows,
+            )
+
+    return {"scanned": scanned}

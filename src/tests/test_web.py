@@ -146,11 +146,19 @@ class TestWebEndpoints:
             resp = client.get("/setup")
         assert resp.status_code == 200
 
-    def test_account_page_shows_email(self):
+    def test_account_page_redirects_to_dashboard(self):
         with patch.object(web, "DB_PATH", self.db_path):
             client = self._make_client()
-            resp = client.get("/account")
+            resp = client.get("/account", follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/"
+
+    def test_partial_account_shows_email(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/partials/account")
         assert resp.status_code == 200
+        assert "test@test.com" in resp.text
 
     def test_keywords_page_returns_200_and_seeds(self):
         with patch.object(web, "DB_PATH", self.db_path):

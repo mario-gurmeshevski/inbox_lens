@@ -30,20 +30,20 @@ DISMISSED_VERSION_KEY = "update_dismissed_version"
 
 def get_current_version() -> str:
     try:
+        pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        for line in pyproject.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("version"):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    try:
         from importlib.metadata import version as _v
 
         try:
             return _v("inbox-lens")
         except Exception:
             return _v("inbox_lens")
-    except Exception:
-        pass
-    try:
-        pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
-        for line in pyproject.read_text().splitlines():
-            line = line.strip()
-            if line.startswith("version"):
-                return line.split("=", 1)[1].strip().strip('"').strip("'")
     except Exception:
         pass
     return "0.0.0"

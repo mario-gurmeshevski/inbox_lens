@@ -1,0 +1,93 @@
+.filter-bar {
+  display: flex;
+  gap: 0.65rem;
+  align-items: center;
+  margin-bottom: 1.25rem;
+  flex-wrap: wrap;
+  padding: 1rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.filter-bar select,
+.filter-bar input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.5rem 0.85rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.88rem;
+  transition: var(--transition);
+  outline: none;
+}
+
+.filter-bar select:focus,
+.filter-bar input:focus {
+  border-color: var(--border-bright);
+}
+
+.filter-bar input {
+  flex: 1;
+  min-width: 200px;
+}
+
+.pagination {
+  display: flex;
+  justify-content: center;
+  gap: 0.4rem;
+  margin-top: 1.25rem;
+  align-items: center;
+}
+
+.pagination a,
+.pagination span {
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  color: var(--text-secondary);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 0.85rem;
+  transition: var(--transition);
+}
+
+.pagination a:hover {
+  background: var(--bg-surface);
+  border-color: var(--border-bright);
+  color: var(--text);
+}
+
+.pagination .current {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .filter-bar {
+    flex-direction: column;
+  }
+  .filter-bar input {
+    min-width: 100%;
+    font-size: 16px;
+  }
+  .filter-bar select {
+    font-size: 16px;
+  }
+
+  .pagination a,
+  .pagination span {
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .pagination {
+    gap: 0.25rem;
+    flex-wrap: wrap;
+  }
+}

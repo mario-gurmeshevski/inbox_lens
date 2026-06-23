@@ -1,4 +1,6 @@
-{% extends "base.html" %} {% block title %}Priority Keywords — Email Reader
+{% extends "base.html" %} {% block title %}Priority Keywords — Email Reader {%
+endblock %} {% block styles %}
+<link rel="stylesheet" href="/static/keywords.css" />
 {% endblock %} {% block content %}
 <h1>Priority Keywords</h1>
 <p class="settings-desc" style="margin-top: 0.25rem">
@@ -7,7 +9,11 @@
 </p>
 
 <div class="kw-toolbar">
-  <form hx-post="/keywords/rescan" hx-target="#keywords-cards" hx-swap="innerHTML">
+  <form
+    hx-post="/keywords/rescan"
+    hx-target="#keywords-cards"
+    hx-swap="innerHTML"
+  >
     <button type="submit" class="btn">
       <i data-lucide="refresh-cw" style="width: 16px; height: 16px"></i>
       Re-scan cached emails

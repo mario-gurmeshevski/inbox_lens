@@ -7,7 +7,11 @@
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <script src="https://unpkg.com/htmx.org/dist/ext/sse.js"></script>
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <link rel="stylesheet" href="/static/theme.css" />
     <link rel="stylesheet" href="/static/style.css" />
+    <link rel="stylesheet" href="/static/setup.css" />
+    <link rel="stylesheet" href="/static/account.css" />
+    {% block styles %}{% endblock %}
   </head>
   <body>
     <nav>
@@ -37,13 +41,19 @@
           <i data-lucide="tags" style="width: 16px; height: 16px"></i>
           <span class="nav-label">Keywords</span>
         </a>
-        <a
-          href="/account"
-          class="{% if request.url.path == '/account' %}active{% endif %}"
+        <button
+          type="button"
+          class="nav-link-btn account-nav-btn"
+          aria-label="Account"
+          title="Account"
+          hx-get="/partials/account"
+          hx-target="#account-modal-body"
+          hx-swap="innerHTML"
+          onclick="openAccountModal()"
         >
           <i data-lucide="user" style="width: 16px; height: 16px"></i>
           <span class="nav-label">Account</span>
-        </a>
+        </button>
         <a
           href="/settings"
           class="nav-spacer {% if request.url.path == '/settings' %}active{% endif %}"
@@ -87,118 +97,27 @@
       </div>
       {% block content %}{% endblock %}
     </div>
-    <script>
-      lucide.createIcons();
-      document.body.addEventListener("htmx:afterSwap", function () {
-        lucide.createIcons();
-      });
 
-      function togglePassword(id) {
-        const i = document.getElementById(id);
-        const show = i.type === "password";
-        i.type = show ? "text" : "password";
-        i.parentElement
-          .querySelector(".password-toggle i")
-          .setAttribute("data-lucide", show ? "eye-off" : "eye");
-        lucide.createIcons();
-      }
+    <div id="account-modal" class="account-modal" hidden>
+      <div class="account-modal-backdrop" onclick="closeAccountModal()"></div>
+      <div
+        class="account-modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Email Account"
+      >
+        <button
+          type="button"
+          class="account-modal-close"
+          aria-label="Close"
+          onclick="closeAccountModal()"
+        >
+          <i data-lucide="x" style="width: 18px; height: 18px"></i>
+        </button>
+        <div id="account-modal-body"></div>
+      </div>
+    </div>
 
-      function kwEdit(span) {
-        const chip = span.closest(".kw-chip");
-        if (!chip) return;
-        span.style.display = "none";
-        const form = chip.querySelector(".kw-edit-form");
-        if (!form) return;
-        form.classList.add("is-editing");
-        const input = form.querySelector(".kw-edit-input");
-        input.setAttribute(
-          "size",
-          Math.max(4, Math.min(20, input.value.length + 1))
-        );
-        input.focus();
-        const val = input.value.length;
-        input.setSelectionRange(val, val);
-      }
-
-      function kwEditKey(e) {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          e.target.blur();
-        }
-        if (e.key === "Enter") {
-          e.preventDefault();
-          e.target.closest("form").requestSubmit();
-        }
-      }
-
-      function kwCancelEdit(input) {
-        const form = input.closest(".kw-edit-form");
-        if (!form) return;
-        const old = form.querySelector('input[name="old_word"]');
-        if (old) input.value = old.value;
-        form.classList.remove("is-editing");
-        const chip = form.closest(".kw-chip");
-        const span = chip && chip.querySelector(".kw-word");
-        if (span) span.style.display = "";
-      }
-
-      (function () {
-        var fileInput = document.getElementById("kw-import-file");
-        if (!fileInput) return;
-        var form = fileInput.closest(".kw-import-form");
-        var label = fileInput.parentElement.querySelector(".kw-file-name");
-
-        fileInput.addEventListener("change", function () {
-          var name = fileInput.files && fileInput.files[0]
-            ? fileInput.files[0].name
-            : "No file chosen";
-          if (label) {
-            label.textContent = name;
-            label.style.color = "";
-          }
-        });
-
-        if (form) {
-          form.addEventListener("submit", function (e) {
-            if (!fileInput.files || !fileInput.files[0]) {
-              e.preventDefault();
-              if (label) {
-                label.textContent = "Please choose a file first.";
-                label.style.color = "var(--danger, #dc2626)";
-              }
-              fileInput.focus();
-            }
-          });
-        }
-      })();
-
-      (function () {
-        var sseRetries = 0;
-        var maxRetries = 10;
-
-        function reconnectSSE() {
-          var container = document.querySelector("[sse-connect]");
-          if (!container) container = document.querySelector(".container");
-          if (container) {
-            sseRetries++;
-            console.log("SSE reconnecting... attempt " + sseRetries);
-            htmx.removeExtension("sse");
-            htmx.defineExtension("sse", htmx._sseExtension);
-            htmx.process(container);
-          }
-        }
-
-        document.body.addEventListener("htmx:sseError", function (e) {
-          if (sseRetries < maxRetries) {
-            var delay = Math.min(5000 * (sseRetries + 1), 30000);
-            setTimeout(reconnectSSE, delay);
-          }
-        });
-
-        document.body.addEventListener("htmx:sseOpen", function () {
-          sseRetries = 0;
-        });
-      })();
-    </script>
+    <script src="/static/js/base.js"></script>
   </body>
 </html>

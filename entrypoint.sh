@@ -2,15 +2,16 @@
 set -e
 DATA_DIR="/app/src/data"
 mkdir -p "$DATA_DIR" 2>/dev/null || true
+chown -R appuser:appuser "$DATA_DIR" 2>/dev/null || true
 
 DB="$DATA_DIR/emails.db"
 HOST="0.0.0.0"
 if [ -d /shared ]; then
-    exec uvicorn src.scripts.web:app --host "$HOST" --port 8000
+    exec gosu appuser uvicorn src.scripts.web:app --host "$HOST" --port 8000
 fi
 
 if [ -f "$DB" ]; then
-    VAL=$(python3 -c "
+    VAL=$(gosu appuser python3 -c "
 import sqlite3
 try:
     c = sqlite3.connect('$DB')
@@ -30,4 +31,4 @@ except Exception:
     fi
 fi
 
-exec uvicorn src.scripts.web:app --host "$HOST" --port 8000
+exec gosu appuser uvicorn src.scripts.web:app --host "$HOST" --port 8000

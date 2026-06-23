@@ -5,7 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Dashboard Setup — Email Reader</title>
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <link rel="stylesheet" href="/static/theme.css" />
     <link rel="stylesheet" href="/static/style.css" />
+    <link rel="stylesheet" href="/static/setup.css" />
   </head>
   <body>
     <div class="setup-container">
@@ -128,17 +130,6 @@
         {% endif %}
       </div>
     </div>
-    <script>
-      lucide.createIcons();
-      function togglePassword(id) {
-        const i = document.getElementById(id);
-        const show = i.type === "password";
-        i.type = show ? "text" : "password";
-        i.parentElement
-          .querySelector(".password-toggle i")
-          .setAttribute("data-lucide", show ? "eye-off" : "eye");
-        lucide.createIcons();
-      }
-    </script>
+    <script src="/static/js/base.js"></script>
   </body>
 </html>

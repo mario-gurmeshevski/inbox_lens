@@ -1,0 +1,50 @@
+<div>
+  <div class="account-modal-header">
+    <i
+      data-lucide="user"
+      style="width: 28px; height: 28px; color: var(--accent)"
+    ></i>
+    <h2>Email Account</h2>
+    <p>Your connected email account.</p>
+  </div>
+
+  <div class="account-info">
+    <div class="account-field">
+      <span class="account-label">Email</span>
+      <span class="account-value">{{ email_user }}</span>
+    </div>
+    <div class="account-field">
+      <span class="account-label">IMAP Server</span>
+      <span class="account-value">{{ imap_server }}</span>
+    </div>
+    <div class="account-field">
+      <span class="account-label">Password</span>
+      <span class="account-value">{{ masked_pass }}</span>
+    </div>
+  </div>
+
+  <div class="account-actions">
+    <button
+      type="button"
+      class="setup-btn secondary"
+      onclick="closeAccountModal()"
+    >
+      <i data-lucide="x" style="width: 16px; height: 16px"></i>
+      Close
+    </button>
+    <form
+      method="post"
+      action="/account/disconnect"
+      onsubmit="
+        return confirm(
+          'Are you sure? This will remove your email credentials.',
+        );
+      "
+    >
+      <button type="submit" class="setup-btn danger">
+        <i data-lucide="log-out" style="width: 16px; height: 16px"></i>
+        Disconnect
+      </button>
+    </form>
+  </div>
+</div>

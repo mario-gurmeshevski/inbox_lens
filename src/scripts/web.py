@@ -77,6 +77,7 @@ _WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 templates = Jinja2Templates(directory=str(_WEB_DIR / "templates"))
 templates.env.filters["format_date"] = lambda d: _format_date(d)
 templates.env.filters["priority_bucket"] = lambda lvl: _priority_bucket(lvl) or "none"
+app.mount("/static/js", StaticFiles(directory=str(_WEB_DIR / "js")), name="js")
 app.mount("/static", StaticFiles(directory=str(_WEB_DIR / "static")), name="static")
 
 
@@ -438,22 +439,29 @@ async def logout_route(request: Request):
     return RedirectResponse("/login", status_code=303)
 
 
+def _account_context(db_path: str) -> dict:
+    email_user, email_pass = cache.get_email_credentials(db_path)
+    saved_imap = cache.get_setting("imap_server", db_path) or IMAP_SERVER
+    masked_pass = (email_pass[:4] + "*" * (len(email_pass) - 4)) if email_pass and len(email_pass) > 4 else "****"
+    return {
+        "email_user": email_user,
+        "imap_server": saved_imap,
+        "masked_pass": masked_pass,
+    }
+
+
 @app.get("/account", response_class=HTMLResponse)
 async def account_page(request: Request):
-    email_user, email_pass = cache.get_email_credentials(DB_PATH)
-    if not email_user:
-        return RedirectResponse("/setup", status_code=303)
-    saved_imap = cache.get_setting("imap_server", DB_PATH) or IMAP_SERVER
-    masked_pass = (email_pass[:4] + "*" * (len(email_pass) - 4)) if email_pass and len(email_pass) > 4 else "****"
-    return templates.TemplateResponse(
-        request,
-        "account.html",
-        {
-            "email_user": email_user,
-            "imap_server": saved_imap,
-            "masked_pass": masked_pass,
-        },
-    )
+    if not cache.has_email_credentials(DB_PATH):
+        return RedirectResponse("/setup-dashboard", status_code=303)
+    return RedirectResponse("/", status_code=303)
+
+
+@app.get("/partials/account", response_class=HTMLResponse)
+async def partial_account(request: Request):
+    if not cache.has_email_credentials(DB_PATH):
+        return RedirectResponse("/setup-dashboard", status_code=303)
+    return templates.TemplateResponse(request, "partials/account.html", _account_context(DB_PATH))
 
 
 @app.post("/account/disconnect")

@@ -1,5 +1,8 @@
 {% extends "base.html" %} {% block title %}Settings — Email Reader{% endblock %}
-{% block content %}
+{% block styles %}
+<link rel="stylesheet" href="/static/setup.css" />
+<link rel="stylesheet" href="/static/settings.css" />
+{% endblock %} {% block content %}
 <h1>Settings</h1>
 
 {% if is_docker %}
@@ -118,7 +121,7 @@
       <button
         type="button"
         class="btn btn-sm"
-        onclick="navigator.clipboard.writeText('http://{{ host_ip }}:{{ port }}')"
+        onclick="copyToClipboard(this, 'http://{{ host_ip }}:{{ port }}')"
       >
         <i data-lucide="copy" style="width: 14px; height: 14px"></i>
         Copy
@@ -142,7 +145,7 @@
       <button
         type="button"
         class="btn btn-sm"
-        onclick="navigator.clipboard.writeText('http://{{ ip }}:{{ port }}')"
+        onclick="copyToClipboard(this, 'http://{{ ip }}:{{ port }}')"
       >
         <i data-lucide="copy" style="width: 14px; height: 14px"></i>
         Copy
@@ -312,7 +315,7 @@
     <button
       type="button"
       class="btn btn-sm"
-      onclick="navigator.clipboard.writeText('{{ new_api_key }}')"
+      onclick="copyToClipboard(this, '{{ new_api_key }}')"
     >
       <i data-lucide="copy" style="width: 14px; height: 14px"></i>
       Copy

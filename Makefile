@@ -4,6 +4,7 @@ PYTHON ?= python3
 VENV := .venv
 VENV_PIP := $(VENV)/bin/pip
 VENV_PYTHON := $(VENV)/bin/python
+DJLINT := $(VENV)/bin/djlint
 -include .env
 WEB_HOST ?= 0.0.0.0
 WEB_PORT ?= 8000
@@ -33,9 +34,11 @@ test-cov: dev-install
 
 lint: dev-install
 	$(VENV_PYTHON) -m ruff check src/
+	$(DJLINT) --check src/web/templates
 
 format: dev-install
 	$(VENV_PYTHON) -m ruff format src/
+	$(DJLINT) --reformat src/web/templates
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +
@@ -86,6 +89,6 @@ tailscale-ip:
 tailscale-logout:
 	-docker compose $(COMPOSE_FILES_TS) exec tailscale tailscale logout
 
-purge: tailscale-logout reset
+purge: reset tailscale-logout
 	docker compose $(COMPOSE_FILES_TS) down --rmi all --volumes --remove-orphans
 	-rm -rf tailscale-state

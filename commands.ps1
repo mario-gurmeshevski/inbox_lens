@@ -18,8 +18,8 @@ if (-not $Task) {
     Write-Host "  web              Run the web server"
     Write-Host "  test             Run tests"
     Write-Host "  test-cov         Run tests with coverage"
-    Write-Host "  lint             Run linter"
-    Write-Host "  format         Format Python code (ruff format)"
+    Write-Host "  lint             Run linters (Ruff for Python, djlint for templates)"
+    Write-Host "  format           Format Python (Ruff) and templates (djlint)"
     Write-Host "  clean            Remove caches and compiled files"
     Write-Host "  reset            Clean + remove DB and secret key"
     Write-Host "  up               Start Docker Compose (auto-detect host IP)"
@@ -39,6 +39,7 @@ $PYTHON = "python"
 $VENV = ".venv"
 $VENV_PYTHON = "$VENV\Scripts\python.exe"
 $VENV_PIP = "$VENV\Scripts\pip.exe"
+$DJLINT = "$VENV\Scripts\djlint.exe"
 $COMPOSE_FILES_TS = @("-f", "docker-compose.yaml", "-f", "docker-compose.tailscale.yaml")
 
 $WEB_HOST = if ($env:WEB_HOST) { $env:WEB_HOST } else { "0.0.0.0" }
@@ -91,8 +92,14 @@ switch ($Task) {
     "web" { & $VENV_PYTHON -m uvicorn src.scripts.web:app --host $WEB_HOST --port $WEB_PORT --reload }
     "test" { & $VENV_PYTHON -m pytest src/tests/ -v }
     "test-cov" { & $VENV_PYTHON -m pytest src/tests/ --cov=src/scripts --cov-report=term-missing }
-    "lint" { & $VENV_PYTHON -m ruff check src/ }
-    "format" { & $VENV_PYTHON -m ruff format src/ }
+    "lint" {
+        & $VENV_PYTHON -m ruff check src/
+        & $DJLINT --check src/web/templates
+    }
+    "format" {
+        & $VENV_PYTHON -m ruff format src/
+        & $DJLINT --reformat src/web/templates
+    }
 
     "clean" {
         Invoke-Clean

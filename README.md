@@ -16,6 +16,7 @@ Fetch emails from a Gmail inbox via IMAP, cache them in a local SQLite database,
 - [Performance](#performance)
 - [Database](#database)
 - [Commands](#commands)
+- [Contributing](#contributing)
 - [License](#license)
 
 ## Prerequisites
@@ -102,7 +103,7 @@ Fetch emails from a Gmail inbox via IMAP, cache them in a local SQLite database,
 
 ## Testing
 
-The project includes 497 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
+The project includes 513 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
 
 ```bash
 
@@ -118,9 +119,9 @@ make test-cov   # For Mac/Linux
 
 | File                   | Tests | Coverage                                                    |
 | ---------------------- | ----- | ----------------------------------------------------------- |
-| `test_cache.py`        | 73    | DB ops, hashing, scanning, search, threads                  |
-| `test_email_reader.py` | 71    | Parsing, body cleaning, thread extraction, keywords         |
-| `test_web.py`          | 108   | FastAPI endpoints, SSE, Tailscale, auth middleware, updates |
+| `test_cache.py`        | 78    | DB ops, hashing, scanning, search, threads                  |
+| `test_email_reader.py` | 72    | Parsing, body cleaning, thread extraction, keywords         |
+| `test_web.py`          | 118   | FastAPI endpoints, SSE, Tailscale, auth middleware, updates |
 | `test_auth.py`         | 42    | Password hashing, API keys, sessions, rate limiting         |
 | `test_imap.py`         | 58    | IMAP helpers, connection, fetch, delete                     |
 | `test_idle_monitor.py` | 63    | IDLE loop, ConnectionLost, run_initial_fetch                |
@@ -492,7 +493,7 @@ By default, email fetching uses **8 parallel IMAP connections** (`MAX_WORKERS = 
 
 All emails are stored in a SQLite database (`emails.db` by default) with the following schema:
 
-- Each email is stored with its full metadata, body, keyword matches, thread info, and status (`fetched`, `checked`, or `headers_only`)
+- Each email is stored with its full metadata, body, keyword matches, thread info, and status (`fetched`, `checked`, `headers_only`, or `fetched_no_body`)
 
 - Keyword matches are stored as JSON for flexible querying
 
@@ -518,8 +519,8 @@ All emails are stored in a SQLite database (`emails.db` by default) with the fol
 | `make stop`             | Stop containers without removing them (preserves data)       |
 | `make start`            | Restart containers previously stopped with `make stop`       |
 | `make test`             | Run the test suite                                           |
-| `make lint`             | Run the linter                                               |
-| `make prettier`         | Format Python code (`ruff format`)                           |
+| `make lint`             | Lint Python (Ruff) + templates (djlint)                      |
+| `make format`           | Format Python (Ruff) + templates (djlint)                    |
 | `make clean`            | Remove build artifacts                                       |
 | `make reset`            | Delete DB, WAL files, and secret key                         |
 | `make tailscale-up`     | Show Tailscale logs (login URL on first run)                 |
@@ -542,8 +543,8 @@ All emails are stored in a SQLite database (`emails.db` by default) with the fol
 | `./commands.ps1 stop`             | Stop containers without removing them (preserves data)       |
 | `./commands.ps1 start`            | Restart containers previously stopped with `stop`            |
 | `./commands.ps1 test`             | Run the test suite                                           |
-| `./commands.ps1 lint`             | Run the linter                                               |
-| `./commands.ps1 prettier`         | Format Python code (`ruff format`)                           |
+| `./commands.ps1 lint`             | Lint Python (Ruff) + templates (djlint)                      |
+| `./commands.ps1 format`           | Format Python (Ruff) + templates (djlint)                    |
 | `./commands.ps1 clean`            | Remove build artifacts                                       |
 | `./commands.ps1 reset`            | Delete DB, WAL files, and secret key                         |
 | `./commands.ps1 tailscale-up`     | Show Tailscale logs (login URL on first run)                 |
@@ -551,6 +552,10 @@ All emails are stored in a SQLite database (`emails.db` by default) with the fol
 | `./commands.ps1 tailscale-ip`     | Print the Tailscale IPv4 address                             |
 | `./commands.ps1 tailscale-logout` | Log out of the tailnet                                       |
 | `./commands.ps1 purge`            | Logout Tailscale, remove Docker, delete data files           |
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, linting/formatting workflow (Ruff + djlint), and editor configuration (VS Code, JetBrains, Neovim, Vim, Zed). Pull requests are checked by the Lint and Test GitHub Actions workflows.
 
 ## License
 

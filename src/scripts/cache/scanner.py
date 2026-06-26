@@ -52,7 +52,7 @@ def scan_and_update(emails: list[dict], db_path: str, compiled_patterns: dict) -
                 e["keyword_matches"] = existing_matches
                 already_checked += 1
                 continue
-            if status == "headers_only":
+            if status in ("headers_only", "fetched_no_body"):
                 e["keyword_matches"] = {}
                 skipped_no_body += 1
                 continue
@@ -123,12 +123,17 @@ def _scan_keywords(text: str, compiled_patterns: dict) -> dict:
 
 def rescan_all(db_path: str, compiled_patterns: dict) -> dict:
     with _connect(db_path) as conn:
+        total = conn.execute("SELECT COUNT(*) FROM emails").fetchone()[0]
+        conn.execute(
+            "UPDATE emails SET status = 'fetched_no_body', category = NULL, keyword_matches = NULL "
+            "WHERE (body IS NULL OR body = '') AND status IN ('fetched', 'checked')"
+        )
         rows = conn.execute(
             "SELECT message_id_hash, subject, body FROM emails WHERE body IS NOT NULL AND body != ''"
         ).fetchall()
 
     if not rows:
-        return {"scanned": 0}
+        return {"scanned": 0, "skipped": total}
 
     items = [(r["message_id_hash"], f"{r['subject'] or ''} {r['body'] or ''}") for r in rows]
 
@@ -170,4 +175,4 @@ def rescan_all(db_path: str, compiled_patterns: dict) -> dict:
                 update_rows,
             )
 
-    return {"scanned": scanned}
+    return {"scanned": scanned, "skipped": total - scanned}

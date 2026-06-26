@@ -1,4 +1,4 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -13,46 +13,38 @@
     <div class="setup-container">
       <div class="setup-card">
         <div class="setup-header">
-          <i
-            data-lucide="lock"
-            style="width: 32px; height: 32px; color: var(--accent)"
-          ></i>
+          <i data-lucide="lock"
+             style="width: 32px;
+                    height: 32px;
+                    color: var(--accent)"></i>
           <h1>Login</h1>
           <p>Enter your dashboard password to continue.</p>
         </div>
-
         {% if error %}
-        <div class="setup-error">
-          <i data-lucide="alert-circle" style="width: 16px; height: 16px"></i>
-          {{ error }}
-        </div>
+          <div class="setup-error">
+            <i data-lucide="alert-circle" style="width: 16px; height: 16px"></i>
+            {{ error }}
+          </div>
         {% endif %}
-
         <form method="post" action="/login" class="setup-form">
           <input type="hidden" name="next" value="{{ next }}" />
-
           <div class="form-group">
             <label for="password">Password</label>
             <div class="password-field">
-              <input
-                type="password"
-                id="password"
-                name="password"
-                placeholder="Enter your password"
-                autofocus
-                required
-              />
-              <button
-                type="button"
-                class="password-toggle"
-                onclick="togglePassword('password')"
-                aria-label="Show password"
-              >
+              <input type="password"
+                     id="password"
+                     name="password"
+                     placeholder="Enter your password"
+                     autofocus
+                     required />
+              <button type="button"
+                      class="password-toggle"
+                      onclick="togglePassword('password')"
+                      aria-label="Show password">
                 <i data-lucide="eye" style="width: 16px; height: 16px"></i>
               </button>
             </div>
           </div>
-
           <button type="submit" class="setup-btn">
             <i data-lucide="log-in" style="width: 16px; height: 16px"></i>
             Log In

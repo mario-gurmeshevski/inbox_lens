@@ -1,27 +1,25 @@
 {% if status == "running" %}
-<div class="status-box status-running">
-  <i data-lucide="loader" style="width: 16px; height: 16px" class="spin"></i>
-  {{ message }}
-  <span
-    hx-get="/api/status"
-    hx-trigger="every 2s"
-    hx-target="#action-status"
-    hx-swap="innerHTML"
-  ></span>
-</div>
+  <div class="status-box status-running">
+    <i data-lucide="loader" style="width: 16px; height: 16px" class="spin"></i>
+    {{ message }}
+    <span hx-get="/api/status"
+          hx-trigger="every 2s"
+          hx-target="#action-status"
+          hx-swap="innerHTML"></span>
+  </div>
 {% elif status == "done" %}
-<div class="status-box status-done">
-  <i data-lucide="check-circle" style="width: 16px; height: 16px"></i>
-  {{ message }}
-</div>
+  <div class="status-box status-done">
+    <i data-lucide="check-circle" style="width: 16px; height: 16px"></i>
+    {{ message }}
+  </div>
 {% elif status == "error" %}
-<div class="status-box status-error">
-  <i data-lucide="alert-circle" style="width: 16px; height: 16px"></i>
-  {{ message }}
-</div>
+  <div class="status-box status-error">
+    <i data-lucide="alert-circle" style="width: 16px; height: 16px"></i>
+    {{ message }}
+  </div>
 {% elif status == "busy" %}
-<div class="status-box status-busy">
-  <i data-lucide="alert-triangle" style="width: 16px; height: 16px"></i>
-  Another task is already running: {{ message }}
-</div>
+  <div class="status-box status-busy">
+    <i data-lucide="alert-triangle" style="width: 16px; height: 16px"></i>
+    Another task is already running: {{ message }}
+  </div>
 {% endif %}

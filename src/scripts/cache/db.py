@@ -202,10 +202,13 @@ def save_headers_batch(emails: list[dict], db_path: str) -> int:
 def update_bodies_batch(updates: list[tuple[str, str]], db_path: str) -> int:
     if not updates:
         return 0
-    rows = [(body, _hash_message_id(mid)) for mid, body in updates]
+    rows = [
+        (body, "fetched_no_body" if not (body or "").strip() else "fetched", _hash_message_id(mid))
+        for mid, body in updates
+    ]
     with _connect(db_path) as conn:
         cursor = conn.executemany(
-            "UPDATE emails SET body = ?, status = 'fetched' WHERE message_id_hash = ?",
+            "UPDATE emails SET body = ?, status = ? WHERE message_id_hash = ?",
             rows,
         )
     return cursor.rowcount

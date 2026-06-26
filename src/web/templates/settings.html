@@ -1,336 +1,393 @@
-{% extends "base.html" %} {% block title %}Settings — Email Reader{% endblock %}
+{% extends "base.html" %}
+{% block title %}Settings — Email Reader{% endblock %}
 {% block styles %}
-<link rel="stylesheet" href="/static/setup.css" />
-<link rel="stylesheet" href="/static/settings.css" />
-{% endblock %} {% block content %}
-<h1>Settings</h1>
-
-{% if is_docker %}
-<div class="detail-card" style="margin-top: 1.25rem">
-  {% include "partials/update_panel.html" %}
-</div>
-{% else %}
-<div class="detail-card" style="margin-top: 1.25rem">
-  <div class="settings-row">
-    <div class="settings-info">
-      <div class="settings-label">
-        <i data-lucide="refresh-cw" style="width: 16px; height: 16px"></i>
-        Updates
+  <link rel="stylesheet" href="/static/setup.css" />
+  <link rel="stylesheet" href="/static/settings.css" />
+{% endblock %}
+{% block content %}
+  <h1>Settings</h1>
+  {% if is_docker %}
+    <div class="detail-card" style="margin-top: 1.25rem">{% include "partials/update_panel.html" %}</div>
+  {% else %}
+    <div class="detail-card" style="margin-top: 1.25rem">
+      <div class="settings-row">
+        <div class="settings-info">
+          <div class="settings-label">
+            <i data-lucide="refresh-cw" style="width: 16px; height: 16px"></i>
+            Updates
+          </div>
+          <p class="settings-desc">
+            Current version: <strong>{{ update.current_version }}</strong>
+            {% if
+              update.latest_version %}
+              &middot; Latest:
+              <strong>{{ update.latest_version }}</strong>
+            {% endif %}
+          </p>
+          {% if update.update_error %}
+            <div class="status-box status-error" style="margin-top: 1rem">
+              <i data-lucide="wifi-off"
+                 style="width: 18px;
+                        height: 18px;
+                        flex-shrink: 0"></i>
+              <span>Couldn't reach the version source. Check your connection.</span>
+            </div>
+          {% elif update.update_available %}
+            <div class="status-box status-warning" style="margin-top: 1rem">
+              <i data-lucide="arrow-up-circle"
+                 style="width: 18px;
+                        height: 18px;
+                        flex-shrink: 0"></i>
+              <span>A new version is available.</span>
+            </div>
+            <div class="settings-hint" style="margin-top: 0.75rem">
+              <i data-lucide="info" style="width: 14px; height: 14px; flex-shrink: 0"></i>
+              <span>
+                Update from your checkout with:
+                <code>git pull && make install or ./commands.ps1 install .</code> then
+                restart the server.
+              </span>
+            </div>
+          {% else %}
+            <div class="status-box status-done" style="margin-top: 1rem">
+              <i data-lucide="check-circle"
+                 style="width: 18px;
+                        height: 18px;
+                        flex-shrink: 0"></i>
+              <span>You're up to date.</span>
+            </div>
+          {% endif %}
+        </div>
       </div>
-      <p class="settings-desc">
-        Current version: <strong>{{ update.current_version }}</strong>{% if
-        update.latest_version %} &middot; Latest:
-        <strong>{{ update.latest_version }}</strong>{% endif %}
-      </p>
-      {% if update.update_error %}
-      <div class="status-box status-error" style="margin-top: 1rem">
-        <i
-          data-lucide="wifi-off"
-          style="width: 18px; height: 18px; flex-shrink: 0"
-        ></i>
-        <span>Couldn't reach the version source. Check your connection.</span>
+    </div>
+  {% endif %}
+  {% if restart_notice %}
+    <div class="status-box status-warning">
+      <i data-lucide="alert-triangle"
+         style="width: 18px;
+                height: 18px;
+                flex-shrink: 0"></i>
+      <span>Restart required for changes to take effect. Restart the container to apply
+      the new network setting.</span>
+    </div>
+  {% endif %}
+  <div class="detail-card" style="margin-top: 1.25rem">
+    <div class="settings-row">
+      <div class="settings-info">
+        <div class="settings-label">
+          <i data-lucide="wifi" style="width: 16px; height: 16px"></i>
+          Network Access
+        </div>
+        <p class="settings-desc">
+          {% if network_access %}
+            Allow other devices on your local network to
+            access the dashboard.
+          {% else %}
+            The dashboard is only accessible from
+            this machine (localhost).
+          {% endif %}
+        </p>
       </div>
-      {% elif update.update_available %}
-      <div class="status-box status-warning" style="margin-top: 1rem">
-        <i
-          data-lucide="arrow-up-circle"
-          style="width: 18px; height: 18px; flex-shrink: 0"
-        ></i>
-        <span>A new version is available.</span>
+      <form method="post"
+            action="/settings/network-access"
+            class="settings-toggle-form">
+        <input type="hidden"
+               name="enabled"
+               value="{% if network_access %}false{% else %}true{% endif %}" />
+        <button type="submit"
+                class="toggle-switch {% if network_access %}on{% endif %}"
+                aria-label="Toggle network access">
+          <span class="toggle-knob"></span>
+        </button>
+      </form>
+    </div>
+    {% if network_access %}
+      <div class="settings-network-info">
+        <div class="section-title">
+          <i data-lucide="globe" style="width: 16px; height: 16px"></i>
+          Access from other devices
+        </div>
+        {% if is_docker %}
+          {% if ts_state != "none" %}
+            {% include
+            "partials/tailscale_status.html" %}
+          {% elif host_ip %}
+            <div class="settings-url">
+              <code>http://{{ host_ip }}:{{ port }}</code>
+              <button type="button"
+                      class="btn btn-sm"
+                      onclick="copyToClipboard(this, 'http://{{ host_ip }}:{{ port }}')">
+                <i data-lucide="copy" style="width: 14px; height: 14px"></i>
+                Copy
+              </button>
+            </div>
+          {% else %}
+            <div class="settings-hint">
+              <i data-lucide="info" style="width: 14px; height: 14px; flex-shrink: 0"></i>
+              <span>Running in Docker. Set <code>HOST_IP</code> in your
+                <code>docker-compose.yaml</code> to display your network address
+              here.</span>
+            </div>
+          {% endif %}
+        {% elif local_ips %}
+          {% for ip in local_ips %}
+            <div class="settings-url">
+              <code>http://{{ ip }}:{{ port }}</code>
+              <button type="button"
+                      class="btn btn-sm"
+                      onclick="copyToClipboard(this, 'http://{{ ip }}:{{ port }}')">
+                <i data-lucide="copy" style="width: 14px; height: 14px"></i>
+                Copy
+              </button>
+            </div>
+          {% endfor %}
+        {% else %}
+          <p class="settings-desc">
+            No local network IPs detected. The server may not be connected to a
+            network.
+          </p>
+        {% endif %}
       </div>
-      <div class="settings-hint" style="margin-top: 0.75rem">
-        <i
-          data-lucide="info"
-          style="width: 14px; height: 14px; flex-shrink: 0"
-        ></i>
-        <span>
-          Update from your checkout with:
-          <code>git pull && make install or ./commands.ps1 install .</code> then
-          restart the server.
-        </span>
+    {% endif %}
+  </div>
+  <div class="detail-card" style="margin-top: 1.25rem">
+    <div class="settings-row">
+      <div class="settings-info">
+        <div class="settings-label">
+          <i data-lucide="shield" style="width: 16px; height: 16px"></i>
+          Authentication
+        </div>
+        <p class="settings-desc">
+          {% if auth_enabled %}
+            A dashboard password is set. Visitors must log in
+            to access the dashboard.
+          {% else %}
+            No password set — the dashboard
+            binds to <code>localhost</code> only. Set a password to expose it
+            safely.
+          {% endif %}
+        </p>
       </div>
-      {% else %}
+    </div>
+    {% if password_msg %}
+      <div class="status-box {% if password_ok %}status-done{% else %}status-error{% endif %}"
+           style="margin-top: 1rem">
+        <i data-lucide="{% if password_ok %}check-circle{% else %}alert-circle{% endif %}"
+           style="width: 18px;
+                  height: 18px;
+                  flex-shrink: 0"></i>
+        <span>{{ password_msg }}</span>
+      </div>
+    {% endif %}
+    {% if auth_enabled %}
+      <div class="settings-network-info">
+        <div class="section-title">
+          <i data-lucide="key" style="width: 16px; height: 16px"></i>
+          Change Password
+        </div>
+        <form method="post"
+              action="/settings/password"
+              class="setup-form"
+              style="max-width: 100%">
+          <div class="form-group">
+            <label for="old_password">Current Password</label>
+            <div class="password-field">
+              <input type="password" id="old_password" name="old_password" required />
+              <button type="button"
+                      class="password-toggle"
+                      onclick="togglePassword('old_password')"
+                      aria-label="Show password">
+                <i data-lucide="eye" style="width: 16px; height: 16px"></i>
+              </button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="new_password">New Password</label>
+            <div class="password-field">
+              <input type="password"
+                     id="new_password"
+                     name="new_password"
+                     minlength="8"
+                     required />
+              <button type="button"
+                      class="password-toggle"
+                      onclick="togglePassword('new_password')"
+                      aria-label="Show password">
+                <i data-lucide="eye" style="width: 16px; height: 16px"></i>
+              </button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="confirm_password">Confirm New Password</label>
+            <div class="password-field">
+              <input type="password"
+                     id="confirm_password"
+                     name="confirm_password"
+                     minlength="8"
+                     required />
+              <button type="button"
+                      class="password-toggle"
+                      onclick="togglePassword('confirm_password')"
+                      aria-label="Show password">
+                <i data-lucide="eye" style="width: 16px; height: 16px"></i>
+              </button>
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary">
+            <i data-lucide="save" style="width: 16px; height: 16px"></i>
+            Update Password
+          </button>
+        </form>
+      </div>
+    {% endif %}
+  </div>
+  <div class="detail-card">
+    <div class="settings-row">
+      <div class="settings-info">
+        <div class="settings-label">
+          <i data-lucide="clock" style="width: 16px; height: 16px"></i>
+          Timezone
+        </div>
+        <p class="settings-desc">Email timestamps are displayed in this timezone.</p>
+      </div>
+    </div>
+    {% if timezone_msg %}
       <div class="status-box status-done" style="margin-top: 1rem">
-        <i
-          data-lucide="check-circle"
-          style="width: 18px; height: 18px; flex-shrink: 0"
-        ></i>
-        <span>You're up to date.</span>
+        <i data-lucide="check-circle"
+           style="width: 18px;
+                  height: 18px;
+                  flex-shrink: 0"></i>
+        <span>{{ timezone_msg }}</span>
       </div>
+    {% endif %}
+    <div class="settings-network-info">
+      <form method="post"
+            action="/settings/timezone"
+            class="setup-form"
+            style="max-width: 100%">
+        <div class="form-group">
+          <label for="timezone-btn">Display Timezone</label>
+          {% set ns = namespace(label="UTC") %}
+          {% for offset_label, members in timezone_groups %}
+            {% for tz_id, tz_display in members %}
+              {% if timezone == tz_id %}
+                {% set ns.label = tz_display %}
+              {% endif %}
+            {% endfor %}
+          {% endfor %}
+          <div class="tz-combobox" id="timezone-combobox">
+            <input type="hidden"
+                   name="timezone"
+                   value="{{ timezone }}"
+                   id="timezone-hidden" />
+            <button type="button"
+                    class="tz-combobox-btn"
+                    id="timezone-btn"
+                    aria-haspopup="listbox"
+                    aria-expanded="false">
+              <span class="tz-combobox-label">{{ ns.label }}</span>
+              <i data-lucide="chevron-down"
+                 class="tz-chevron"
+                 style="width: 16px;
+                        height: 16px"></i>
+            </button>
+            <div class="tz-panel"
+                 id="timezone-panel"
+                 role="listbox"
+                 aria-label="Display timezone">
+              <div class="tz-search">
+                <input type="text"
+                       class="tz-search-input"
+                       id="timezone-search"
+                       placeholder="Search timezones…"
+                       autocomplete="off"
+                       aria-label="Search timezones" />
+              </div>
+              <div class="tz-options" id="timezone-options">
+                {% for offset_label, members in timezone_groups %}
+                  <div class="tz-group">
+                    <div class="tz-group-label">{{ offset_label }}</div>
+                    {% for tz_id, tz_display in members %}
+                      <div class="tz-option"
+                           role="option"
+                           data-value="{{ tz_id }}"
+                           data-label="{{ (tz_id ~ ' ' ~ tz_display)|lower }}"
+                           {% if timezone == tz_id %}aria-selected="true"{% endif %}>{{ tz_display }}</div>
+                    {% endfor %}
+                  </div>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary">
+          <i data-lucide="save" style="width: 16px; height: 16px"></i>
+          Save Timezone
+        </button>
+      </form>
+    </div>
+  </div>
+  <div class="detail-card">
+    <div class="settings-row">
+      <div class="settings-info">
+        <div class="settings-label">
+          <i data-lucide="terminal" style="width: 16px; height: 16px"></i>
+          API Key
+        </div>
+        <p class="settings-desc">
+          {% if api_key_created_at %}
+            Programmatic access is enabled (created {{
+            api_key_created_at }}). Pass it via the
+            <code>Authorization: Bearer &lt;key&gt;</code> header on
+            <code>/api/*</code>.
+          {% else %}
+            No API key configured.
+          {% endif %}
+        </p>
+      </div>
+      {% if api_key_created_at %}
+        <form method="post"
+              action="/settings/api-key/revoke"
+              class="settings-toggle-form">
+          <button type="submit"
+                  class="btn btn-danger btn-sm"
+                  onclick=" return confirm( 'Revoke the API key? Programmatic access will stop immediately.', ); ">
+            <i data-lucide="trash-2" style="width: 14px; height: 14px"></i>
+            Revoke
+          </button>
+        </form>
       {% endif %}
     </div>
-  </div>
-</div>
-{% endif %} {% if restart_notice %}
-<div class="status-box status-warning">
-  <i
-    data-lucide="alert-triangle"
-    style="width: 18px; height: 18px; flex-shrink: 0"
-  ></i>
-  <span
-    >Restart required for changes to take effect. Restart the container to apply
-    the new network setting.</span
-  >
-</div>
-{% endif %}
-
-<div class="detail-card" style="margin-top: 1.25rem">
-  <div class="settings-row">
-    <div class="settings-info">
-      <div class="settings-label">
-        <i data-lucide="wifi" style="width: 16px; height: 16px"></i>
-        Network Access
+    {% if api_key_msg %}
+      <div class="status-box status-done" style="margin-top: 1rem">
+        <i data-lucide="info" style="width: 18px; height: 18px; flex-shrink: 0"></i>
+        <span>{{ api_key_msg }}</span>
       </div>
-      <p class="settings-desc">
-        {% if network_access %} Allow other devices on your local network to
-        access the dashboard. {% else %} The dashboard is only accessible from
-        this machine (localhost). {% endif %}
-      </p>
-    </div>
-    <form
-      method="post"
-      action="/settings/network-access"
-      class="settings-toggle-form"
-    >
-      <input
-        type="hidden"
-        name="enabled"
-        value="{% if network_access %}false{% else %}true{% endif %}"
-      />
-      <button
-        type="submit"
-        class="toggle-switch {% if network_access %}on{% endif %}"
-        aria-label="Toggle network access"
-      >
-        <span class="toggle-knob"></span>
-      </button>
-    </form>
-  </div>
-
-  {% if network_access %}
-  <div class="settings-network-info">
-    <div class="section-title">
-      <i data-lucide="globe" style="width: 16px; height: 16px"></i>
-      Access from other devices
-    </div>
-
-    {% if is_docker %} {% if ts_state != "none" %} {% include
-    "partials/tailscale_status.html" %} {% elif host_ip %}
-    <div class="settings-url">
-      <code>http://{{ host_ip }}:{{ port }}</code>
-      <button
-        type="button"
-        class="btn btn-sm"
-        onclick="copyToClipboard(this, 'http://{{ host_ip }}:{{ port }}')"
-      >
-        <i data-lucide="copy" style="width: 14px; height: 14px"></i>
-        Copy
-      </button>
-    </div>
-    {% else %}
-    <div class="settings-hint">
-      <i
-        data-lucide="info"
-        style="width: 14px; height: 14px; flex-shrink: 0"
-      ></i>
-      <span
-        >Running in Docker. Set <code>HOST_IP</code> in your
-        <code>docker-compose.yaml</code> to display your network address
-        here.</span
-      >
-    </div>
-    {% endif %} {% elif local_ips %} {% for ip in local_ips %}
-    <div class="settings-url">
-      <code>http://{{ ip }}:{{ port }}</code>
-      <button
-        type="button"
-        class="btn btn-sm"
-        onclick="copyToClipboard(this, 'http://{{ ip }}:{{ port }}')"
-      >
-        <i data-lucide="copy" style="width: 14px; height: 14px"></i>
-        Copy
-      </button>
-    </div>
-    {% endfor %} {% else %}
-    <p class="settings-desc">
-      No local network IPs detected. The server may not be connected to a
-      network.
-    </p>
     {% endif %}
-  </div>
-  {% endif %}
-</div>
-
-<div class="detail-card" style="margin-top: 1.25rem">
-  <div class="settings-row">
-    <div class="settings-info">
-      <div class="settings-label">
-        <i data-lucide="shield" style="width: 16px; height: 16px"></i>
-        Authentication
+    {% if new_api_key %}
+      <div class="settings-url" style="margin-top: 0.75rem">
+        <code>{{ new_api_key }}</code>
+        <button type="button"
+                class="btn btn-sm"
+                onclick="copyToClipboard(this, '{{ new_api_key }}')">
+          <i data-lucide="copy" style="width: 14px; height: 14px"></i>
+          Copy
+        </button>
       </div>
-      <p class="settings-desc">
-        {% if auth_enabled %} A dashboard password is set. Visitors must log in
-        to access the dashboard. {% else %} No password set — the dashboard
-        binds to <code>localhost</code> only. Set a password to expose it
-        safely. {% endif %}
-      </p>
-    </div>
-  </div>
-
-  {% if password_msg %}
-  <div
-    class="status-box {% if password_ok %}status-done{% else %}status-error{% endif %}"
-    style="margin-top: 1rem"
-  >
-    <i
-      data-lucide="{% if password_ok %}check-circle{% else %}alert-circle{% endif %}"
-      style="width: 18px; height: 18px; flex-shrink: 0"
-    ></i>
-    <span>{{ password_msg }}</span>
-  </div>
-  {% endif %} {% if auth_enabled %}
-  <div class="settings-network-info">
-    <div class="section-title">
-      <i data-lucide="key" style="width: 16px; height: 16px"></i>
-      Change Password
-    </div>
-    <form
-      method="post"
-      action="/settings/password"
-      class="setup-form"
-      style="max-width: 100%"
-    >
-      <div class="form-group">
-        <label for="old_password">Current Password</label>
-        <div class="password-field">
-          <input
-            type="password"
-            id="old_password"
-            name="old_password"
-            required
-          />
-          <button
-            type="button"
-            class="password-toggle"
-            onclick="togglePassword('old_password')"
-            aria-label="Show password"
-          >
-            <i data-lucide="eye" style="width: 16px; height: 16px"></i>
-          </button>
-        </div>
-      </div>
-      <div class="form-group">
-        <label for="new_password">New Password</label>
-        <div class="password-field">
-          <input
-            type="password"
-            id="new_password"
-            name="new_password"
-            minlength="8"
-            required
-          />
-          <button
-            type="button"
-            class="password-toggle"
-            onclick="togglePassword('new_password')"
-            aria-label="Show password"
-          >
-            <i data-lucide="eye" style="width: 16px; height: 16px"></i>
-          </button>
-        </div>
-      </div>
-      <div class="form-group">
-        <label for="confirm_password">Confirm New Password</label>
-        <div class="password-field">
-          <input
-            type="password"
-            id="confirm_password"
-            name="confirm_password"
-            minlength="8"
-            required
-          />
-          <button
-            type="button"
-            class="password-toggle"
-            onclick="togglePassword('confirm_password')"
-            aria-label="Show password"
-          >
-            <i data-lucide="eye" style="width: 16px; height: 16px"></i>
-          </button>
-        </div>
-      </div>
-      <button type="submit" class="btn btn-primary">
-        <i data-lucide="save" style="width: 16px; height: 16px"></i>
-        Update Password
-      </button>
-    </form>
-  </div>
-  {% endif %}
-</div>
-
-<div class="detail-card">
-  <div class="settings-row">
-    <div class="settings-info">
-      <div class="settings-label">
-        <i data-lucide="terminal" style="width: 16px; height: 16px"></i>
-        API Key
-      </div>
-      <p class="settings-desc">
-        {% if api_key_created_at %} Programmatic access is enabled (created {{
-        api_key_created_at }}). Pass it via the
-        <code>Authorization: Bearer &lt;key&gt;</code> header on
-        <code>/api/*</code>. {% else %} No API key configured. {% endif %}
-      </p>
-    </div>
-    {% if api_key_created_at %}
-    <form
-      method="post"
-      action="/settings/api-key/revoke"
-      class="settings-toggle-form"
-    >
-      <button
-        type="submit"
-        class="btn btn-danger btn-sm"
-        onclick="
-          return confirm(
-            'Revoke the API key? Programmatic access will stop immediately.',
-          );
-        "
-      >
-        <i data-lucide="trash-2" style="width: 14px; height: 14px"></i>
-        Revoke
-      </button>
-    </form>
     {% endif %}
+    <div class="settings-network-info">
+      <form method="post" action="/settings/api-key/regenerate">
+        <button type="submit" class="btn btn-warning btn-sm">
+          <i data-lucide="refresh-cw" style="width: 14px; height: 14px"></i>
+          {% if api_key_created_at %}
+            Regenerate API Key
+          {% else %}
+            Generate API
+            Key
+          {% endif %}
+        </button>
+      </form>
+    </div>
   </div>
-
-  {% if api_key_msg %}
-  <div class="status-box status-done" style="margin-top: 1rem">
-    <i data-lucide="info" style="width: 18px; height: 18px; flex-shrink: 0"></i>
-    <span>{{ api_key_msg }}</span>
-  </div>
-  {% endif %} {% if new_api_key %}
-  <div class="settings-url" style="margin-top: 0.75rem">
-    <code>{{ new_api_key }}</code>
-    <button
-      type="button"
-      class="btn btn-sm"
-      onclick="copyToClipboard(this, '{{ new_api_key }}')"
-    >
-      <i data-lucide="copy" style="width: 14px; height: 14px"></i>
-      Copy
-    </button>
-  </div>
-  {% endif %}
-
-  <div class="settings-network-info">
-    <form method="post" action="/settings/api-key/regenerate">
-      <button type="submit" class="btn btn-warning btn-sm">
-        <i data-lucide="refresh-cw" style="width: 14px; height: 14px"></i>
-        {% if api_key_created_at %}Regenerate API Key{% else %}Generate API
-        Key{% endif %}
-      </button>
-    </form>
-  </div>
-</div>
 {% endblock %}
+{% block scripts %}<script src="/static/js/settings.js"></script>{% endblock %}

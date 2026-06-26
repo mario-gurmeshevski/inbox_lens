@@ -17,6 +17,7 @@ class ConnectionLost(Exception):
 RECONNECT_DELAY = 30
 IDLE_CHECK_INTERVAL = 30
 IDLE_RENEW_INTERVAL = 25 * 60
+POLL_FALLBACK_INTERVAL = 30 * 60
 
 
 class IdleMonitor:
@@ -113,22 +114,29 @@ class IdleMonitor:
         try:
             conn.send(b"DONE\r\n")
         except Exception:
-            return
+            return False
+        saw_mail = False
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             try:
                 line = conn.readline()
                 if not line:
                     break
+                decoded = line.decode(errors="replace").upper()
+                if "EXISTS" in decoded or "RECENT" in decoded:
+                    saw_mail = True
                 if tag in line:
                     break
             except Exception:
                 break
+        return saw_mail
 
     def _do_idle(self, conn):
-        idle_start = time.monotonic()
+        cycle_start = time.monotonic()
 
         while not self._stop.is_set():
+            idle_start = time.monotonic()
+
             try:
                 tag = conn._new_tag()
                 conn.send(tag + b" IDLE\r\n")
@@ -149,12 +157,21 @@ class IdleMonitor:
                 logger.warning("Failed to read IDLE continuation", exc_info=True)
                 return False
 
+            renew = False
             while not self._stop.is_set():
                 elapsed = time.monotonic() - idle_start
                 if elapsed >= IDLE_RENEW_INTERVAL:
-                    self._end_idle(conn, tag)
+                    saw_mail = self._end_idle(conn, tag)
                     logger.debug("IDLE renewed after %ds", int(elapsed))
+                    if saw_mail:
+                        return True
+                    renew = True
                     break
+                since_cycle = time.monotonic() - cycle_start
+                if since_cycle >= POLL_FALLBACK_INTERVAL:
+                    self._end_idle(conn, tag)
+                    logger.debug("IDLE poll fallback after %ds", int(since_cycle))
+                    return True
 
                 try:
                     readable, _, _ = select.select([conn.socket()], [], [], IDLE_CHECK_INTERVAL)
@@ -175,10 +192,7 @@ class IdleMonitor:
                         return False
 
                     decoded = line.decode(errors="replace").upper()
-                    if "EXISTS" in decoded:
-                        self._end_idle(conn, tag)
-                        return True
-                    if "RECENT" in decoded:
+                    if "EXISTS" in decoded or "RECENT" in decoded:
                         self._end_idle(conn, tag)
                         return True
                 except (BrokenPipeError, ConnectionResetError, imaplib.IMAP4.abort, OSError) as exc:
@@ -187,6 +201,9 @@ class IdleMonitor:
                 except Exception:
                     self._end_idle(conn, tag)
                     return False
+
+            if renew:
+                continue
 
         return False
 

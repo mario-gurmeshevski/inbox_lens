@@ -125,7 +125,7 @@ def _make_body_fetchers(db_path):
             if p.get("message_id", "") in fetched_mids:
                 p["_message_id"] = p["message_id"]
             results_batch.append(p)
-        if len(results_batch) < len(batch):
+        if len(parsed) < len(batch):
             return None
         return results_batch
 

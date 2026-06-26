@@ -102,7 +102,7 @@ Fetch emails from a Gmail inbox via IMAP, cache them in a local SQLite database,
 
 ## Testing
 
-The project includes 489 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
+The project includes 497 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
 
 ```bash
 
@@ -120,10 +120,10 @@ make test-cov   # For Mac/Linux
 | ---------------------- | ----- | ----------------------------------------------------------- |
 | `test_cache.py`        | 73    | DB ops, hashing, scanning, search, threads                  |
 | `test_email_reader.py` | 71    | Parsing, body cleaning, thread extraction, keywords         |
-| `test_web.py`          | 106   | FastAPI endpoints, SSE, Tailscale, auth middleware, updates |
+| `test_web.py`          | 108   | FastAPI endpoints, SSE, Tailscale, auth middleware, updates |
 | `test_auth.py`         | 42    | Password hashing, API keys, sessions, rate limiting         |
 | `test_imap.py`         | 58    | IMAP helpers, connection, fetch, delete                     |
-| `test_idle_monitor.py` | 57    | IDLE loop, ConnectionLost, run_initial_fetch                |
+| `test_idle_monitor.py` | 63    | IDLE loop, ConnectionLost, run_initial_fetch                |
 | `test_crypto.py`       | 22    | Encryption, settings, credentials                           |
 | `test_event_bus.py`    | 12    | Pub/sub dispatch                                            |
 | `test_utils.py`        | 8     | Keyword parsing, priority buckets                           |
@@ -447,7 +447,7 @@ The app checks for updates every 6 hours. An **update banner** appears when one 
 
 > **Security note:** mounting `/var/run/docker.sock` grants host-level Docker control. Remove it from `docker-compose.yaml` to disable one-click updates.
 
-**Socket permissions:**
+**Socket permissions:** When the Docker socket is mounted, the container automatically grants `appuser` read/write access — it detects the socket's group ID and adds the user to that group on startup, so one-click updates work without extra configuration. If your setup prevents this, fall back to either:
 
 ```yaml
 user: root # Option A

@@ -195,6 +195,144 @@ class TestUpdateState:
         updater._set_state("idle")
 
 
+class TestCurrentContainerId:
+    @staticmethod
+    def _fake_path(files):
+        class _P:
+            def __init__(self, target):
+                self._target = str(target)
+
+            def read_text(self, errors="ignore"):
+                return files.get(self._target, "")
+
+        return lambda target: _P(target)
+
+    def test_resolves_via_proc_when_hostname_overridden(self, monkeypatch):
+        # Reproduces the Tailscale setup: HOSTNAME is a name, not the short id.
+        real_id = "a" * 64
+        monkeypatch.setenv("HOSTNAME", "inbox-lens")
+        monkeypatch.setattr(
+            updater,
+            "Path",
+            self._fake_path(
+                {
+                    "/proc/1/cgroup": "0::/\n",
+                    "/proc/self/cgroup": "0::/\n",
+                    "/proc/1/mountinfo": f"1234 /var/lib/docker/containers/{real_id}/{real_id}-json.log\n",
+                }
+            ),
+        )
+
+        def fake_request(method, path, body=None, timeout=30):
+            if path == f"/v1.41/containers/{real_id}/json":
+                return 200, b"{}"
+            return 404, b""
+
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        assert updater._current_container_id() == real_id
+
+    def test_falls_back_to_hostname_prefix(self, monkeypatch):
+        monkeypatch.setenv("HOSTNAME", "abcd1234abcd")
+        monkeypatch.setattr(updater, "Path", self._fake_path({}))
+
+        def fake_request(method, path, body=None, timeout=30):
+            if path.endswith("/containers/json?all=true"):
+                return 200, json.dumps([{"Id": "abcd1234abcd5678", "Image": "x"}]).encode()
+            return 404, b""
+
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        assert updater._current_container_id() == "abcd1234abcd5678"
+
+    def test_returns_none_when_nothing_matches(self, monkeypatch):
+        monkeypatch.setenv("HOSTNAME", "inbox-lens")
+        monkeypatch.setattr(updater, "Path", self._fake_path({}))
+
+        def fake_request(method, path, body=None, timeout=30):
+            if path.endswith("/containers/json?all=true"):
+                return 200, json.dumps([{"Id": "zzzz", "Image": "other"}]).encode()
+            return 404, b""
+
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        assert updater._current_container_id() is None
+
+    def test_resolves_via_cgroup_v2_path(self, monkeypatch):
+        # cgroup v2 embeds the container id directly in the cgroup path.
+        real_id = "b" * 64
+        monkeypatch.setenv("HOSTNAME", "inbox-lens")
+        monkeypatch.setattr(
+            updater,
+            "Path",
+            self._fake_path({"/proc/1/cgroup": f"0::/docker/{real_id}\n"}),
+        )
+
+        def fake_request(method, path, body=None, timeout=30):
+            if path == f"/v1.41/containers/{real_id}/json":
+                return 200, b"{}"
+            return 404, b""
+
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        assert updater._current_container_id() == real_id
+
+    def test_multiple_proc_candidates_first_invalid(self, monkeypatch):
+        spurious = "c" * 64
+        real_id = "d" * 64
+        monkeypatch.setenv("HOSTNAME", "inbox-lens")
+        monkeypatch.setattr(
+            updater,
+            "Path",
+            self._fake_path({"/proc/1/cgroup": f"0::/docker/{spurious}\n1::/docker/{real_id}\n"}),
+        )
+
+        def fake_request(method, path, body=None, timeout=30):
+            if path == f"/v1.41/containers/{real_id}/json":
+                return 200, b"{}"
+            return 404, b""
+
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        assert updater._current_container_id() == real_id
+
+    def test_falls_back_to_single_own_image(self, monkeypatch):
+        # HOSTNAME and /proc both useless; exactly one container runs our image.
+        monkeypatch.delenv("INBOX_LENS_IMAGE", raising=False)
+        monkeypatch.setenv("HOSTNAME", "inbox-lens")
+        monkeypatch.setattr(updater, "Path", self._fake_path({}))
+        image = updater.DEFAULT_IMAGE
+        image_id = "sha256:cafef00d" + "0" * 55
+
+        def fake_request(method, path, body=None, timeout=30):
+            if path == f"/v1.41/images/{image}/json":
+                return 200, json.dumps({"Id": image_id}).encode()
+            if path.endswith("/containers/json?all=true"):
+                return 200, json.dumps([{"Id": "own1", "ImageID": image_id, "Image": image}]).encode()
+            return 404, b""
+
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        assert updater._current_container_id() == "own1"
+
+    def test_image_heuristic_skipped_when_multiple_matches(self, monkeypatch):
+        # Two containers share our image -> refuse to guess.
+        monkeypatch.delenv("INBOX_LENS_IMAGE", raising=False)
+        monkeypatch.setenv("HOSTNAME", "inbox-lens")
+        monkeypatch.setattr(updater, "Path", self._fake_path({}))
+        image = updater.DEFAULT_IMAGE
+        image_id = "sha256:cafef00d" + "0" * 55
+
+        def fake_request(method, path, body=None, timeout=30):
+            if path == f"/v1.41/images/{image}/json":
+                return 200, json.dumps({"Id": image_id}).encode()
+            if path.endswith("/containers/json?all=true"):
+                return 200, json.dumps(
+                    [
+                        {"Id": "own1", "ImageID": image_id, "Image": image},
+                        {"Id": "own2", "ImageID": image_id, "Image": image},
+                    ]
+                ).encode()
+            return 404, b""
+
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        assert updater._current_container_id() is None
+
+
 class TestPerformUpdateSync:
     def setup_method(self):
         updater._set_state("idle")

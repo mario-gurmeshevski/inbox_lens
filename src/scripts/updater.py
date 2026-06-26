@@ -2,6 +2,7 @@ import http.client
 import json
 import logging
 import os
+import re
 import socket
 import ssl
 import threading
@@ -182,26 +183,76 @@ def is_docker_managed() -> bool:
     return is_docker_environment() and docker_daemon_available()
 
 
-def _current_container_id() -> str | None:
-    short = os.environ.get("HOSTNAME", "").strip()
-    if not short:
-        return None
-    try:
-        status, raw = _docker_request("GET", f"{DOCKER_API}/containers/json?all=true")
-        if status != 200:
-            return None
-        containers = json.loads(raw.decode("utf-8"))
-        for c in containers or []:
-            cid = c.get("Id", "")
-            if cid.startswith(short):
-                return cid
-    except Exception:
-        logger.warning("Could not resolve current container id", exc_info=True)
-    return None
+_CONTAINER_ID_RE = re.compile(r"[0-9a-f]{64}")
+_MOUNT_CONTAINER_RE = re.compile(r"/containers/([0-9a-f]{64})/")
 
 
 def _image_name() -> str:
     return os.environ.get("INBOX_LENS_IMAGE", DEFAULT_IMAGE)
+
+
+def _container_id_from_proc() -> str | None:
+    candidates: list[str] = []
+    for proc_path in ("/proc/1/cgroup", "/proc/self/cgroup"):
+        try:
+            candidates.extend(_CONTAINER_ID_RE.findall(Path(proc_path).read_text(errors="ignore")))
+        except Exception:
+            continue
+    try:
+        candidates.extend(
+            _MOUNT_CONTAINER_RE.findall(Path("/proc/1/mountinfo").read_text(errors="ignore"))
+        )
+    except Exception:
+        pass
+    for cid in candidates:
+        try:
+            status, _ = _docker_request("GET", f"{DOCKER_API}/containers/{cid}/json", timeout=5)
+            if status == 200:
+                return cid
+        except Exception:
+            continue
+    return None
+
+
+def _own_image_container_id(containers: list[dict], image: str) -> str | None:
+    target_image_ids: set[str] = set()
+    try:
+        status, raw = _docker_request("GET", f"{DOCKER_API}/images/{image}/json", timeout=5)
+        if status == 200:
+            image_id = (json.loads(raw.decode("utf-8")) or {}).get("Id")
+            if image_id:
+                target_image_ids.add(image_id)
+    except Exception:
+        pass
+    own = [
+        c.get("Id", "")
+        for c in containers
+        if (c.get("ImageID") in target_image_ids) or ((c.get("Image") or "") == image)
+    ]
+    if len(own) == 1 and own[0]:
+        return own[0]
+    return None
+
+
+def _current_container_id() -> str | None:
+    cid = _container_id_from_proc()
+    if cid:
+        return cid
+    short = os.environ.get("HOSTNAME", "").strip()
+    try:
+        status, raw = _docker_request("GET", f"{DOCKER_API}/containers/json?all=true")
+        if status != 200:
+            return None
+        containers = json.loads(raw.decode("utf-8")) or []
+        for c in containers:
+            if short and c.get("Id", "").startswith(short):
+                return c.get("Id")
+        own = _own_image_container_id(containers, _image_name())
+        if own:
+            return own
+    except Exception:
+        logger.warning("Could not resolve current container id", exc_info=True)
+    return None
 
 
 _update_state: dict = {"phase": "idle", "message": "", "started_at": 0.0}
@@ -246,6 +297,7 @@ def _update_worker() -> None:
         if result["ok"]:
             _set_state("restarting", result["message"])
         else:
+            logger.warning("Update failed: %s", result["message"])
             _set_state("failed", result["message"])
     except Exception as exc:
         logger.warning("Update worker crashed", exc_info=True)

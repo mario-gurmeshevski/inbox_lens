@@ -462,7 +462,29 @@ class TestRescanAll:
 
         cache.save_headers_batch([{"message_id": "<h@e.com>"}], tmp_db)  # headers only, no body
         patterns = email_reader.build_compiled_patterns({"10": ["x"]})
-        assert cache.rescan_all(tmp_db, patterns) == {"scanned": 0}
+        assert cache.rescan_all(tmp_db, patterns) == {"scanned": 0, "skipped": 1}
+
+    def test_heals_bodyless_checked_to_fetched_no_body(self, tmp_db):
+        from src.scripts import cache
+
+        emails = [
+            {"message_id": "<a@e.com>", "subject": "hi", "body": "real body"},
+            {"message_id": "<b@e.com>", "subject": "empty", "body": ""},
+        ]
+        cache.save_headers_batch(emails, tmp_db)
+        cache.update_bodies_batch([(e["message_id"], e["body"]) for e in emails], tmp_db)
+        with cache._connect(tmp_db) as conn:
+            conn.execute("UPDATE emails SET status = 'checked'")
+
+        patterns = email_reader.build_compiled_patterns({"10": ["x"]})
+        result = cache.rescan_all(tmp_db, patterns)
+        assert result["scanned"] == 1
+        assert result["skipped"] == 1
+
+        with cache._connect(tmp_db) as conn:
+            rows = {r["message_id"]: r["status"] for r in conn.execute("SELECT message_id, status FROM emails")}
+        assert rows["<a@e.com>"] == "checked"
+        assert rows["<b@e.com>"] == "fetched_no_body"
 
 
 class TestGetTextBodyErrorPaths:

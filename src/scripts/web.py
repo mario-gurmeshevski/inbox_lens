@@ -10,8 +10,10 @@ from fastapi import FastAPI, Request, Query
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+from datetime import datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo, available_timezones
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -144,11 +146,107 @@ app.add_middleware(
 )
 
 
+_GEOGRAPHIC_AREAS = frozenset(
+    {
+        "Africa",
+        "America",
+        "Antarctica",
+        "Arctic",
+        "Asia",
+        "Atlantic",
+        "Australia",
+        "Europe",
+        "Indian",
+        "Pacific",
+    }
+)
+
+
+def _is_geographic_zone(tz_id: str) -> bool:
+    return tz_id.split("/", 1)[0] in _GEOGRAPHIC_AREAS
+
+
+def _build_timezone_groups():
+    zones = []
+    for tz_id in sorted(available_timezones()):
+        if not _is_geographic_zone(tz_id):
+            continue
+        try:
+            now = datetime.now(ZoneInfo(tz_id))
+            offset = now.utcoffset()
+            if offset is None:
+                continue
+            total_minutes = int(offset.total_seconds() / 60)
+            sign = "+" if total_minutes >= 0 else "-"
+            hours, mins = divmod(abs(total_minutes), 60)
+            offset_str = f"UTC{sign}{hours:02d}:{mins:02d}"
+            display = f"{tz_id} ({offset_str})"
+            zones.append((total_minutes, offset_str, tz_id, display))
+        except Exception:
+            continue
+
+    zones.sort(key=lambda z: (z[0], z[2]))
+
+    groups: list[tuple[str, list[tuple[str, str]]]] = []
+    current_offset: str | None = None
+    current_members: list[tuple[str, str]] = []
+    for _minutes, offset_str, tz_id, display in zones:
+        if offset_str != current_offset:
+            if current_members:
+                groups.append((current_offset, current_members))
+            current_offset = offset_str
+            current_members = []
+        current_members.append((tz_id, display))
+    if current_members:
+        groups.append((current_offset, current_members))
+    return groups
+
+
+_TIMEZONE_GROUPS = _build_timezone_groups()
+
+
+def _flat_timezone_ids():
+    for _offset_label, members in _TIMEZONE_GROUPS:
+        for tz_id, _display in members:
+            yield tz_id
+
+
+def _detect_local_timezone() -> str:
+    candidates: list[str] = []
+    try:
+        with open("/etc/timezone", encoding="utf-8") as fh:
+            candidates.append(fh.read().strip())
+    except OSError:
+        pass
+    try:
+        resolved = os.path.realpath("/etc/localtime")
+        marker = "/zoneinfo/"
+        idx = resolved.find(marker)
+        if idx != -1:
+            candidates.append(resolved[idx + len(marker) :])
+    except OSError:
+        pass
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            ZoneInfo(candidate)
+            return candidate
+        except Exception:
+            continue
+    return "UTC"
+
+
+_LOCAL_TIMEZONE = _detect_local_timezone()
+
+
 def _format_date(date_str):
     if not date_str:
         return ""
     try:
         dt = parsedate_to_datetime(date_str)
+        tz_name = cache.get_setting("timezone", DB_PATH) or _LOCAL_TIMEZONE
+        dt = dt.astimezone(ZoneInfo(tz_name))
         return dt.strftime("%a, %d %b %Y %H:%M")
     except Exception:
         return date_str
@@ -498,9 +596,11 @@ def _settings_context(
     password_ok: bool = False,
     api_key_msg: str | None = None,
     new_api_key: str | None = None,
+    timezone_msg: str | None = None,
 ) -> dict:
     network_access = cache.get_setting("network_access", db_path) or "true"
     network_on = network_access == "true"
+    timezone_setting = cache.get_setting("timezone", db_path) or _LOCAL_TIMEZONE
     local_ips = _get_local_ips() if network_on else []
     host_ip = os.getenv("HOST_IP", "")
     tailscale_ip = _get_tailscale_ip()
@@ -526,6 +626,9 @@ def _settings_context(
         "api_key_msg": api_key_msg,
         "new_api_key": new_api_key,
         "update": _update_info(db_path),
+        "timezone": timezone_setting,
+        "timezone_groups": _TIMEZONE_GROUPS,
+        "timezone_msg": timezone_msg,
     }
 
 
@@ -583,6 +686,19 @@ async def settings_api_key_revoke(request: Request):
     auth.revoke_api_key(DB_PATH)
     return templates.TemplateResponse(
         request, "settings.html", _settings_context(DB_PATH, api_key_msg="API key revoked.")
+    )
+
+
+@app.post("/settings/timezone", response_class=HTMLResponse)
+async def settings_timezone(request: Request):
+    form = await request.form()
+    tz = str(form.get("timezone", "UTC")).strip()
+    valid_tzs = {tz_id for tz_id in _flat_timezone_ids()}
+    if tz not in valid_tzs:
+        tz = _LOCAL_TIMEZONE
+    cache.save_setting("timezone", tz, DB_PATH)
+    return templates.TemplateResponse(
+        request, "settings.html", _settings_context(DB_PATH, timezone_msg="Timezone updated.")
     )
 
 
@@ -764,7 +880,14 @@ async def keywords_rescan(request: Request):
     categories = email_reader.load_keywords(DB_PATH)
     compiled = email_reader.build_compiled_patterns(categories)
     result = cache.rescan_all(DB_PATH, compiled)
-    return _keywords_partial(request, DB_PATH, msg=f"Re-scanned {result['scanned']} cached email(s).", msg_ok=True)
+    scanned = result["scanned"]
+    skipped = result.get("skipped", 0)
+    msg = (
+        f"Re-scanned {scanned} cached email(s). {skipped} without body skipped."
+        if skipped
+        else f"Re-scanned {scanned} cached email(s)."
+    )
+    return _keywords_partial(request, DB_PATH, msg=msg, msg_ok=True)
 
 
 @app.get("/partials/update-banner", response_class=HTMLResponse)
@@ -809,7 +932,7 @@ async def api_update_status():
 
 def _dashboard_context(db_path: str) -> dict:
     counts = cache.get_counts(db_path)
-    total = counts["headers_only"] + counts["fetched"] + counts["checked"]
+    total = counts["headers_only"] + counts["fetched"] + counts["checked"] + counts["fetched_no_body"]
     raw_priority = cache.get_priority_counts(db_path)
     priority_dist = {"critical": 0, "high": 0, "medium": 0, "low": 0}
     for level_str, count in raw_priority.items():

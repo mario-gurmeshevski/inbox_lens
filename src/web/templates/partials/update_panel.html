@@ -16,7 +16,7 @@
   {%
   endif
   %}
->
+  >
   <div class="settings-row">
     <div class="settings-info">
       <div class="settings-label">
@@ -25,151 +25,140 @@
       </div>
       <p class="settings-desc">
         Current version: <strong>{{ update.current_version }}</strong>
-        {% if update.latest_version %} &middot; Latest:
-        <strong>{{ update.latest_version }}</strong> {% endif %}
+        {% if update.latest_version %}
+          &middot; Latest:
+          <strong>{{ update.latest_version }}</strong>
+        {% endif %}
       </p>
     </div>
   </div>
-
   {% if phase in ["pulling", "recreating", "restarting"] %}
-  <div class="status-box status-info" style="margin-top: 1rem">
-    <i
-      data-lucide="loader"
-      style="width: 18px; height: 18px; flex-shrink: 0"
-      class="spin"
-    ></i>
-    <span>{{ update.update_state.message or "Update in progress..." }}</span>
-  </div>
+    <div class="status-box status-info" style="margin-top: 1rem">
+      <i data-lucide="loader"
+         style="width: 18px;
+                height: 18px;
+                flex-shrink: 0"
+         class="spin"></i>
+      <span>{{ update.update_state.message or "Update in progress..." }}</span>
+    </div>
   {% elif phase == "failed" %}
-  <div class="status-box status-error" style="margin-top: 1rem">
-    <i
-      data-lucide="alert-circle"
-      style="width: 18px; height: 18px; flex-shrink: 0"
-    ></i>
-    <span>{{ update.update_state.message or "Update failed." }}</span>
-  </div>
-  <div class="settings-network-info">
-    <form
-      hx-post="/api/update/run"
-      hx-target="#update-panel"
-      hx-swap="outerHTML"
-      style="display: inline"
-    >
-      <button type="submit" class="btn btn-warning btn-sm">
-        <i data-lucide="rotate-cw" style="width: 14px; height: 14px"></i>
-        Retry Update
-      </button>
-    </form>
-    <form
-      hx-post="/api/update/check"
-      hx-target="#update-panel"
-      hx-swap="outerHTML"
-      style="display: inline; margin-left: 0.5rem"
-    >
-      <button type="submit" class="btn btn-sm">
-        <i data-lucide="search-check" style="width: 14px; height: 14px"></i>
-        Check Again
-      </button>
-    </form>
-  </div>
+    <div class="status-box status-error" style="margin-top: 1rem">
+      <i data-lucide="alert-circle"
+         style="width: 18px;
+                height: 18px;
+                flex-shrink: 0"></i>
+      <span>{{ update.update_state.message or "Update failed." }}</span>
+    </div>
+    <div class="settings-network-info">
+      <form hx-post="/api/update/run"
+            hx-target="#update-panel"
+            hx-swap="outerHTML"
+            style="display: inline">
+        <button type="submit" class="btn btn-warning btn-sm">
+          <i data-lucide="rotate-cw" style="width: 14px; height: 14px"></i>
+          Retry Update
+        </button>
+      </form>
+      <form hx-post="/api/update/check"
+            hx-target="#update-panel"
+            hx-swap="outerHTML"
+            style="display: inline;
+                   margin-left: 0.5rem">
+        <button type="submit" class="btn btn-sm">
+          <i data-lucide="search-check" style="width: 14px; height: 14px"></i>
+          Check Again
+        </button>
+      </form>
+    </div>
   {% elif update.update_available %}
-  <div class="status-box status-warning" style="margin-top: 1rem">
-    <i
-      data-lucide="arrow-up-circle"
-      style="width: 18px; height: 18px; flex-shrink: 0"
-    ></i>
-    <span>A new version is available.</span>
-  </div>
-
-  {% if update.docker_managed %}
-  <div class="settings-network-info">
-    <form
-      hx-post="/api/update/run"
-      hx-target="#update-panel"
-      hx-swap="outerHTML"
-      hx-confirm="Apply the update now? The app will restart and be unavailable briefly."
-      style="display: inline"
-    >
-      <button type="submit" class="btn btn-primary btn-sm">
-        <i data-lucide="download" style="width: 14px; height: 14px"></i>
-        Update Now
-      </button>
-    </form>
-    <form
-      hx-post="/api/update/check"
-      hx-target="#update-panel"
-      hx-swap="outerHTML"
-      style="display: inline; margin-left: 0.5rem"
-    >
-      <button type="submit" class="btn btn-sm">
-        <i data-lucide="search-check" style="width: 14px; height: 14px"></i>
-        Check for Updates
-      </button>
-    </form>
-  </div>
+    <div class="status-box status-warning" style="margin-top: 1rem">
+      <i data-lucide="arrow-up-circle"
+         style="width: 18px;
+                height: 18px;
+                flex-shrink: 0"></i>
+      <span>A new version is available.</span>
+    </div>
+    {% if update.docker_managed %}
+      <div class="settings-network-info">
+        <form hx-post="/api/update/run"
+              hx-target="#update-panel"
+              hx-swap="outerHTML"
+              hx-confirm="Apply the update now? The app will restart and be unavailable briefly."
+              style="display: inline">
+          <button type="submit" class="btn btn-primary btn-sm">
+            <i data-lucide="download" style="width: 14px; height: 14px"></i>
+            Update Now
+          </button>
+        </form>
+        <form hx-post="/api/update/check"
+              hx-target="#update-panel"
+              hx-swap="outerHTML"
+              style="display: inline;
+                     margin-left: 0.5rem">
+          <button type="submit" class="btn btn-sm">
+            <i data-lucide="search-check" style="width: 14px; height: 14px"></i>
+            Check for Updates
+          </button>
+        </form>
+      </div>
+    {% else %}
+      <div class="settings-hint" style="margin-top: 0.75rem">
+        <i data-lucide="info" style="width: 14px; height: 14px; flex-shrink: 0"></i>
+        <span>
+          One-click update isn't available (the Docker socket isn't mounted). Update
+          from the host with:
+          <code>docker compose pull && docker compose up -d</code>
+        </span>
+      </div>
+      <div class="settings-network-info">
+        <form hx-post="/api/update/check"
+              hx-target="#update-panel"
+              hx-swap="outerHTML"
+              style="display: inline">
+          <button type="submit" class="btn btn-sm">
+            <i data-lucide="search-check" style="width: 14px; height: 14px"></i>
+            Check for Updates
+          </button>
+        </form>
+      </div>
+    {% endif %}
+  {% elif update.update_error %}
+    <div class="status-box status-error" style="margin-top: 1rem">
+      <i data-lucide="wifi-off"
+         style="width: 18px;
+                height: 18px;
+                flex-shrink: 0"></i>
+      <span>Couldn't reach the version source. Check your connection.</span>
+    </div>
+    <div class="settings-network-info">
+      <form hx-post="/api/update/check"
+            hx-target="#update-panel"
+            hx-swap="outerHTML"
+            style="display: inline">
+        <button type="submit" class="btn btn-sm">
+          <i data-lucide="search-check" style="width: 14px; height: 14px"></i>
+          Check for Updates
+        </button>
+      </form>
+    </div>
   {% else %}
-  <div class="settings-hint" style="margin-top: 0.75rem">
-    <i data-lucide="info" style="width: 14px; height: 14px; flex-shrink: 0"></i>
-    <span>
-      One-click update isn't available (the Docker socket isn't mounted). Update
-      from the host with:
-      <code>docker compose pull && docker compose up -d</code>
-    </span>
-  </div>
-  <div class="settings-network-info">
-    <form
-      hx-post="/api/update/check"
-      hx-target="#update-panel"
-      hx-swap="outerHTML"
-      style="display: inline"
-    >
-      <button type="submit" class="btn btn-sm">
-        <i data-lucide="search-check" style="width: 14px; height: 14px"></i>
-        Check for Updates
-      </button>
-    </form>
-  </div>
-  {% endif %} {% elif update.update_error %}
-  <div class="status-box status-error" style="margin-top: 1rem">
-    <i
-      data-lucide="wifi-off"
-      style="width: 18px; height: 18px; flex-shrink: 0"
-    ></i>
-    <span>Couldn't reach the version source. Check your connection.</span>
-  </div>
-  <div class="settings-network-info">
-    <form
-      hx-post="/api/update/check"
-      hx-target="#update-panel"
-      hx-swap="outerHTML"
-      style="display: inline"
-    >
-      <button type="submit" class="btn btn-sm">
-        <i data-lucide="search-check" style="width: 14px; height: 14px"></i>
-        Check for Updates
-      </button>
-    </form>
-  </div>
-  {% else %}
-  <div class="status-box status-done" style="margin-top: 1rem">
-    <i
-      data-lucide="check-circle"
-      style="width: 18px; height: 18px; flex-shrink: 0"
-    ></i>
-    <span>You're up to date.</span>
-  </div>
-  <div class="settings-network-info">
-    <form
-      hx-post="/api/update/check"
-      hx-target="#update-panel"
-      hx-swap="outerHTML"
-      style="display: inline"
-    >
-      <button type="submit" class="btn btn-sm">
-        <i data-lucide="search-check" style="width: 14px; height: 14px"></i>
-        Check for Updates
-      </button>
-    </form>
-  </div>
+    <div class="status-box status-done" style="margin-top: 1rem">
+      <i data-lucide="check-circle"
+         style="width: 18px;
+                height: 18px;
+                flex-shrink: 0"></i>
+      <span>You're up to date.</span>
+    </div>
+    <div class="settings-network-info">
+      <form hx-post="/api/update/check"
+            hx-target="#update-panel"
+            hx-swap="outerHTML"
+            style="display: inline">
+        <button type="submit" class="btn btn-sm">
+          <i data-lucide="search-check" style="width: 14px; height: 14px"></i>
+          Check for Updates
+        </button>
+      </form>
+    </div>
   {% endif %}
 </div>

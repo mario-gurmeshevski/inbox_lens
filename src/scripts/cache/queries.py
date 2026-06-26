@@ -43,7 +43,7 @@ def get_priority_counts(db_path: str) -> dict[str, int]:
 def get_counts(db_path: str) -> dict:
     with _connect(db_path) as conn:
         rows = conn.execute("SELECT status, COUNT(*) as cnt FROM emails GROUP BY status").fetchall()
-    counts = {"headers_only": 0, "fetched": 0, "checked": 0}
+    counts = {"headers_only": 0, "fetched": 0, "checked": 0, "fetched_no_body": 0}
     for row in rows:
         if row["status"] in counts:
             counts[row["status"]] = row["cnt"]
@@ -87,7 +87,7 @@ def search_emails(
     elif status == "checked":
         conditions.append("status = 'checked'")
     elif status == "headers_only":
-        conditions.append("status = 'headers_only'")
+        conditions.append("status IN ('headers_only', 'fetched_no_body')")
 
     if priority:
         conditions.append("category = ?")

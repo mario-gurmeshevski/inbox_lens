@@ -39,6 +39,22 @@ class TestFormatDate:
         result = web._format_date("not-a-date")
         assert result == "not-a-date"
 
+    def test_converts_to_selected_timezone(self, tmp_path, monkeypatch):
+        db_path = str(tmp_path / "tz_test.db")
+        cache.init_db(db_path)
+        cache.save_setting("timezone", "Asia/Tokyo", db_path)
+        monkeypatch.setattr(web, "DB_PATH", db_path)
+        result = web._format_date("Fri, 26 Jun 2026 05:02:00 +0000")
+        assert "14:02" in result
+
+    def test_defaults_to_device_timezone(self, tmp_path, monkeypatch):
+        db_path = str(tmp_path / "tz_test_default.db")
+        cache.init_db(db_path)
+        monkeypatch.setattr(web, "DB_PATH", db_path)
+        monkeypatch.setattr(web, "_LOCAL_TIMEZONE", "Asia/Tokyo")
+        result = web._format_date("Fri, 26 Jun 2026 05:02:00 +0000")
+        assert "14:02" in result
+
 
 class TestWebEndpoints:
     @pytest.fixture(autouse=True)
@@ -1231,3 +1247,125 @@ class TestUpdateEndpoints:
             resp = client.get("/settings")
         assert resp.status_code == 200
         assert b"Update Now" in resp.content or b"docker compose pull" in resp.content
+
+    def test_settings_timezone_save_valid(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+        ):
+            client = self._make_client()
+            resp = client.post(
+                "/settings/timezone",
+                data={"timezone": "Asia/Tokyo"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 200
+        assert cache.get_setting("timezone", self.db_path) == "Asia/Tokyo"
+
+    def test_settings_timezone_rejects_invalid(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web, "_LOCAL_TIMEZONE", "Asia/Tokyo"),
+            patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+        ):
+            client = self._make_client()
+            resp = client.post(
+                "/settings/timezone",
+                data={"timezone": "Fake/Invalid_Zone"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 200
+        # Invalid input falls back to the detected device timezone.
+        assert cache.get_setting("timezone", self.db_path) == "Asia/Tokyo"
+
+    def test_settings_page_timezone_combobox_carries_saved_value(self):
+        cache.save_setting("timezone", "Asia/Tokyo", self.db_path)
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+        ):
+            client = self._make_client()
+            resp = client.get("/settings")
+        assert resp.status_code == 200
+        assert b'name="timezone"' in resp.content
+        assert b'value="Asia/Tokyo"' in resp.content
+        assert b"tz-combobox" in resp.content
+
+    def test_settings_page_defaults_to_device_timezone(self):
+        # With no saved timezone, the page should default to the device's zone.
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web, "_LOCAL_TIMEZONE", "Europe/Berlin"),
+            patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+        ):
+            client = self._make_client()
+            resp = client.get("/settings")
+        assert resp.status_code == 200
+        assert b'value="Europe/Berlin"' in resp.content
+
+    def test_timezone_groups_contains_all_major_zones(self):
+        tz_ids = set(web._flat_timezone_ids())
+        assert "Asia/Tokyo" in tz_ids
+        assert "America/New_York" in tz_ids
+        assert "Europe/London" in tz_ids
+        assert len(tz_ids) > 100
+        assert "UTC" not in tz_ids
+        assert "UCT" not in tz_ids
+        assert "Universal" not in tz_ids
+        assert "GMT" not in tz_ids
+        assert "Etc/UTC" not in tz_ids
+        assert "US/Eastern" not in tz_ids
+        assert all("/" in tz for tz in tz_ids)
+
+    def test_detect_local_timezone_from_etc_timezone(self):
+        from io import StringIO
+
+        original_open = open
+
+        def fake_open(path, *args, **kwargs):
+            if str(path) == "/etc/timezone":
+                return StringIO("Asia/Kolkata\n")
+            return original_open(path, *args, **kwargs)
+
+        with patch("builtins.open", fake_open):
+            assert web._detect_local_timezone() == "Asia/Kolkata"
+
+    def test_detect_local_timezone_from_localtime_symlink(self):
+        import builtins
+
+        original_open = builtins.open
+
+        def fake_open(path, *args, **kwargs):
+            if str(path) == "/etc/timezone":
+                raise FileNotFoundError
+            return original_open(path, *args, **kwargs)
+
+        with (
+            patch("builtins.open", fake_open),
+            patch("os.path.realpath", return_value="/usr/share/zoneinfo/America/New_York"),
+        ):
+            assert web._detect_local_timezone() == "America/New_York"
+
+    def test_detect_local_timezone_falls_back_to_utc(self):
+        import builtins
+
+        original_open = builtins.open
+
+        def fake_open(path, *args, **kwargs):
+            if str(path) == "/etc/timezone":
+                raise FileNotFoundError
+            return original_open(path, *args, **kwargs)
+
+        with (
+            patch("builtins.open", fake_open),
+            patch("os.path.realpath", return_value="/etc/localtime"),
+        ):
+            assert web._detect_local_timezone() == "UTC"

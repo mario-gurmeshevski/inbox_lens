@@ -435,8 +435,8 @@ class TestDoIdle:
         monkeypatch.setattr(idle_mod.time, "monotonic", mock_monotonic)
 
         assert IdleMonitor()._do_idle(conn) is True
-        assert len(end_calls) == 2          # one renew + one poll fallback
-        assert conn.send.call_count == 2    # IDLE issued twice -> renewal re-entered
+        assert len(end_calls) == 2  # one renew + one poll fallback
+        assert conn.send.call_count == 2  # IDLE issued twice -> renewal re-entered
 
     def test_sends_idle_with_tag(self, monkeypatch):
         conn = self.make_conn()

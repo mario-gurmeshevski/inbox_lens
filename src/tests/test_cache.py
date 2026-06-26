@@ -217,6 +217,24 @@ class TestScanAndUpdate:
         result = cache.scan_and_update([email], tmp_db, compiled_patterns)
         assert result["skipped_no_body"] == 1
 
+    def test_skips_fetched_no_body_status(self, tmp_db, compiled_patterns):
+        email = {"message_id": "<fnb@example.com>", "subject": "test", "body": ""}
+        h = cache._hash_message_id(email["message_id"])
+        with cache._connect(tmp_db) as conn:
+            conn.execute(
+                "INSERT INTO emails (message_id_hash, message_id, sender, subject, date, body, status) VALUES (?,?,?,?,?,'','fetched_no_body')",
+                (
+                    h,
+                    email["message_id"],
+                    "",
+                    "test",
+                    "",
+                ),
+            )
+        result = cache.scan_and_update([email], tmp_db, compiled_patterns)
+        assert result["skipped_no_body"] == 1
+        assert result["scanned"] == 0
+
     def test_returns_correct_stats(self, tmp_db, compiled_patterns):
         emails = [{"message_id": f"<x{i}@example.com>", "subject": "problem", "body": "test"} for i in range(3)]
         result = cache.scan_and_update(emails, tmp_db, compiled_patterns)
@@ -277,6 +295,13 @@ class TestGetCounts:
         assert counts["headers_only"] == 0
         assert counts["fetched"] == 0
         assert counts["checked"] == 0
+        assert counts["fetched_no_body"] == 0
+
+    def test_counts_fetched_no_body(self, tmp_db, sample_headers_batch):
+        cache.save_headers_batch([sample_headers_batch[0]], tmp_db)
+        cache.update_bodies_batch([(sample_headers_batch[0]["message_id"], "")], tmp_db)
+        counts = cache.get_counts(tmp_db)
+        assert counts["fetched_no_body"] == 1
 
 
 class TestSaveHeadersBatch:
@@ -320,6 +345,15 @@ class TestUpdateBodiesBatch:
         updated = cache.update_bodies_batch([(sample_email["message_id"], "new body")], tmp_db)
         assert updated == 1
 
+    def test_empty_body_marks_fetched_no_body(self, tmp_db, sample_headers_batch):
+        cache.save_headers_batch(sample_headers_batch, tmp_db)
+        updated = cache.update_bodies_batch([(sample_headers_batch[0]["message_id"], "")], tmp_db)
+        assert updated == 1
+        h = cache._hash_message_id(sample_headers_batch[0]["message_id"])
+        with cache._connect(tmp_db) as conn:
+            row = conn.execute("SELECT body, status FROM emails WHERE message_id_hash = ?", (h,)).fetchone()
+        assert row["status"] == "fetched_no_body"
+
     def test_empty_list_returns_zero(self, tmp_db):
         assert cache.update_bodies_batch([], tmp_db) == 0
 
@@ -332,6 +366,12 @@ class TestGetHeadersOnlyMessageIds:
 
     def test_excludes_other_statuses(self, tmp_db, sample_email):
         _save_fetched(sample_email, tmp_db)
+        result = cache.get_headers_only_message_ids(tmp_db)
+        assert len(result) == 0
+
+    def test_excludes_fetched_no_body(self, tmp_db, sample_email):
+        cache.save_headers_batch([sample_email], tmp_db)
+        cache.update_bodies_batch([(sample_email["message_id"], "")], tmp_db)
         result = cache.get_headers_only_message_ids(tmp_db)
         assert len(result) == 0
 
@@ -546,6 +586,20 @@ class TestSearchEmailsStatusBranches:
         self._seed(tmp_db)
         _, total, _ = cache.search_emails(tmp_db, status="headers_only")
         assert total == 1
+
+    def test_status_headers_only_includes_fetched_no_body(self, tmp_db):
+        self._seed(tmp_db)
+        email = {
+            "message_id": "<fnb@e.com>",
+            "from": "s@e.com",
+            "subject": "empty",
+            "date": "Mon, 01 Jan 2024 00:00:00 +0000",
+            "body": "",
+        }
+        cache.save_headers_batch([email], tmp_db)
+        cache.update_bodies_batch([(email["message_id"], "")], tmp_db)
+        _, total, _ = cache.search_emails(tmp_db, status="headers_only")
+        assert total == 2
 
     def test_combined_status_and_priority_filters(self, tmp_db):
         emails = [

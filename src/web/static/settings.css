@@ -88,6 +88,157 @@
   font-size: 0.82rem;
 }
 
+.tz-combobox {
+  position: relative;
+  width: 100%;
+  max-width: 400px;
+}
+
+.tz-combobox-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: 0.9rem;
+  font-family: inherit;
+  background-color: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  outline: none;
+  text-align: left;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+
+.tz-combobox-btn:hover {
+  border-color: var(--border-bright);
+}
+
+.tz-combobox-btn:focus,
+.tz-combobox-btn[aria-expanded="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.tz-combobox-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tz-chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform var(--transition);
+}
+
+.tz-combobox-btn[aria-expanded="true"] .tz-chevron {
+  transform: rotate(180deg);
+}
+
+.tz-panel {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  flex-direction: column;
+  background-color: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+}
+
+.tz-panel.is-open {
+  display: flex;
+}
+
+.tz-search {
+  position: relative;
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.tz-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.45rem 0.6rem 0.45rem 2rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-family: inherit;
+  background-color: var(--bg-surface);
+  color: var(--text);
+  outline: none;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+
+.tz-search-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.tz-options {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 0.25rem 0;
+}
+
+.tz-group + .tz-group {
+  margin-top: 0.15rem;
+}
+
+.tz-group-label {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0.35rem 0.75rem;
+  background-color: var(--bg-surface);
+  font-weight: 600;
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.tz-option {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tz-option:hover,
+.tz-option.is-active {
+  background-color: var(--card-hover);
+}
+
+.tz-option[aria-selected="true"] {
+  background-color: rgba(59, 130, 246, 0.12);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.tz-option[hidden],
+.tz-group[hidden] {
+  display: none;
+}
+
+.tz-empty {
+  padding: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
 @media (max-width: 768px) {
   .settings-row {
     flex-direction: column;

@@ -19,6 +19,7 @@ def fast_constants(monkeypatch):
     monkeypatch.setattr(idle_mod, "RECONNECT_DELAY", 0.01)
     monkeypatch.setattr(idle_mod, "IDLE_CHECK_INTERVAL", 0.01)
     monkeypatch.setattr(idle_mod, "IDLE_RENEW_INTERVAL", 9999)
+    monkeypatch.setattr(idle_mod, "POLL_FALLBACK_INTERVAL", 9999)
 
 
 @pytest.fixture
@@ -167,24 +168,48 @@ class TestCheckIdleSupport:
 class TestEndIdle:
     def test_sends_done_and_reads_until_tag(self, idle_conn):
         idle_conn.readline.return_value = b"TAG1 OK IDLE done\r\n"
-        m = IdleMonitor()
-        m._end_idle(idle_conn, b"TAG1")
+        result = IdleMonitor()._end_idle(idle_conn, b"TAG1")
         idle_conn.send.assert_called_with(b"DONE\r\n")
         idle_conn.readline.assert_called()
+        assert result is False
 
     def test_returns_on_send_exception(self, idle_conn):
         idle_conn.send.side_effect = RuntimeError("boom")
-        IdleMonitor()._end_idle(idle_conn, b"TAG1")
+        result = IdleMonitor()._end_idle(idle_conn, b"TAG1")
         idle_conn.readline.assert_not_called()
+        assert result is False
 
     def test_breaks_on_empty_readline(self, idle_conn):
         idle_conn.readline.return_value = b""
-        IdleMonitor()._end_idle(idle_conn, b"TAG1")
+        result = IdleMonitor()._end_idle(idle_conn, b"TAG1")
         idle_conn.send.assert_called_once()
+        assert result is False
 
     def test_breaks_on_readline_exception(self, idle_conn):
         idle_conn.readline.side_effect = RuntimeError("boom")
         IdleMonitor()._end_idle(idle_conn, b"TAG1")
+
+    def test_detects_exists_while_draining(self, idle_conn):
+        idle_conn.readline.side_effect = [
+            b"* 5 EXISTS\r\n",
+            b"TAG1 OK IDLE done\r\n",
+        ]
+        assert IdleMonitor()._end_idle(idle_conn, b"TAG1") is True
+
+    def test_detects_recent_while_draining(self, idle_conn):
+        idle_conn.readline.side_effect = [
+            b"* 3 RECENT\r\n",
+            b"TAG1 OK IDLE done\r\n",
+        ]
+        assert IdleMonitor()._end_idle(idle_conn, b"TAG1") is True
+
+    def test_detects_mail_among_other_lines(self, idle_conn):
+        idle_conn.readline.side_effect = [
+            b"* 2 RECENT\r\n",
+            b"* FLAGS (\\Seen)\r\n",
+            b"TAG1 OK IDLE terminated\r\n",
+        ]
+        assert IdleMonitor()._end_idle(idle_conn, b"TAG1") is True
 
 
 class TestDoIdle:
@@ -332,24 +357,86 @@ class TestDoIdle:
     def test_renews_idle_when_elapsed_exceeds_interval(self, monkeypatch):
         conn = self.make_conn()
         end_calls = []
-
+        monkeypatch.setattr(idle_mod, "IDLE_RENEW_INTERVAL", 100)
         monkeypatch.setattr(idle_mod.select, "select", lambda r, w, x, t: ([], [], []))
         monkeypatch.setattr(
             idle_mod.IdleMonitor,
             "_end_idle",
-            lambda self, conn, tag: (end_calls.append(tag), m._stop.set()),
+            lambda self, conn, tag: (end_calls.append(tag), m._stop.set(), False)[2],
         )
 
         monotonic_calls = []
 
         def mock_monotonic():
             monotonic_calls.append(1)
-            return 10000.0 if len(monotonic_calls) > 1 else 0.0
+            return 200.0 if len(monotonic_calls) > 2 else 0.0
 
         monkeypatch.setattr(idle_mod.time, "monotonic", mock_monotonic)
         m = IdleMonitor()
         assert m._do_idle(conn) is False
         assert len(end_calls) == 1
+
+    def test_renew_returns_true_when_mail_observed(self, monkeypatch):
+        conn = self.make_conn()
+        monkeypatch.setattr(idle_mod, "IDLE_RENEW_INTERVAL", 100)
+        monkeypatch.setattr(idle_mod.select, "select", lambda r, w, x, t: ([], [], []))
+        monkeypatch.setattr(idle_mod.IdleMonitor, "_end_idle", lambda self, c, t: True)
+
+        monotonic_calls = []
+
+        def mock_monotonic():
+            monotonic_calls.append(1)
+            return 200.0 if len(monotonic_calls) > 2 else 0.0
+
+        monkeypatch.setattr(idle_mod.time, "monotonic", mock_monotonic)
+        assert IdleMonitor()._do_idle(conn) is True
+
+    def test_poll_fallback_triggers_fetch(self, monkeypatch):
+        conn = self.make_conn()
+        end_calls = []
+        monkeypatch.setattr(idle_mod, "POLL_FALLBACK_INTERVAL", 100)
+        monkeypatch.setattr(idle_mod.select, "select", lambda r, w, x, t: ([], [], []))
+        monkeypatch.setattr(
+            idle_mod.IdleMonitor,
+            "_end_idle",
+            lambda self, c, t: (end_calls.append(t), False)[1],
+        )
+
+        monotonic_calls = []
+
+        def mock_monotonic():
+            monotonic_calls.append(1)
+            return 200.0 if len(monotonic_calls) > 2 else 0.0
+
+        monkeypatch.setattr(idle_mod.time, "monotonic", mock_monotonic)
+        assert IdleMonitor()._do_idle(conn) is True
+        assert len(end_calls) == 1
+
+    def test_renew_fires_before_poll_fallback_when_ordered(self, monkeypatch):
+        conn = self.make_conn()
+        end_calls = []
+        monkeypatch.setattr(idle_mod, "IDLE_RENEW_INTERVAL", 100)
+        monkeypatch.setattr(idle_mod, "POLL_FALLBACK_INTERVAL", 150)
+        monkeypatch.setattr(idle_mod.select, "select", lambda r, w, x, t: ([], [], []))
+        monkeypatch.setattr(
+            idle_mod.IdleMonitor,
+            "_end_idle",
+            lambda self, c, t: (end_calls.append(t), False)[1],
+        )
+
+        seq = iter([0.0, 0.0, 100.0, 100.0, 100.0, 150.0])
+
+        def mock_monotonic():
+            try:
+                return next(seq)
+            except StopIteration:
+                return 150.0
+
+        monkeypatch.setattr(idle_mod.time, "monotonic", mock_monotonic)
+
+        assert IdleMonitor()._do_idle(conn) is True
+        assert len(end_calls) == 2          # one renew + one poll fallback
+        assert conn.send.call_count == 2    # IDLE issued twice -> renewal re-entered
 
     def test_sends_idle_with_tag(self, monkeypatch):
         conn = self.make_conn()

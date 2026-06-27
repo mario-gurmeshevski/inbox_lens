@@ -4,11 +4,6 @@ services:
     build: .
     volumes:
       - ./src/data:/app/src/data
-      # Mount the Docker socket to enable one-click, in-app updates.
-      # Requires the container user to have read/write access to the socket
-      # (e.g. `user: root` or `group_add: ["<host docker gid>"]`). If the socket
-      # is not accessible, the Update panel gracefully falls back to showing
-      # host-side update instructions.
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - HOST_IP=${HOST_IP:-}

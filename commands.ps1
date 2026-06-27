@@ -150,12 +150,12 @@ switch ($Task) {
     }
 
     "tailscale-status" {
-        $argList = @("compose") + $COMPOSE_FILES_TS + @("exec", "tailscale", "tailscale", "status")
+        $argList = @("compose") + $COMPOSE_FILES_TS + @("exec", "tailscale", "/usr/local/bin/tailscale", "status")
         & docker @argList
     }
 
     "tailscale-ip" {
-        $argList = @("compose") + $COMPOSE_FILES_TS + @("exec", "tailscale", "tailscale", "ip", "-4")
+        $argList = @("compose") + $COMPOSE_FILES_TS + @("exec", "tailscale", "/usr/local/bin/tailscale", "ip", "-4")
         $ip = & docker @argList 2>$null
         if ($LASTEXITCODE -eq 0 -and $ip) {
             Write-Host $ip
@@ -165,12 +165,12 @@ switch ($Task) {
     }
 
     "tailscale-logout" {
-        $argList = @("compose") + $COMPOSE_FILES_TS + @("exec", "tailscale", "tailscale", "logout")
+        $argList = @("compose") + $COMPOSE_FILES_TS + @("exec", "tailscale", "/usr/local/bin/tailscale", "logout")
         & docker @argList 2>$null
     }
 
     "purge" {
-        $logoutArgs = @("compose") + $COMPOSE_FILES_TS + @("exec", "tailscale", "tailscale", "logout")
+        $logoutArgs = @("compose") + $COMPOSE_FILES_TS + @("exec", "tailscale", "/usr/local/bin/tailscale", "logout")
         & docker @logoutArgs 2>$null
 
         Invoke-Clean

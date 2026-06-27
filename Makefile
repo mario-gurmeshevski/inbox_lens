@@ -65,11 +65,11 @@ stop:
 
 start:
 	docker compose $(COMPOSE_FILES_TS) start
-	@DNS=$$(docker compose $(COMPOSE_FILES_TS) exec -T tailscale sh -c "tailscale status --json 2>/dev/null | grep -o '\"DNSName\": *\"[^\"]*\"' | head -1 | cut -d'\"' -f4 | sed 's/\.$$//'"); \
+	@DNS=$$(docker compose $(COMPOSE_FILES_TS) exec -T tailscale sh -c "/usr/local/bin/tailscale status --json 2>/dev/null | grep -o '\"DNSName\": *\"[^\"]*\"' | head -1 | cut -d'\"' -f4 | sed 's/\.$$//'"); \
 	if [ -n "$$DNS" ] && docker compose $(COMPOSE_FILES_TS) exec -T web test -f /shared/serve_done 2>/dev/null; then \
 	  echo "Website: https://$$DNS"; \
 	elif [ -n "$$DNS" ]; then \
-	  IP=$$(docker compose $(COMPOSE_FILES_TS) exec -T tailscale tailscale ip -4 2>/dev/null); \
+	  IP=$$(docker compose $(COMPOSE_FILES_TS) exec -T tailscale /usr/local/bin/tailscale ip -4 2>/dev/null); \
 	  echo "Website: http://$${IP}:8000"; \
 	else \
 	  echo "Tailscale not logged in. Run: make tailscale-up"; \
@@ -81,13 +81,13 @@ tailscale-up:
 	@docker compose $(COMPOSE_FILES_TS) logs tailscale || echo "Run 'make up-ts' first."
 
 tailscale-status:
-	docker compose $(COMPOSE_FILES_TS) exec tailscale tailscale status
+	docker compose $(COMPOSE_FILES_TS) exec tailscale /usr/local/bin/tailscale status
 
 tailscale-ip:
-	@docker compose $(COMPOSE_FILES_TS) exec tailscale tailscale ip -4 2>/dev/null || echo "Tailscale not running. Run 'make up-ts' first."
+	@docker compose $(COMPOSE_FILES_TS) exec tailscale /usr/local/bin/tailscale ip -4 2>/dev/null || echo "Tailscale not running. Run 'make up-ts' first."
 
 tailscale-logout:
-	-docker compose $(COMPOSE_FILES_TS) exec tailscale tailscale logout
+	-docker compose $(COMPOSE_FILES_TS) exec tailscale /usr/local/bin/tailscale logout
 
 purge: reset tailscale-logout
 	docker compose $(COMPOSE_FILES_TS) down --rmi all --volumes --remove-orphans

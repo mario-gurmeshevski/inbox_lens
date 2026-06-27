@@ -5,10 +5,7 @@
        hx-trigger="sse:update_available from:/api/events"
        hx-swap="outerHTML">
     <a href="/settings" class="update-banner-body">
-      <i data-lucide="download-cloud"
-         style="width: 18px;
-                height: 18px;
-                flex-shrink: 0"></i>
+      <i data-lucide="download-cloud" class="icon-md"></i>
       <span>A new update is available ({{ update.latest_version }}). Click here to
       update.</span>
     </a>
@@ -19,7 +16,7 @@
           hx-swap="outerHTML"
           class="update-banner-dismiss">
       <button type="submit" aria-label="Dismiss update banner" title="Dismiss">
-        <i data-lucide="x" style="width: 16px; height: 16px"></i>
+        <i data-lucide="x" class="icon"></i>
       </button>
     </form>
   </div>

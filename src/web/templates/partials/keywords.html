@@ -2,15 +2,13 @@
   <div id="kw-status"
        class="status-box status-dismissable {% if kw_msg_ok %}status-done{% else %}status-error{% endif %}">
     <i data-lucide="{% if kw_msg_ok %}check-circle{% else %}alert-circle{% endif %}"
-       style="width: 18px;
-              height: 18px;
-              flex-shrink: 0"></i>
+       class="icon-md"></i>
     <span>{{ kw_msg }}</span>
     <button type="button"
             class="status-close"
             aria-label="Dismiss"
             onclick="this.parentElement.remove()">
-      <i data-lucide="x" style="width: 14px; height: 14px"></i>
+      <i data-lucide="x" class="icon-sm"></i>
     </button>
   </div>
   <script src="/static/js/keywords.js"></script>
@@ -25,7 +23,7 @@
          placeholder="Priority level (e.g. 8)"
          required />
   <button type="submit" class="btn btn-sm">
-    <i data-lucide="folder-plus" style="width: 14px; height: 14px"></i>
+    <i data-lucide="folder-plus" class="icon-sm"></i>
     Add category
   </button>
 </form>
@@ -43,10 +41,9 @@
               class="inline-form">
           <input type="hidden" name="level" value="{{ level }}" />
           <button type="submit"
-                  class="btn btn-danger btn-sm"
-                  onclick="return confirm('Remove priority {{ level }} and all its words?');"
-                  style="margin-left: 1rem">
-            <i data-lucide="trash-2" style="width: 14px; height: 14px"></i>
+                  class="btn btn-danger btn-sm remove-cat-btn"
+                  onclick="return confirm('Remove priority {{ level }} and all its words?');">
+            <i data-lucide="trash-2" class="icon-sm"></i>
             Remove
           </button>
         </form>
@@ -84,7 +81,7 @@
                       class="remove-btn"
                       aria-label="Remove word"
                       title="Remove">
-                <i data-lucide="x" style="width: 14px; height: 14px"></i>
+                <i data-lucide="x" class="icon-sm"></i>
               </button>
             </form>
           </div>
@@ -101,7 +98,7 @@
                placeholder="Add word or phrase…"
                required />
         <button type="submit" class="btn btn-sm">
-          <i data-lucide="plus" style="width: 14px; height: 14px"></i>
+          <i data-lucide="plus" class="icon-sm"></i>
           Add
         </button>
       </form>

@@ -102,12 +102,8 @@
   font-weight: 400;
 }
 
-.inline-form {
-  display: inline;
-}
-
-.kw-card-header .inline-form {
-  margin-left: 0;
+.remove-cat-btn {
+  margin-left: 1rem;
 }
 
 .words {

@@ -6,6 +6,24 @@
   border-radius: 2px;
 }
 
+.back-row {
+  margin-bottom: 1.25rem;
+}
+
+.email-subject-title {
+  font-size: 1.3rem;
+}
+
+.message-id {
+  font-family: "SF Mono", "Fira Code", "JetBrains Mono", monospace;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.empty-body {
+  color: var(--text-muted);
+}
+
 .tags-section {
   display: flex;
   flex-wrap: wrap;

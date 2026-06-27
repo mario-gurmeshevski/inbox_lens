@@ -1,6 +1,6 @@
 {% if running %}
   <div class="status-box status-running">
-    <i data-lucide="loader" style="width: 16px; height: 16px" class="spin"></i>
+    <i data-lucide="loader" class="icon spin"></i>
     <div class="status-content">
       <div class="status-header">
         <span class="status-phase">{{ phase_label }}</span>
@@ -23,12 +23,12 @@
   </div>
 {% elif phase == "error" %}
   <div class="status-box status-error">
-    <i data-lucide="alert-circle" style="width: 16px; height: 16px"></i>
+    <i data-lucide="alert-circle" class="icon"></i>
     <span>{{ message }}</span>
   </div>
 {% else %}
   <div class="status-box status-done">
-    <i data-lucide="check-circle" style="width: 16px; height: 16px"></i>
+    <i data-lucide="check-circle" class="icon"></i>
     <span>{{ message }}</span>
   </div>
 {% endif %}

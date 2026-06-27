@@ -7,7 +7,7 @@
 {% block content %}
   <h1>
     Emails
-    <span style="font-size: 0.9rem; color: var(--text-muted); font-weight: 400">({{ total_rows }} total)</span>
+    <span class="total-count">({{ total_rows }} total)</span>
   </h1>
   <div class="filter-bar">
     <select name="status" id="filter-status">
@@ -29,13 +29,13 @@
            placeholder="Search subject or sender..."
            value="{{ search }}" />
     <button type="button" class="btn btn-sm" onclick="applyFilters()">
-      <i data-lucide="search" style="width: 14px; height: 14px"></i>
+      <i data-lucide="search" class="icon-sm"></i>
       Filter
     </button>
     <button type="button"
             class="btn btn-sm"
             onclick="window.location.href='/emails'">
-      <i data-lucide="x" style="width: 14px; height: 14px"></i>
+      <i data-lucide="x" class="icon-sm"></i>
       Clear
     </button>
   </div>

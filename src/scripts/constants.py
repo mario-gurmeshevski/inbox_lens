@@ -1,7 +1,8 @@
+import os
 from pathlib import Path
 
-_SRC_DIR = Path(__file__).resolve().parent.parent
-_DATA_DIR = _SRC_DIR / "data"
+_DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_DATA_DIR = Path(os.environ.get("INBOX_LENS_DATA_DIR") or _DEFAULT_DATA_DIR)
 
 DB_PATH = str(_DATA_DIR / "emails.db")
 KEYWORDS_FILE = str(_DATA_DIR / "keywords.json")

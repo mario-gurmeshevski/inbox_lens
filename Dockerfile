@@ -4,6 +4,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl gosu && rm
 
 WORKDIR /app
 
+ENV INBOX_LENS_DATA_DIR=/app/src/data
+
 COPY pyproject.toml .
 COPY src/ src/
 RUN pip install --no-cache-dir .

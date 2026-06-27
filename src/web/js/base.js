@@ -156,8 +156,8 @@ function kwCancelEdit(input) {
 (function () {
   var fileInput = document.getElementById("kw-import-file");
   if (!fileInput) return;
-  var form = fileInput.closest(".kw-import-form");
-  var label = fileInput.parentElement.querySelector(".kw-file-name");
+  var form = fileInput.closest(".import-form");
+  var label = fileInput.parentElement.querySelector(".file-name");
 
   fileInput.addEventListener("change", function () {
     var name =

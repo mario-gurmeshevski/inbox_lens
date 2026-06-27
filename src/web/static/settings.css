@@ -75,6 +75,10 @@
   color: var(--text-secondary);
 }
 
+.settings-hint.is-spaced {
+  margin-top: 0.75rem;
+}
+
 .settings-hint code {
   background: var(--border);
   padding: 0.1rem 0.35rem;

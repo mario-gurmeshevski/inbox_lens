@@ -34,6 +34,66 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+.icon-sm,
+.icon,
+.icon-md,
+.icon-lg,
+.icon-xl,
+.icon-2xl {
+  flex-shrink: 0;
+}
+
+.icon-sm {
+  width: 14px;
+  height: 14px;
+}
+
+.icon {
+  width: 16px;
+  height: 16px;
+}
+
+.icon-md {
+  width: 18px;
+  height: 18px;
+}
+
+.icon-lg {
+  width: 20px;
+  height: 20px;
+}
+
+.icon-xl {
+  width: 28px;
+  height: 28px;
+}
+
+.icon-2xl {
+  width: 32px;
+  height: 32px;
+}
+
+.inline-form {
+  display: inline;
+}
+
+.inline-form + .inline-form,
+.nav-links .inline-form {
+  margin-left: 0.5rem;
+}
+
+.col-priority {
+  width: 80px;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-weight: 400;
+}
+
 nav {
   background: var(--bg);
   border-bottom: 1px solid var(--border);
@@ -149,9 +209,8 @@ h2 {
   gap: 0.5rem;
 }
 
-.section-title svg {
-  width: 16px;
-  height: 16px;
+.section-title.is-flush {
+  margin-top: 0;
 }
 
 table {
@@ -224,11 +283,6 @@ td a:hover {
   white-space: nowrap;
 }
 
-.btn svg {
-  width: 16px;
-  height: 16px;
-}
-
 .btn:hover {
   background: var(--black);
   color: var(--white);
@@ -243,11 +297,6 @@ td a:hover {
 .btn-sm {
   padding: 0.3rem 0.65rem;
   font-size: 0.8rem;
-}
-
-.btn-sm svg {
-  width: 14px;
-  height: 14px;
 }
 
 .btn-lg {
@@ -340,6 +389,10 @@ td a:hover {
   margin-bottom: 1.25rem;
 }
 
+.detail-card.is-spaced {
+  margin-top: 1.25rem;
+}
+
 .detail-card dl {
   display: grid;
   grid-template-columns: 140px 1fr;
@@ -357,8 +410,6 @@ td a:hover {
 }
 
 .detail-card dt svg {
-  width: 14px;
-  height: 14px;
   opacity: 0.5;
 }
 
@@ -377,6 +428,10 @@ td a:hover {
   align-items: flex-start;
   gap: 0.65rem;
   animation: fadeIn 0.3s ease;
+}
+
+.status-box.is-spaced {
+  margin-top: 1rem;
 }
 
 .status-content {
@@ -497,6 +552,10 @@ td a:hover {
   margin-top: 0.3rem;
 }
 
+.settings-desc.is-spaced {
+  margin-top: 0.5rem;
+}
+
 .settings-url {
   display: flex;
   align-items: center;
@@ -506,6 +565,10 @@ td a:hover {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   margin-top: 0.5rem;
+}
+
+.settings-url.is-spaced {
+  margin-top: 0.75rem;
 }
 
 .settings-url code {
@@ -718,6 +781,10 @@ td a:hover {
   font-size: 0.9rem;
 }
 
+.setup-header .icon-2xl {
+  color: var(--accent);
+}
+
 .setup-error {
   background: #fef2f2;
   border: 1px solid #fecaca;
@@ -758,6 +825,10 @@ td a:hover {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.setup-form input[type="checkbox"] {
+  width: auto;
 }
 
 .password-field {
@@ -933,6 +1004,10 @@ td a:hover {
   color: var(--text-muted);
   margin-top: 0.35rem;
   font-size: 0.88rem;
+}
+
+.account-modal-header .icon-xl {
+  color: var(--accent);
 }
 
 @keyframes account-modal-fade-in {

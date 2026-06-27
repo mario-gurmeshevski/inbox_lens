@@ -6,13 +6,13 @@
 {% block content %}
   <h1>Settings</h1>
   {% if is_docker %}
-    <div class="detail-card" style="margin-top: 1.25rem">{% include "partials/update_panel.html" %}</div>
+    <div class="detail-card is-spaced">{% include "partials/update_panel.html" %}</div>
   {% else %}
-    <div class="detail-card" style="margin-top: 1.25rem">
+    <div class="detail-card is-spaced">
       <div class="settings-row">
         <div class="settings-info">
           <div class="settings-label">
-            <i data-lucide="refresh-cw" style="width: 16px; height: 16px"></i>
+            <i data-lucide="refresh-cw" class="icon"></i>
             Updates
           </div>
           <p class="settings-desc">
@@ -24,23 +24,17 @@
             {% endif %}
           </p>
           {% if update.update_error %}
-            <div class="status-box status-error" style="margin-top: 1rem">
-              <i data-lucide="wifi-off"
-                 style="width: 18px;
-                        height: 18px;
-                        flex-shrink: 0"></i>
+            <div class="status-box status-error is-spaced">
+              <i data-lucide="wifi-off" class="icon-md"></i>
               <span>Couldn't reach the version source. Check your connection.</span>
             </div>
           {% elif update.update_available %}
-            <div class="status-box status-warning" style="margin-top: 1rem">
-              <i data-lucide="arrow-up-circle"
-                 style="width: 18px;
-                        height: 18px;
-                        flex-shrink: 0"></i>
+            <div class="status-box status-warning is-spaced">
+              <i data-lucide="arrow-up-circle" class="icon-md"></i>
               <span>A new version is available.</span>
             </div>
-            <div class="settings-hint" style="margin-top: 0.75rem">
-              <i data-lucide="info" style="width: 14px; height: 14px; flex-shrink: 0"></i>
+            <div class="settings-hint is-spaced">
+              <i data-lucide="info" class="icon-sm"></i>
               <span>
                 Update from your checkout with:
                 <code>git pull && make install or ./commands.ps1 install .</code> then
@@ -48,11 +42,8 @@
               </span>
             </div>
           {% else %}
-            <div class="status-box status-done" style="margin-top: 1rem">
-              <i data-lucide="check-circle"
-                 style="width: 18px;
-                        height: 18px;
-                        flex-shrink: 0"></i>
+            <div class="status-box status-done is-spaced">
+              <i data-lucide="check-circle" class="icon-md"></i>
               <span>You're up to date.</span>
             </div>
           {% endif %}
@@ -62,19 +53,16 @@
   {% endif %}
   {% if restart_notice %}
     <div class="status-box status-warning">
-      <i data-lucide="alert-triangle"
-         style="width: 18px;
-                height: 18px;
-                flex-shrink: 0"></i>
+      <i data-lucide="alert-triangle" class="icon-md"></i>
       <span>Restart required for changes to take effect. Restart the container to apply
       the new network setting.</span>
     </div>
   {% endif %}
-  <div class="detail-card" style="margin-top: 1.25rem">
+  <div class="detail-card is-spaced">
     <div class="settings-row">
       <div class="settings-info">
         <div class="settings-label">
-          <i data-lucide="wifi" style="width: 16px; height: 16px"></i>
+          <i data-lucide="wifi" class="icon"></i>
           Network Access
         </div>
         <p class="settings-desc">
@@ -103,7 +91,7 @@
     {% if network_access %}
       <div class="settings-network-info">
         <div class="section-title">
-          <i data-lucide="globe" style="width: 16px; height: 16px"></i>
+          <i data-lucide="globe" class="icon"></i>
           Access from other devices
         </div>
         {% if is_docker %}
@@ -116,13 +104,13 @@
               <button type="button"
                       class="btn btn-sm"
                       onclick="copyToClipboard(this, 'http://{{ host_ip }}:{{ port }}')">
-                <i data-lucide="copy" style="width: 14px; height: 14px"></i>
+                <i data-lucide="copy" class="icon-sm"></i>
                 Copy
               </button>
             </div>
           {% else %}
             <div class="settings-hint">
-              <i data-lucide="info" style="width: 14px; height: 14px; flex-shrink: 0"></i>
+              <i data-lucide="info" class="icon-sm"></i>
               <span>Running in Docker. Set <code>HOST_IP</code> in your
                 <code>docker-compose.yaml</code> to display your network address
               here.</span>
@@ -135,7 +123,7 @@
               <button type="button"
                       class="btn btn-sm"
                       onclick="copyToClipboard(this, 'http://{{ ip }}:{{ port }}')">
-                <i data-lucide="copy" style="width: 14px; height: 14px"></i>
+                <i data-lucide="copy" class="icon-sm"></i>
                 Copy
               </button>
             </div>
@@ -149,11 +137,11 @@
       </div>
     {% endif %}
   </div>
-  <div class="detail-card" style="margin-top: 1.25rem">
+  <div class="detail-card is-spaced">
     <div class="settings-row">
       <div class="settings-info">
         <div class="settings-label">
-          <i data-lucide="shield" style="width: 16px; height: 16px"></i>
+          <i data-lucide="shield" class="icon"></i>
           Authentication
         </div>
         <p class="settings-desc">
@@ -169,25 +157,19 @@
       </div>
     </div>
     {% if password_msg %}
-      <div class="status-box {% if password_ok %}status-done{% else %}status-error{% endif %}"
-           style="margin-top: 1rem">
+      <div class="status-box {% if password_ok %}status-done{% else %}status-error{% endif %} is-spaced">
         <i data-lucide="{% if password_ok %}check-circle{% else %}alert-circle{% endif %}"
-           style="width: 18px;
-                  height: 18px;
-                  flex-shrink: 0"></i>
+           class="icon-md"></i>
         <span>{{ password_msg }}</span>
       </div>
     {% endif %}
     {% if auth_enabled %}
       <div class="settings-network-info">
         <div class="section-title">
-          <i data-lucide="key" style="width: 16px; height: 16px"></i>
+          <i data-lucide="key" class="icon"></i>
           Change Password
         </div>
-        <form method="post"
-              action="/settings/password"
-              class="setup-form"
-              style="max-width: 100%">
+        <form method="post" action="/settings/password" class="setup-form">
           <div class="form-group">
             <label for="old_password">Current Password</label>
             <div class="password-field">
@@ -196,7 +178,7 @@
                       class="password-toggle"
                       onclick="togglePassword('old_password')"
                       aria-label="Show password">
-                <i data-lucide="eye" style="width: 16px; height: 16px"></i>
+                <i data-lucide="eye" class="icon"></i>
               </button>
             </div>
           </div>
@@ -212,7 +194,7 @@
                       class="password-toggle"
                       onclick="togglePassword('new_password')"
                       aria-label="Show password">
-                <i data-lucide="eye" style="width: 16px; height: 16px"></i>
+                <i data-lucide="eye" class="icon"></i>
               </button>
             </div>
           </div>
@@ -228,12 +210,12 @@
                       class="password-toggle"
                       onclick="togglePassword('confirm_password')"
                       aria-label="Show password">
-                <i data-lucide="eye" style="width: 16px; height: 16px"></i>
+                <i data-lucide="eye" class="icon"></i>
               </button>
             </div>
           </div>
           <button type="submit" class="btn">
-            <i data-lucide="save" style="width: 16px; height: 16px"></i>
+            <i data-lucide="save" class="icon"></i>
             Update Password
           </button>
         </form>
@@ -244,26 +226,20 @@
     <div class="settings-row">
       <div class="settings-info">
         <div class="settings-label">
-          <i data-lucide="clock" style="width: 16px; height: 16px"></i>
+          <i data-lucide="clock" class="icon"></i>
           Timezone
         </div>
         <p class="settings-desc">Email timestamps are displayed in this timezone.</p>
       </div>
     </div>
     {% if timezone_msg %}
-      <div class="status-box status-done" style="margin-top: 1rem">
-        <i data-lucide="check-circle"
-           style="width: 18px;
-                  height: 18px;
-                  flex-shrink: 0"></i>
+      <div class="status-box status-done is-spaced">
+        <i data-lucide="check-circle" class="icon-md"></i>
         <span>{{ timezone_msg }}</span>
       </div>
     {% endif %}
     <div class="settings-network-info">
-      <form method="post"
-            action="/settings/timezone"
-            class="setup-form"
-            style="max-width: 100%">
+      <form method="post" action="/settings/timezone" class="setup-form">
         <div class="form-group">
           <label for="timezone-btn">Display Timezone</label>
           {% set ns = namespace(label="UTC") %}
@@ -285,10 +261,7 @@
                     aria-haspopup="listbox"
                     aria-expanded="false">
               <span class="combobox-label">{{ ns.label }}</span>
-              <i data-lucide="chevron-down"
-                 class="chevron"
-                 style="width: 16px;
-                        height: 16px"></i>
+              <i data-lucide="chevron-down" class="chevron icon"></i>
             </button>
             <div class="panel"
                  id="timezone-panel"
@@ -320,7 +293,7 @@
           </div>
         </div>
         <button type="submit" class="btn">
-          <i data-lucide="save" style="width: 16px; height: 16px"></i>
+          <i data-lucide="save" class="icon"></i>
           Save Timezone
         </button>
       </form>
@@ -330,7 +303,7 @@
     <div class="settings-row">
       <div class="settings-info">
         <div class="settings-label">
-          <i data-lucide="terminal" style="width: 16px; height: 16px"></i>
+          <i data-lucide="terminal" class="icon"></i>
           API Key
         </div>
         <p class="settings-desc">
@@ -351,25 +324,25 @@
           <button type="submit"
                   class="btn btn-danger btn-sm"
                   onclick=" return confirm( 'Revoke the API key? Programmatic access will stop immediately.', ); ">
-            <i data-lucide="trash-2" style="width: 14px; height: 14px"></i>
+            <i data-lucide="trash-2" class="icon-sm"></i>
             Revoke
           </button>
         </form>
       {% endif %}
     </div>
     {% if api_key_msg %}
-      <div class="status-box status-done" style="margin-top: 1rem">
-        <i data-lucide="info" style="width: 18px; height: 18px; flex-shrink: 0"></i>
+      <div class="status-box status-done is-spaced">
+        <i data-lucide="info" class="icon-md"></i>
         <span>{{ api_key_msg }}</span>
       </div>
     {% endif %}
     {% if new_api_key %}
-      <div class="settings-url" style="margin-top: 0.75rem">
+      <div class="settings-url is-spaced">
         <code>{{ new_api_key }}</code>
         <button type="button"
                 class="btn btn-sm"
                 onclick="copyToClipboard(this, '{{ new_api_key }}')">
-          <i data-lucide="copy" style="width: 14px; height: 14px"></i>
+          <i data-lucide="copy" class="icon-sm"></i>
           Copy
         </button>
       </div>
@@ -377,7 +350,7 @@
     <div class="settings-network-info">
       <form method="post" action="/settings/api-key/regenerate">
         <button type="submit" class="btn btn-sm">
-          <i data-lucide="refresh-cw" style="width: 14px; height: 14px"></i>
+          <i data-lucide="refresh-cw" class="icon-sm"></i>
           {% if api_key_created_at %}
             Regenerate API Key
           {% else %}

@@ -18,6 +18,10 @@
   border-color: var(--border-bright);
 }
 
+.priority-dist-card {
+  margin-bottom: 1.75rem;
+}
+
 .card-icon {
   width: 32px;
   height: 32px;

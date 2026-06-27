@@ -12,16 +12,13 @@
     <div class="setup-container">
       <div class="setup-card">
         <div class="setup-header">
-          <i data-lucide="mail"
-             style="width: 32px;
-                    height: 32px;
-                    color: var(--accent)"></i>
+          <i data-lucide="mail" class="icon-2xl"></i>
           <h1>Email Reader Setup</h1>
           <p>Connect your email account to get started.</p>
         </div>
         {% if error %}
           <div class="setup-error">
-            <i data-lucide="alert-circle" style="width: 16px; height: 16px"></i>
+            <i data-lucide="alert-circle" class="icon"></i>
             {{ error }}
           </div>
         {% endif %}
@@ -57,7 +54,7 @@
                       class="password-toggle"
                       onclick="togglePassword('email_pass')"
                       aria-label="Show password">
-                <i data-lucide="eye" style="width: 16px; height: 16px"></i>
+                <i data-lucide="eye" class="icon"></i>
               </button>
             </div>
             <span class="form-hint">
@@ -67,7 +64,7 @@
             </span>
           </div>
           <button type="submit" class="btn btn-lg">
-            <i data-lucide="log-in" style="width: 16px; height: 16px"></i>
+            <i data-lucide="log-in" class="icon"></i>
             Connect & Test
           </button>
         </form>

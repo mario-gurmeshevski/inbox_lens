@@ -12,16 +12,13 @@
     <div class="setup-container">
       <div class="setup-card">
         <div class="setup-header">
-          <i data-lucide="lock"
-             style="width: 32px;
-                    height: 32px;
-                    color: var(--accent)"></i>
+          <i data-lucide="lock" class="icon-2xl"></i>
           <h1>Login</h1>
           <p>Enter your dashboard password to continue.</p>
         </div>
         {% if error %}
           <div class="setup-error">
-            <i data-lucide="alert-circle" style="width: 16px; height: 16px"></i>
+            <i data-lucide="alert-circle" class="icon"></i>
             {{ error }}
           </div>
         {% endif %}
@@ -40,12 +37,12 @@
                       class="password-toggle"
                       onclick="togglePassword('password')"
                       aria-label="Show password">
-                <i data-lucide="eye" style="width: 16px; height: 16px"></i>
+                <i data-lucide="eye" class="icon"></i>
               </button>
             </div>
           </div>
           <button type="submit" class="btn btn-lg">
-            <i data-lucide="log-in" style="width: 16px; height: 16px"></i>
+            <i data-lucide="log-in" class="icon"></i>
             Log In
           </button>
         </form>

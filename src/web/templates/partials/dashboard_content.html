@@ -1,37 +1,37 @@
 <div class="cards">
   <div class="card card-total">
     <div class="card-icon total">
-      <i data-lucide="mail" style="width: 20px; height: 20px"></i>
+      <i data-lucide="mail" class="icon-lg"></i>
     </div>
     <h3>Total Emails</h3>
     <div class="value total">{{ total }}</div>
   </div>
   <div class="card card-headers-only">
     <div class="card-icon headers-only">
-      <i data-lucide="clock" style="width: 20px; height: 20px"></i>
+      <i data-lucide="clock" class="icon-lg"></i>
     </div>
     <h3>Headers Only</h3>
     <div class="value headers-only">{{ counts.headers_only + counts.fetched_no_body }}</div>
   </div>
   <div class="card card-checked">
     <div class="card-icon checked">
-      <i data-lucide="check-circle" style="width: 20px; height: 20px"></i>
+      <i data-lucide="check-circle" class="icon-lg"></i>
     </div>
     <h3>Checked</h3>
     <div class="value checked">{{ counts.checked }}</div>
   </div>
   <div class="card card-unscanned">
     <div class="card-icon unscanned">
-      <i data-lucide="alert-triangle" style="width: 20px; height: 20px"></i>
+      <i data-lucide="alert-triangle" class="icon-lg"></i>
     </div>
     <h3>Unscanned</h3>
     <div class="value unscanned">{{ unscanned }}</div>
   </div>
 </div>
 {% if total > 0 %}
-  <div class="card" style="margin-bottom: 1.75rem">
-    <div class="section-title" style="margin-top: 0">
-      <i data-lucide="bar-chart-3" style="width: 16px; height: 16px"></i>
+  <div class="card priority-dist-card">
+    <div class="section-title is-flush">
+      <i data-lucide="bar-chart-3" class="icon"></i>
       Priority Distribution
     </div>
     <div class="priority-bar">
@@ -53,13 +53,13 @@
 </div>
 {% endif %}
 <div class="section-title">
-  <i data-lucide="clock" style="width: 16px; height: 16px"></i>
+  <i data-lucide="clock" class="icon"></i>
   Recent Emails
 </div>
 <table>
   <thead>
     <tr>
-      <th style="width: 80px">Priority</th>
+      <th class="col-priority">Priority</th>
       <th>Subject</th>
       <th>From</th>
       <th>Date</th>

@@ -7,7 +7,7 @@
   {% endblock %}
   {% block content %}
     <h1>Priority Keywords</h1>
-    <p class="settings-desc" style="margin-top: 0.25rem">
+    <p class="settings-desc">
       Manage the keywords used to prioritize emails. Changes apply to newly fetched
       emails immediately; use re-scan to re-evaluate already-cached emails.
     </p>
@@ -16,12 +16,12 @@
             hx-target="#keywords-cards"
             hx-swap="innerHTML">
         <button type="submit" class="btn">
-          <i data-lucide="refresh-cw" style="width: 16px; height: 16px"></i>
+          <i data-lucide="refresh-cw" class="icon"></i>
           Re-scan cached emails
         </button>
       </form>
       <a href="/keywords/export" class="btn btn-sm">
-        <i data-lucide="download" style="width: 14px; height: 14px"></i>
+        <i data-lucide="download" class="icon-sm"></i>
         Export
       </a>
       <form method="post"
@@ -34,12 +34,12 @@
                accept="application/json,.json"
                class="file-input" />
         <label for="kw-import-file" class="btn btn-sm">
-          <i data-lucide="folder-open" style="width: 14px; height: 14px"></i>
+          <i data-lucide="folder-open" class="icon-sm"></i>
           Browse…
         </label>
         <span class="file-name" data-empty="No file chosen">No file chosen</span>
         <button type="submit" class="btn btn-sm">
-          <i data-lucide="upload" style="width: 14px; height: 14px"></i>
+          <i data-lucide="upload" class="icon-sm"></i>
           Import
         </button>
       </form>

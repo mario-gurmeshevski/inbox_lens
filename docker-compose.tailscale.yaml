@@ -44,13 +44,6 @@ services:
 
               grep -o 'https://login.tailscale.com/[^ ]*' /shared/login_raw.txt > /shared/login_url.txt 2>/dev/null || true;
               chmod 644 /shared/login_url.txt 2>/dev/null || true;
-
-              if [ -s /shared/login_url.txt ]; then
-                echo "================================================"
-                echo "  TAILSCALE LOGIN REQUIRED:"
-                cat /shared/login_url.txt
-                echo "================================================"
-              fi
             fi;
           else
             rm -f /shared/login_url.txt /shared/login_raw.txt /shared/login_pid 2>/dev/null || true;

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "inbox-lens"
-version = "1.4.5"
+version = "1.4.6"
 description = "Fetch, cache, and scan emails via IMAP with keyword-based priority tagging and a web dashboard"
 requires-python = ">=3.12"
 dependencies = [

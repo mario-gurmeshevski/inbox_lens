@@ -56,6 +56,82 @@ class TestFormatDate:
         assert "14:02" in result
 
 
+class TestMarkdownFilter:
+    def test_bold_renders_strong(self):
+        assert "<strong>bold</strong>" in str(web._render_markdown("**bold**"))
+
+    def test_italics_renders_em(self):
+        assert "<em>it</em>" in str(web._render_markdown("*it*"))
+
+    def test_unordered_list(self):
+        out = str(web._render_markdown("- a\n- b"))
+        assert "<ul>" in out and "<li>a</li>" in out and "<li>b</li>" in out
+
+    def test_ordered_list(self):
+        out = str(web._render_markdown("1. a\n2. b"))
+        assert "<ol>" in out and "<li>a</li>" in out
+
+    def test_link_renders_anchor(self):
+        out = str(web._render_markdown("[site](https://example.com)"))
+        assert '<a href="https://example.com"' in out
+        assert "site</a>" in out
+
+    def test_link_opens_in_new_tab_safely(self):
+        out = str(web._render_markdown("[site](https://example.com)"))
+        assert 'target="_blank"' in out
+        assert "noopener" in out and "noreferrer" in out
+
+    def test_plain_text_wraps_in_paragraph(self):
+        out = str(web._render_markdown("just plain text"))
+        assert "<p>just plain text</p>" in out
+
+    def test_plain_text_preserves_content(self):
+        out = str(web._render_markdown("just plain text"))
+        assert "just plain text" in out
+
+    def test_inline_code(self):
+        out = str(web._render_markdown("use `npm` here"))
+        assert "<code>npm</code>" in out
+
+    def test_fenced_code_block(self):
+        out = str(web._render_markdown("```\nprint(1)\n```"))
+        assert "<pre>" in out and "<code>" in out and "print(1)" in out
+
+    def test_blockquote(self):
+        out = str(web._render_markdown("> quoted text"))
+        assert "<blockquote>" in out and "quoted text" in out
+
+    def test_strips_script_tag(self):
+        out = str(web._render_markdown("<script>alert(1)</script>safe"))
+        assert "<script" not in out
+        assert "safe" in out
+
+    def test_strips_javascript_url_scheme(self):
+        out = str(web._render_markdown("[xss](javascript:alert(1))"))
+        assert "javascript:" not in out
+        assert "<script" not in out
+
+    def test_strips_event_handler_attribute(self):
+        out = str(web._render_markdown('<img src="x" onerror="alert(1)">'))
+        assert "onerror" not in out
+        assert "<script" not in out
+
+    def test_strips_iframe(self):
+        out = str(web._render_markdown('<iframe src="https://evil"></iframe>'))
+        assert "<iframe" not in out
+
+    def test_returns_markup_safe(self):
+        from markupsafe import Markup
+
+        assert isinstance(web._render_markdown("**x**"), Markup)
+
+    def test_empty_string_returns_empty(self):
+        assert str(web._render_markdown("")) == ""
+
+    def test_none_returns_empty(self):
+        assert str(web._render_markdown(None)) == ""
+
+
 class TestWebEndpoints:
     @pytest.fixture(autouse=True)
     def setup(self, tmp_path):

@@ -103,7 +103,7 @@ Fetch emails from a Gmail inbox via IMAP, cache them in a local SQLite database,
 
 ## Testing
 
-The project includes 513 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
+The project includes 539 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
 
 ```bash
 
@@ -121,15 +121,15 @@ make test-cov   # For Mac/Linux
 | ---------------------- | ----- | ----------------------------------------------------------- |
 | `test_cache.py`        | 78    | DB ops, hashing, scanning, search, threads                  |
 | `test_email_reader.py` | 72    | Parsing, body cleaning, thread extraction, keywords         |
-| `test_web.py`          | 118   | FastAPI endpoints, SSE, Tailscale, auth middleware, updates |
+| `test_web.py`          | 136   | FastAPI endpoints, SSE, Tailscale, auth middleware, updates |
 | `test_auth.py`         | 42    | Password hashing, API keys, sessions, rate limiting         |
 | `test_imap.py`         | 58    | IMAP helpers, connection, fetch, delete                     |
 | `test_idle_monitor.py` | 63    | IDLE loop, ConnectionLost, run_initial_fetch                |
 | `test_crypto.py`       | 22    | Encryption, settings, credentials                           |
 | `test_event_bus.py`    | 12    | Pub/sub dispatch                                            |
 | `test_utils.py`        | 8     | Keyword parsing, priority buckets                           |
-| `test_constants.py`    | 6     | Env var defaults and overrides                              |
-| `test_updater.py`      | 34    | Version checking, semver compare, Docker self-update        |
+| `test_constants.py`    | 7     | Env var defaults and overrides                              |
+| `test_updater.py`      | 41    | Version checking, semver compare, Docker self-update        |
 
 ### Linting
 
@@ -239,7 +239,7 @@ Opens at `http://localhost:8000`. Set `WEB_HOST` and `WEB_PORT` in `.env` to cus
 
 - **Email list** — filterable by status, priority, and search text; paginated; responsive card layout on mobile
 
-- **Email detail** — full body view, colored keyword tags, delete button
+- **Email detail** — full body view with rendered Markdown (bold, lists, links, code), colored keyword tags, delete button
 
 - **Keyword editor** — manage priority keywords from the dashboard: inline add/edit/remove words, add/remove priority categories, import/export JSON config, and re-scan cached emails to apply changes retroactively
 

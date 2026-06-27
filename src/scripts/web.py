@@ -10,6 +10,9 @@ from fastapi import FastAPI, Request, Query
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+from markupsafe import Markup
+import markdown
+import nh3
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -79,6 +82,7 @@ _WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 templates = Jinja2Templates(directory=str(_WEB_DIR / "templates"))
 templates.env.filters["format_date"] = lambda d: _format_date(d)
 templates.env.filters["priority_bucket"] = lambda lvl: _priority_bucket(lvl) or "none"
+templates.env.filters["markdown"] = lambda t: _render_markdown(t)
 app.mount("/static/js", StaticFiles(directory=str(_WEB_DIR / "js")), name="js")
 app.mount("/static", StaticFiles(directory=str(_WEB_DIR / "static")), name="static")
 
@@ -250,6 +254,44 @@ def _format_date(date_str):
         return dt.strftime("%a, %d %b %Y %H:%M")
     except Exception:
         return date_str
+
+
+_MD_EXTENSIONS = ["fenced_code", "tables", "nl2br", "sane_lists"]
+
+_MD_ALLOWED_TAGS = {
+    "p", "br", "hr", "span", "div",
+    "h1", "h2", "h3", "h4", "h5", "h6",
+    "strong", "b", "em", "i", "del", "s", "sub", "sup", "mark",
+    "ul", "ol", "li", "dl", "dt", "dd",
+    "blockquote", "code", "pre",
+    "a", "img",
+    "table", "thead", "tbody", "tr", "th", "td",
+}
+
+_MD_ALLOWED_ATTRS = {
+    "*": {"class"},
+    "a": {"href", "title", "target"},
+    "img": {"src", "alt", "title", "width", "height"},
+    "th": {"align"},
+    "td": {"align"},
+}
+
+_MD_URL_SCHEMES = {"http", "https", "mailto", "tel"}
+
+
+def _render_markdown(text):
+    if not text:
+        return Markup("")
+    html_body = markdown.markdown(text, extensions=_MD_EXTENSIONS, output_format="html")
+    cleaned = nh3.clean(
+        html_body,
+        tags=_MD_ALLOWED_TAGS,
+        attributes=_MD_ALLOWED_ATTRS,
+        url_schemes=_MD_URL_SCHEMES,
+        link_rel="noopener noreferrer nofollow",
+        set_tag_attribute_values={"a": {"target": "_blank"}},
+    )
+    return Markup(cleaned)
 
 
 def _is_docker() -> bool:

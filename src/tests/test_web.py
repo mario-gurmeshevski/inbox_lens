@@ -189,9 +189,9 @@ class TestWebEndpoints:
             client = self._make_client()
             client.post("/keywords/word/add", data={"level": "8", "word": "zebra"})
             resp = client.get("/keywords")
-        assert 'class="kw-word"' in resp.text
+        assert 'class="word"' in resp.text
         assert "zebra" in resp.text
-        assert 'class="kw-edit-input"' in resp.text
+        assert 'class="edit-input"' in resp.text
 
     def test_keywords_add_word(self):
         with patch.object(web, "DB_PATH", self.db_path):
@@ -1295,7 +1295,7 @@ class TestUpdateEndpoints:
         assert resp.status_code == 200
         assert b'name="timezone"' in resp.content
         assert b'value="Asia/Tokyo"' in resp.content
-        assert b"tz-combobox" in resp.content
+        assert b"combobox" in resp.content
 
     def test_settings_page_defaults_to_device_timezone(self):
         # With no saved timezone, the page should default to the device's zone.

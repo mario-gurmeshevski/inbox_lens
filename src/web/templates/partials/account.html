@@ -22,16 +22,14 @@
     </div>
   </div>
   <div class="account-actions">
-    <button type="button"
-            class="setup-btn secondary"
-            onclick="closeAccountModal()">
+    <button type="button" class="btn btn-lg" onclick="closeAccountModal()">
       <i data-lucide="x" style="width: 16px; height: 16px"></i>
       Close
     </button>
     <form method="post"
           action="/account/disconnect"
           onsubmit=" return confirm( 'Are you sure? This will remove your email credentials.', ); ">
-      <button type="submit" class="setup-btn danger">
+      <button type="submit" class="btn btn-lg btn-danger">
         <i data-lucide="log-out" style="width: 16px; height: 16px"></i>
         Disconnect
       </button>

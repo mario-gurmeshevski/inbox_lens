@@ -28,14 +28,16 @@
            id="filter-search"
            placeholder="Search subject or sender..."
            value="{{ search }}" />
-    <button class="btn btn-primary btn-sm" onclick="applyFilters()">
+    <button type="button" class="btn btn-sm" onclick="applyFilters()">
       <i data-lucide="search" style="width: 14px; height: 14px"></i>
       Filter
     </button>
-    <a href="/emails" class="btn btn-warning btn-sm">
+    <button type="button"
+            class="btn btn-sm"
+            onclick="window.location.href='/emails'">
       <i data-lucide="x" style="width: 14px; height: 14px"></i>
       Clear
-    </a>
+    </button>
   </div>
   <div id="email-table"
        hx-get="/partials/emails?status={{ status }}&priority={{ priority }}&search={{ search }}&page={{ page }}"

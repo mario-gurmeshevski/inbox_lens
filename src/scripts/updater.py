@@ -199,9 +199,7 @@ def _container_id_from_proc() -> str | None:
         except Exception:
             continue
     try:
-        candidates.extend(
-            _MOUNT_CONTAINER_RE.findall(Path("/proc/1/mountinfo").read_text(errors="ignore"))
-        )
+        candidates.extend(_MOUNT_CONTAINER_RE.findall(Path("/proc/1/mountinfo").read_text(errors="ignore")))
     except Exception:
         pass
     for cid in candidates:

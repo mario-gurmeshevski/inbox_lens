@@ -1,13 +1,13 @@
 {% if kw_msg %}
   <div id="kw-status"
-       class="status-box kw-status-dismissable {% if kw_msg_ok %}status-done{% else %}status-error{% endif %}">
+       class="status-box status-dismissable {% if kw_msg_ok %}status-done{% else %}status-error{% endif %}">
     <i data-lucide="{% if kw_msg_ok %}check-circle{% else %}alert-circle{% endif %}"
        style="width: 18px;
               height: 18px;
               flex-shrink: 0"></i>
     <span>{{ kw_msg }}</span>
     <button type="button"
-            class="kw-status-close"
+            class="status-close"
             aria-label="Dismiss"
             onclick="this.parentElement.remove()">
       <i data-lucide="x" style="width: 14px; height: 14px"></i>
@@ -18,7 +18,7 @@
 <form hx-post="/keywords/category/add"
       hx-target="#keywords-cards"
       hx-swap="innerHTML"
-      class="kw-add-cat-form">
+      class="add-cat-form">
   <input type="number"
          name="level"
          min="1"
@@ -35,12 +35,12 @@
       <div class="kw-card-header">
         <div class="kw-card-header-label">
           <span class="badge badge-{{ level | priority_bucket }}">Priority {{ level }}</span>
-          <span class="kw-count">{{ categories[level] | length }} word(s)</span>
+          <span class="count">{{ categories[level] | length }} word(s)</span>
         </div>
         <form hx-post="/keywords/category/remove"
               hx-target="#keywords-cards"
               hx-swap="innerHTML"
-              class="kw-inline-form">
+              class="inline-form">
           <input type="hidden" name="level" value="{{ level }}" />
           <button type="submit"
                   class="btn btn-danger btn-sm"
@@ -51,10 +51,10 @@
           </button>
         </form>
       </div>
-      <div class="kw-words">
+      <div class="words">
         {% for word in categories[level] %}
-          <div class="kw-chip">
-            <span class="kw-word"
+          <div class="chip">
+            <span class="word"
                   tabindex="0"
                   role="button"
                   title="Click to edit"
@@ -63,13 +63,13 @@
             <form hx-post="/keywords/word/edit"
                   hx-target="#keywords-cards"
                   hx-swap="innerHTML"
-                  class="kw-edit-form">
+                  class="edit-form">
               <input type="hidden" name="level" value="{{ level }}" />
               <input type="hidden" name="old_word" value="{{ word }}" />
               <input type="text"
                      name="new_word"
                      value="{{ word }}"
-                     class="kw-edit-input"
+                     class="edit-input"
                      autocomplete="off"
                      onkeydown="kwEditKey(event)"
                      onblur="kwCancelEdit(this)" />
@@ -77,11 +77,11 @@
             <form hx-post="/keywords/word/remove"
                   hx-target="#keywords-cards"
                   hx-swap="innerHTML"
-                  class="kw-inline-form">
+                  class="inline-form">
               <input type="hidden" name="level" value="{{ level }}" />
               <input type="hidden" name="word" value="{{ word }}" />
               <button type="submit"
-                      class="kw-remove-btn"
+                      class="remove-btn"
                       aria-label="Remove word"
                       title="Remove">
                 <i data-lucide="x" style="width: 14px; height: 14px"></i>
@@ -93,11 +93,11 @@
       <form hx-post="/keywords/word/add"
             hx-target="#keywords-cards"
             hx-swap="innerHTML"
-            class="kw-add-form">
+            class="add-form">
         <input type="hidden" name="level" value="{{ level }}" />
         <input type="text"
                name="word"
-               class="kw-add-input"
+               class="add-input"
                placeholder="Add word or phrase…"
                required />
         <button type="submit" class="btn btn-sm">

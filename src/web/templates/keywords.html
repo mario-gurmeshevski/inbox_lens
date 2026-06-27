@@ -11,7 +11,7 @@
       Manage the keywords used to prioritize emails. Changes apply to newly fetched
       emails immediately; use re-scan to re-evaluate already-cached emails.
     </p>
-    <div class="kw-toolbar">
+    <div class="toolbar">
       <form hx-post="/keywords/rescan"
             hx-target="#keywords-cards"
             hx-swap="innerHTML">
@@ -27,17 +27,17 @@
       <form method="post"
             action="/keywords/import"
             enctype="multipart/form-data"
-            class="kw-import-form">
+            class="import-form">
         <input type="file"
                id="kw-import-file"
                name="file"
                accept="application/json,.json"
-               class="kw-file-input" />
+               class="file-input" />
         <label for="kw-import-file" class="btn btn-sm">
           <i data-lucide="folder-open" style="width: 14px; height: 14px"></i>
           Browse…
         </label>
-        <span class="kw-file-name" data-empty="No file chosen">No file chosen</span>
+        <span class="file-name" data-empty="No file chosen">No file chosen</span>
         <button type="submit" class="btn btn-sm">
           <i data-lucide="upload" style="width: 14px; height: 14px"></i>
           Import

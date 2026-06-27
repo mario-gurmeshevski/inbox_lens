@@ -118,13 +118,13 @@ function copyToClipboard(btn, text) {
 }
 
 function kwEdit(span) {
-  const chip = span.closest(".kw-chip");
+  const chip = span.closest(".chip");
   if (!chip) return;
   span.style.display = "none";
-  const form = chip.querySelector(".kw-edit-form");
+  const form = chip.querySelector(".edit-form");
   if (!form) return;
   form.classList.add("is-editing");
-  const input = form.querySelector(".kw-edit-input");
+  const input = form.querySelector(".edit-input");
   input.setAttribute("size", Math.max(4, Math.min(20, input.value.length + 1)));
   input.focus();
   const val = input.value.length;
@@ -143,13 +143,13 @@ function kwEditKey(e) {
 }
 
 function kwCancelEdit(input) {
-  const form = input.closest(".kw-edit-form");
+  const form = input.closest(".edit-form");
   if (!form) return;
   const old = form.querySelector('input[name="old_word"]');
   if (old) input.value = old.value;
   form.classList.remove("is-editing");
-  const chip = form.closest(".kw-chip");
-  const span = chip && chip.querySelector(".kw-word");
+  const chip = form.closest(".chip");
+  const span = chip && chip.querySelector(".word");
   if (span) span.style.display = "";
 }
 

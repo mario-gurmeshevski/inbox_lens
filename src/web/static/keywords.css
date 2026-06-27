@@ -1,4 +1,4 @@
-.kw-toolbar {
+.toolbar {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
@@ -6,14 +6,14 @@
   margin-top: 1rem;
 }
 
-.kw-import-form {
+.import-form {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
 }
 
-.kw-file-input {
+.file-input {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -25,13 +25,13 @@
   border: 0;
 }
 
-.kw-file-input:focus-visible + .btn {
+.file-input:focus-visible + .btn {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
 }
 
-.kw-file-name {
+.file-name {
   font-size: 0.8rem;
   color: var(--text-muted);
   max-width: 200px;
@@ -40,14 +40,14 @@
   white-space: nowrap;
 }
 
-.kw-add-cat-form {
+.add-cat-form {
   display: flex;
   gap: 0.5rem;
   align-items: center;
   margin: 1rem 0;
 }
 
-.kw-add-cat-form input[type="number"] {
+.add-cat-form input[type="number"] {
   width: auto;
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--border);
@@ -59,14 +59,14 @@
   appearance: textfield;
 }
 
-.kw-add-cat-form input[type="number"]:focus {
+.add-cat-form input[type="number"]:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
 }
 
-.kw-add-cat-form input[type="number"]::-webkit-outer-spin-button,
-.kw-add-cat-form input[type="number"]::-webkit-inner-spin-button {
+.add-cat-form input[type="number"]::-webkit-outer-spin-button,
+.add-cat-form input[type="number"]::-webkit-inner-spin-button {
   -webkit-appearance: none;
   margin: 0;
 }
@@ -96,38 +96,28 @@
   flex: 1;
 }
 
-.kw-count {
+.count {
   font-size: 0.75rem;
   color: var(--text-muted);
   font-weight: 400;
 }
 
-.kw-inline-form {
+.inline-form {
   display: inline;
 }
 
-.kw-card-header .kw-inline-form {
+.kw-card-header .inline-form {
   margin-left: 0;
 }
 
-.kw-words {
+.words {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
   margin-bottom: 0.75rem;
 }
 
-.kw-chip {
-  display: inline-flex;
-  align-items: center;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 100px;
-  padding: 0.1rem 0.4rem 0.1rem 0.65rem;
-  gap: 0.15rem;
-}
-
-.kw-word {
+.word {
   font-size: 0.82rem;
   color: var(--text);
   padding: 0.15rem 0;
@@ -137,26 +127,36 @@
   transition: var(--transition);
 }
 
-.kw-word:hover {
+.word:hover {
   color: var(--accent);
   text-decoration: underline dotted;
   text-underline-offset: 2px;
 }
 
-.kw-word:focus-visible {
+.word:focus-visible {
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
 }
 
-.kw-edit-form {
+.chip {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 100px;
+  padding: 0.1rem 0.4rem 0.1rem 0.65rem;
+  gap: 0.15rem;
+}
+
+.edit-form {
   display: none;
 }
 
-.kw-edit-form.is-editing {
+.edit-form.is-editing {
   display: inline-flex;
   align-items: center;
 }
 
-.kw-edit-input {
+.edit-input {
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
   background: var(--bg);
@@ -169,7 +169,7 @@
   max-width: 16ch;
 }
 
-.kw-remove-btn {
+.remove-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -182,18 +182,18 @@
   transition: var(--transition);
 }
 
-.kw-remove-btn:hover {
+.remove-btn:hover {
   background: var(--danger);
-  color: #fff;
+  color: var(--white);
 }
 
-.kw-add-form {
+.add-form {
   display: flex;
   gap: 0.5rem;
   align-items: center;
 }
 
-.kw-add-input {
+.add-input {
   flex: 1;
   min-width: 0;
   padding: 0.5rem 0.75rem;
@@ -205,18 +205,17 @@
   transition: border-color var(--transition);
 }
 
-.kw-add-input:focus {
+.add-input:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
 }
 
-/* Keyword status close button — partials/keywords.html */
-.kw-status-dismissable {
+.status-dismissable {
   padding-right: 0.75rem;
 }
 
-.kw-status-close {
+.status-close {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -232,7 +231,7 @@
   flex-shrink: 0;
 }
 
-.kw-status-close:hover {
+.status-close:hover {
   opacity: 1;
   background: rgba(0, 0, 0, 0.06);
 }

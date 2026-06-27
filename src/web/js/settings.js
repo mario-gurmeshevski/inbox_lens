@@ -7,10 +7,20 @@
   var search = document.getElementById("timezone-search");
   var optionsEl = document.getElementById("timezone-options");
   var hidden = document.getElementById("timezone-hidden");
-  var label = combobox.querySelector(".tz-combobox-label");
-  var groups = Array.prototype.slice.call(optionsEl.querySelectorAll(".tz-group"));
-  var options = Array.prototype.slice.call(optionsEl.querySelectorAll(".tz-option"));
+  var label = combobox.querySelector(".combobox-label");
+  var groups = Array.prototype.slice.call(optionsEl.querySelectorAll(".group"));
+  var options = Array.prototype.slice.call(optionsEl.querySelectorAll(".option"));
   var activeIndex = -1;
+
+  var BOTTOM_GAP = 16;
+  var MAX_CAP = 320;
+
+  function constrainPanelHeight() {
+    var top = panel.getBoundingClientRect().top;
+    var available = window.innerHeight - top - BOTTOM_GAP;
+    var effective = Math.min(MAX_CAP, available);
+    panel.style.setProperty("--panel-max-height", effective + "px");
+  }
 
   function isOpen() {
     return panel.classList.contains("is-open");
@@ -18,10 +28,11 @@
 
   function open() {
     panel.classList.add("is-open");
+    constrainPanelHeight();
     btn.setAttribute("aria-expanded", "true");
     setTimeout(function () {
       search.focus();
-      var sel = optionsEl.querySelector('.tz-option[aria-selected="true"]');
+      var sel = optionsEl.querySelector('.option[aria-selected="true"]');
       if (sel) sel.scrollIntoView({ block: "center" });
     }, 0);
   }
@@ -51,6 +62,12 @@
       btn.focus();
     }
   });
+
+  function handleViewportChange() {
+    if (isOpen()) constrainPanelHeight();
+  }
+  window.addEventListener("resize", handleViewportChange);
+  window.addEventListener("scroll", handleViewportChange, true);
 
   function visibleOptions() {
     return options.filter(function (o) {
@@ -89,18 +106,18 @@
       }
     });
     groups.forEach(function (g) {
-      var any = g.querySelectorAll('.tz-option:not([hidden])').length > 0;
+      var any = g.querySelectorAll('.option:not([hidden])').length > 0;
       if (any) g.removeAttribute("hidden");
       else g.setAttribute("hidden", "");
     });
-    var existing = optionsEl.querySelector(".tz-empty");
+    var existing = optionsEl.querySelector(".empty");
     if (count === 0) {
       var msg = 'No timezones match "' + q + '"';
       if (existing) {
         existing.textContent = msg;
       } else {
         var empty = document.createElement("div");
-        empty.className = "tz-empty";
+        empty.className = "empty";
         empty.textContent = msg;
         optionsEl.appendChild(empty);
       }
@@ -144,7 +161,7 @@
   }
 
   optionsEl.addEventListener("click", function (e) {
-    var opt = e.target.closest(".tz-option");
+    var opt = e.target.closest(".option");
     if (opt) selectOption(opt);
   });
 })();

@@ -570,6 +570,208 @@ class TestPerformUpdateSync:
         assert any("newid" in p for p in deleted)
         updater._set_state("idle")
 
+    def test_create_failure_surfaces_daemon_message(self, monkeypatch):
+        def fake_request(method, path, body=None, timeout=30):
+            if "/images/create" in path:
+                return 200, b""
+            if "/containers/abc/json" in path:
+                return 200, json.dumps(
+                    {"Name": "/inbox-lens-web-1", "Config": {"Env": ["X=1"]}, "HostConfig": {}}
+                ).encode()
+            if "create" in path and "inbox-lens-web-1-new" in path:
+                return 400, json.dumps({"message": "boom: detailed reason"}).encode()
+            return 404, b""
+
+        monkeypatch.setattr(updater, "is_docker_managed", lambda: True)
+        monkeypatch.setattr(updater, "_current_container_id", lambda: "abc")
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        result = updater._perform_update_sync()
+
+        assert result["ok"] is False
+        assert "HTTP 400" in result["message"]
+        assert "boom: detailed reason" in result["message"]
+        updater._set_state("idle")
+
+    def test_pull_failure_surfaces_daemon_message(self, monkeypatch):
+        def fake_request(method, path, body=None, timeout=30):
+            if "/images/create" in path:
+                return 500, json.dumps({"message": "manifest unknown"}).encode()
+            return 404, b""
+
+        monkeypatch.setattr(updater, "is_docker_managed", lambda: True)
+        monkeypatch.setattr(updater, "_current_container_id", lambda: "abc")
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        result = updater._perform_update_sync()
+
+        assert result["ok"] is False
+        assert "manifest unknown" in result["message"].lower()
+        updater._set_state("idle")
+
+    def test_drops_exposed_ports_under_container_network_mode(self, monkeypatch):
+        captured = {}
+
+        def fake_request(method, path, body=None, timeout=30):
+            if "/images/create" in path:
+                return 200, b""
+            if "/containers/abc/json" in path:
+                return 200, json.dumps(
+                    {
+                        "Name": "/inbox-lens-web-1",
+                        "Config": {
+                            "Env": ["X=1"],
+                            "ExposedPorts": {"8000/tcp": {}},
+                            "Healthcheck": {
+                                "Test": ["CMD", "curl", "-f", "http://localhost:8000/health"],
+                            },
+                        },
+                        "HostConfig": {
+                            "NetworkMode": "container:e0c1ad6f2cfc",
+                            "PortBindings": {"8000/tcp": [{"HostPort": "8000"}]},
+                            "RestartPolicy": {"Name": "unless-stopped"},
+                        },
+                        "NetworkSettings": {"Networks": {}},
+                    }
+                ).encode()
+            if "create" in path and "inbox-lens-web-1-new" in path:
+                captured["body"] = body
+                return 201, json.dumps({"Id": "newid"}).encode()
+            if "create" in path and "inbox-lens-web-1-swap" in path:
+                return 201, json.dumps({"Id": "helperid"}).encode()
+            if "/containers/helperid/start" in path:
+                return 204, b""
+            if method == "DELETE":
+                return 204, b""
+            return 404, b""
+
+        monkeypatch.setattr(updater, "is_docker_managed", lambda: True)
+        monkeypatch.setattr(updater, "_current_container_id", lambda: "abc")
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        result = updater._perform_update_sync()
+
+        assert result["ok"] is True, result
+        body = captured["body"]
+        assert "ExposedPorts" not in body
+        assert "PortBindings" not in body["HostConfig"]
+        assert "NetworkingConfig" not in body
+        # The network mode itself must be preserved so the recreated container
+        # keeps sharing the tailscale container's namespace.
+        assert body["HostConfig"]["NetworkMode"] == "container:e0c1ad6f2cfc"
+        updater._set_state("idle")
+
+    def test_keeps_exposed_ports_under_bridge(self, monkeypatch):
+        captured = {}
+
+        def fake_request(method, path, body=None, timeout=30):
+            if "/images/create" in path:
+                return 200, b""
+            if "/containers/abc/json" in path:
+                return 200, json.dumps(
+                    {
+                        "Name": "/inbox-lens-web-1",
+                        "Config": {"Env": ["X=1"], "ExposedPorts": {"8000/tcp": {}}},
+                        "HostConfig": {"NetworkMode": "bridge"},
+                    }
+                ).encode()
+            if "create" in path and "inbox-lens-web-1-new" in path:
+                captured["body"] = body
+                return 201, json.dumps({"Id": "newid"}).encode()
+            if "create" in path and "inbox-lens-web-1-swap" in path:
+                return 201, json.dumps({"Id": "helperid"}).encode()
+            if "/containers/helperid/start" in path:
+                return 204, b""
+            if method == "DELETE":
+                return 204, b""
+            return 404, b""
+
+        monkeypatch.setattr(updater, "is_docker_managed", lambda: True)
+        monkeypatch.setattr(updater, "_current_container_id", lambda: "abc")
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        result = updater._perform_update_sync()
+
+        assert result["ok"] is True, result
+        assert captured["body"].get("ExposedPorts") == {"8000/tcp": {}}
+        updater._set_state("idle")
+
+    def test_sanitizes_network_endpoint_runtime_fields(self, monkeypatch):
+        captured = {}
+
+        def fake_request(method, path, body=None, timeout=30):
+            if "/images/create" in path:
+                return 200, b""
+            if "/containers/abc/json" in path:
+                return 200, json.dumps(
+                    {
+                        "Name": "/inbox-lens-web-1",
+                        "Config": {"Env": ["X=1"]},
+                        "HostConfig": {"NetworkMode": "bridge"},
+                        "NetworkSettings": {
+                            "Networks": {
+                                "bridge": {
+                                    "IPAMConfig": {"IPv4Address": "172.17.0.2"},
+                                    "Links": None,
+                                    "Aliases": ["web"],
+                                    "EndpointID": "abc",
+                                    "Gateway": "172.17.0.1",
+                                    "IPAddress": "172.17.0.2",
+                                    "MacAddress": "02:42:ac:11:00:02",
+                                    "NetworkID": "deadbeef",
+                                }
+                            }
+                        },
+                    }
+                ).encode()
+            if "create" in path and "inbox-lens-web-1-new" in path:
+                captured["body"] = body
+                return 201, json.dumps({"Id": "newid"}).encode()
+            if "create" in path and "inbox-lens-web-1-swap" in path:
+                return 201, json.dumps({"Id": "helperid"}).encode()
+            if "/containers/helperid/start" in path:
+                return 204, b""
+            if method == "DELETE":
+                return 204, b""
+            return 404, b""
+
+        monkeypatch.setattr(updater, "is_docker_managed", lambda: True)
+        monkeypatch.setattr(updater, "_current_container_id", lambda: "abc")
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        updater._perform_update_sync()
+
+        ep = captured["body"]["NetworkingConfig"]["EndpointsConfig"]["bridge"]
+        assert set(ep.keys()) == {"IPAMConfig", "Links", "Aliases"}
+        assert ep["Aliases"] == ["web"]
+        updater._set_state("idle")
+
+    @staticmethod
+    def _helper_fail_request_factory():
+        def fake_request(method, path, body=None, timeout=30):
+            if "/images/create" in path:
+                return 200, b""
+            if "/containers/abc/json" in path:
+                return 200, json.dumps(
+                    {"Name": "/inbox-lens-web-1", "Config": {"Env": ["X=1"]}, "HostConfig": {}}
+                ).encode()
+            if "create" in path and "inbox-lens-web-1-new" in path:
+                return 201, json.dumps({"Id": "newid"}).encode()
+            if "create" in path and "inbox-lens-web-1-swap" in path:
+                return 400, json.dumps({"message": "helper rejected"}).encode()
+            if method == "DELETE":
+                return 204, b""
+            return 404, b""
+
+        return fake_request
+
+    def test_swap_helper_create_surfaces_daemon_message(self, monkeypatch, caplog):
+        import logging
+
+        monkeypatch.setattr(updater, "is_docker_managed", lambda: True)
+        monkeypatch.setattr(updater, "_current_container_id", lambda: "abc")
+        monkeypatch.setattr(updater, "_docker_request", self._helper_fail_request_factory())
+        with caplog.at_level(logging.WARNING):
+            result = updater._perform_update_sync()
+        assert result["ok"] is False
+        assert any("helper rejected" in rec.getMessage() for rec in caplog.records)
+        updater._set_state("idle")
+
 
 class TestUpdateChecker:
     def test_check_now_returns_result(self, monkeypatch):

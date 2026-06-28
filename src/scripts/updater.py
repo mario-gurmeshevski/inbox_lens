@@ -183,6 +183,33 @@ def is_docker_managed() -> bool:
     return is_docker_environment() and docker_daemon_available()
 
 
+def _docker_error(raw: bytes, fallback: str) -> str:
+    """Extract the daemon's human-readable message from an error response body."""
+    try:
+        msg = (json.loads(raw.decode("utf-8")) or {}).get("message", "")
+    except Exception:
+        msg = ""
+    msg = (msg or "").strip()
+    return msg or fallback
+
+
+_NETWORK_ENDPOINT_KEEP = ("IPAMConfig", "Links", "Aliases")
+
+
+def _sanitize_networks(networks: dict) -> dict:
+    clean: dict = {}
+    for name, endpoint in (networks or {}).items():
+        if not isinstance(endpoint, dict):
+            continue
+        clean[name] = {k: v for k, v in endpoint.items() if k in _NETWORK_ENDPOINT_KEEP}
+    return clean
+
+
+def _network_mode_shares_namespace(net_mode: str) -> bool:
+    mode = (net_mode or "").strip().lower()
+    return mode.startswith("container:") or mode in ("host", "none")
+
+
 _CONTAINER_ID_RE = re.compile(r"[0-9a-f]{64}")
 _MOUNT_CONTAINER_RE = re.compile(r"/containers/([0-9a-f]{64})/")
 
@@ -358,7 +385,11 @@ def _launch_swap_helper(image: str, name: str, old_cid: str, new_cid: str) -> bo
     try:
         status, raw = _docker_request("POST", f"{DOCKER_API}/containers/create{create_qs}", body=helper_body)
         if status not in (200, 201):
-            logger.warning("Could not create swap helper (HTTP %d)", status)
+            logger.warning(
+                "Could not create swap helper (HTTP %d): %s",
+                status,
+                _docker_error(raw, raw.decode("utf-8", "replace")),
+            )
             return False
         helper_cid = (json.loads(raw.decode("utf-8")) or {}).get("Id")
         if not helper_cid:
@@ -393,9 +424,14 @@ def _perform_update_sync() -> dict:
 
     _set_state("pulling", f"Pulling {image}...")
     try:
-        status, _ = _docker_request("POST", f"{DOCKER_API}/images/create?{pull_qs}", timeout=UPDATE_TIMEOUT)
+        status, raw = _docker_request("POST", f"{DOCKER_API}/images/create?{pull_qs}", timeout=UPDATE_TIMEOUT)
         if status not in (200, 204):
-            return {"ok": False, "message": f"Image pull failed (HTTP {status})."}
+            detail = _docker_error(raw, raw.decode("utf-8", "replace"))
+            logger.warning("Image pull rejected (HTTP %d): %s", status, detail)
+            msg = f"Image pull failed (HTTP {status})."
+            if detail:
+                msg = f"{msg} {detail}"
+            return {"ok": False, "message": msg}
     except Exception:
         logger.warning("Image pull failed", exc_info=True)
         return {"ok": False, "message": "Image pull failed."}
@@ -428,16 +464,33 @@ def _perform_update_sync() -> dict:
     ):
         if key in config:
             create_body[key] = config[key]
-    create_body["HostConfig"] = info.get("HostConfig") or {}
+    create_body["HostConfig"] = dict(info.get("HostConfig") or {})
+    host_config = create_body["HostConfig"]
+    net_mode = (host_config.get("NetworkMode") or "").strip()
+
+    if _network_mode_shares_namespace(net_mode):
+        create_body.pop("ExposedPorts", None)
+        host_config.pop("PortBindings", None)
+
     networks = (info.get("NetworkSettings") or {}).get("Networks") or {}
-    if networks:
-        create_body["NetworkingConfig"] = {"EndpointsConfig": networks}
+    clean_networks = _sanitize_networks(networks)
+    if clean_networks and not _network_mode_shares_namespace(net_mode):
+        create_body["NetworkingConfig"] = {"EndpointsConfig": clean_networks}
 
     create_qs = f"?name={urllib.parse.quote(name + '-new')}" if name else ""
     try:
         status, raw = _docker_request("POST", f"{DOCKER_API}/containers/create{create_qs}", body=create_body)
         if status not in (200, 201):
-            return {"ok": False, "message": f"Could not create the replacement container (HTTP {status})."}
+            detail = _docker_error(raw, raw.decode("utf-8", "replace"))
+            logger.warning(
+                "Replacement container create rejected (HTTP %d): %s",
+                status,
+                detail,
+            )
+            msg = f"Could not create the replacement container (HTTP {status})."
+            if detail:
+                msg = f"{msg} {detail}"
+            return {"ok": False, "message": msg}
         new_cid = (json.loads(raw.decode("utf-8")) or {}).get("Id")
         if not new_cid:
             return {"ok": False, "message": "Replacement container created without an id."}

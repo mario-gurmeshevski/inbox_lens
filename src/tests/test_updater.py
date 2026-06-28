@@ -211,6 +211,7 @@ class TestCurrentContainerId:
         # Reproduces the Tailscale setup: HOSTNAME is a name, not the short id.
         real_id = "a" * 64
         monkeypatch.setenv("HOSTNAME", "inbox-lens")
+        monkeypatch.delenv("INBOX_LENS_IMAGE", raising=False)
         monkeypatch.setattr(
             updater,
             "Path",
@@ -225,7 +226,7 @@ class TestCurrentContainerId:
 
         def fake_request(method, path, body=None, timeout=30):
             if path == f"/v1.41/containers/{real_id}/json":
-                return 200, b"{}"
+                return 200, json.dumps({"Config": {"Image": updater.DEFAULT_IMAGE}}).encode()
             return 404, b""
 
         monkeypatch.setattr(updater, "_docker_request", fake_request)
@@ -259,6 +260,7 @@ class TestCurrentContainerId:
         # cgroup v2 embeds the container id directly in the cgroup path.
         real_id = "b" * 64
         monkeypatch.setenv("HOSTNAME", "inbox-lens")
+        monkeypatch.delenv("INBOX_LENS_IMAGE", raising=False)
         monkeypatch.setattr(
             updater,
             "Path",
@@ -267,7 +269,7 @@ class TestCurrentContainerId:
 
         def fake_request(method, path, body=None, timeout=30):
             if path == f"/v1.41/containers/{real_id}/json":
-                return 200, b"{}"
+                return 200, json.dumps({"Config": {"Image": updater.DEFAULT_IMAGE}}).encode()
             return 404, b""
 
         monkeypatch.setattr(updater, "_docker_request", fake_request)
@@ -277,6 +279,7 @@ class TestCurrentContainerId:
         spurious = "c" * 64
         real_id = "d" * 64
         monkeypatch.setenv("HOSTNAME", "inbox-lens")
+        monkeypatch.delenv("INBOX_LENS_IMAGE", raising=False)
         monkeypatch.setattr(
             updater,
             "Path",
@@ -284,12 +287,49 @@ class TestCurrentContainerId:
         )
 
         def fake_request(method, path, body=None, timeout=30):
+            if path == f"/v1.41/containers/{spurious}/json":
+                return 200, json.dumps({"Config": {"Image": "tailscale/tailscale:latest"}}).encode()
             if path == f"/v1.41/containers/{real_id}/json":
-                return 200, b"{}"
+                return 200, json.dumps({"Config": {"Image": updater.DEFAULT_IMAGE}}).encode()
             return 404, b""
 
         monkeypatch.setattr(updater, "_docker_request", fake_request)
         assert updater._current_container_id() == real_id
+
+    def test_rejects_tailscale_cid_from_mountinfo(self, monkeypatch):
+        ts_cid = "e" * 64
+        web_cid = "f" * 64
+        monkeypatch.setenv("HOSTNAME", "inbox-lens")
+        monkeypatch.delenv("INBOX_LENS_IMAGE", raising=False)
+        monkeypatch.setattr(
+            updater,
+            "Path",
+            self._fake_path(
+                {
+                    "/proc/1/cgroup": "0::/\n",
+                    "/proc/self/cgroup": "0::/\n",
+                    "/proc/1/mountinfo": (
+                        f"1234 /var/lib/docker/containers/{ts_cid}/hosts /etc/hosts\n"
+                        f"1235 /var/lib/docker/containers/{ts_cid}/hostname /etc/hostname\n"
+                        f"1236 /var/lib/docker/containers/{ts_cid}/resolv.conf /etc/resolv.conf\n"
+                    ),
+                }
+            ),
+        )
+        image = updater.DEFAULT_IMAGE
+        image_id = "sha256:cafef00d" + "0" * 55
+
+        def fake_request(method, path, body=None, timeout=30):
+            if path == f"/v1.41/containers/{ts_cid}/json":
+                return 200, json.dumps({"Config": {"Image": "tailscale/tailscale:latest"}}).encode()
+            if path == f"/v1.41/images/{image}/json":
+                return 200, json.dumps({"Id": image_id}).encode()
+            if path.endswith("/containers/json?all=true"):
+                return 200, json.dumps([{"Id": web_cid, "ImageID": image_id, "Image": image}]).encode()
+            return 404, b""
+
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        assert updater._current_container_id() == web_cid
 
     def test_falls_back_to_single_own_image(self, monkeypatch):
         # HOSTNAME and /proc both useless; exactly one container runs our image.
@@ -363,25 +403,171 @@ class TestPerformUpdateSync:
 
         def fake_request(method, path, body=None, timeout=30):
             calls.append((method, path))
-            if path.endswith("/images/create"):
+            if "/images/create" in path:
                 return 200, b""
             if "/containers/abc/json" in path:
                 return 200, json.dumps(
                     {"Name": "/inbox-lens-web-1", "Config": {"Env": ["X=1"]}, "HostConfig": {}}
                 ).encode()
-            if path.endswith("/containers/create?name=inbox-lens-web-1-new"):
+            if "create" in path and "inbox-lens-web-1-new" in path:
                 return 201, json.dumps({"Id": "newid"}).encode()
-            return 200, b""
+            if "create" in path and "inbox-lens-web-1-swap" in path:
+                return 201, json.dumps({"Id": "helperid"}).encode()
+            if "/containers/helperid/start" in path:
+                return 204, b""
+            if method == "DELETE":
+                return 204, b""
+            return 404, b""
 
         monkeypatch.setattr(updater, "is_docker_managed", lambda: True)
         monkeypatch.setattr(updater, "_current_container_id", lambda: "abc")
         monkeypatch.setattr(updater, "_docker_request", fake_request)
         result = updater._perform_update_sync()
         assert result["ok"] is True
-        methods = [c[0] for c in calls]
-        # pull, inspect, create, stop, rename(old), rename(new), start, delete
-        assert "POST" in methods
-        assert "DELETE" in methods
+        paths = [c[1] for c in calls]
+        assert any("/images/create" in p for p in paths)
+        assert any("/containers/abc/json" in p for p in paths)
+        assert any("create" in p and "inbox-lens-web-1-new" in p for p in paths)
+        assert any("create" in p and "inbox-lens-web-1-swap" in p for p in paths)
+        assert any("/containers/helperid/start" in p for p in paths)
+        updater._set_state("idle")
+
+    def test_helper_script_contains_swap_commands(self, monkeypatch):
+        captured = {}
+
+        def fake_request(method, path, body=None, timeout=30):
+            if "/images/create" in path:
+                return 200, b""
+            if "/containers/abc/json" in path:
+                return 200, json.dumps(
+                    {"Name": "/inbox-lens-web-1", "Config": {"Env": ["X=1"]}, "HostConfig": {}}
+                ).encode()
+            if "create" in path and "inbox-lens-web-1-new" in path:
+                return 201, json.dumps({"Id": "newid"}).encode()
+            if "create" in path and "inbox-lens-web-1-swap" in path:
+                captured["body"] = body
+                return 201, json.dumps({"Id": "helperid"}).encode()
+            if "/containers/helperid/start" in path:
+                return 204, b""
+            if method == "DELETE":
+                return 204, b""
+            return 404, b""
+
+        monkeypatch.setattr(updater, "is_docker_managed", lambda: True)
+        monkeypatch.setattr(updater, "_current_container_id", lambda: "abc")
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        updater._perform_update_sync()
+
+        hb = captured["body"]
+        assert hb["HostConfig"]["AutoRemove"] is True
+        assert "/var/run/docker.sock:/var/run/docker.sock" in hb["HostConfig"]["Binds"]
+        cmd_str = " ".join(hb["Cmd"])
+        assert "sleep 2" in cmd_str
+        assert "curl" in cmd_str
+        assert "--unix-socket" in cmd_str
+        assert "containers/abc/stop" in cmd_str
+        assert "containers/abc/rename" in cmd_str
+        assert "containers/newid/rename" in cmd_str
+        assert "containers/newid/start" in cmd_str
+        assert "containers/abc?force=true" in cmd_str
+        updater._set_state("idle")
+
+    def test_cleans_up_stale_containers(self, monkeypatch):
+        deleted = []
+
+        def fake_request(method, path, body=None, timeout=30):
+            if "/images/create" in path:
+                return 200, b""
+            if "/containers/abc/json" in path:
+                return 200, json.dumps(
+                    {"Name": "/inbox-lens-web-1", "Config": {"Env": ["X=1"]}, "HostConfig": {}}
+                ).encode()
+            if "create" in path and method == "POST":
+                return 201, json.dumps({"Id": "xid"}).encode()
+            if "/start" in path:
+                return 204, b""
+            if method == "DELETE":
+                deleted.append(path)
+                return 204, b""
+            return 404, b""
+
+        monkeypatch.setattr(updater, "is_docker_managed", lambda: True)
+        monkeypatch.setattr(updater, "_current_container_id", lambda: "abc")
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        updater._perform_update_sync()
+
+        assert any("inbox-lens-web-1-old" in p for p in deleted)
+        assert any("inbox-lens-web-1-new" in p for p in deleted)
+        assert any("inbox-lens-web-1-swap" in p for p in deleted)
+        updater._set_state("idle")
+
+    def test_healthcheck_copied_to_new_container(self, monkeypatch):
+        captured = {}
+
+        def fake_request(method, path, body=None, timeout=30):
+            if "/images/create" in path:
+                return 200, b""
+            if "/containers/abc/json" in path:
+                return 200, json.dumps(
+                    {
+                        "Name": "/inbox-lens-web-1",
+                        "Config": {
+                            "Env": ["X=1"],
+                            "Healthcheck": {
+                                "Test": ["CMD", "curl", "-f", "http://localhost:8000/health"],
+                            },
+                            "ExposedPorts": {"8000/tcp": {}},
+                        },
+                        "HostConfig": {},
+                    }
+                ).encode()
+            if "create" in path and "inbox-lens-web-1-new" in path:
+                captured["body"] = body
+                return 201, json.dumps({"Id": "newid"}).encode()
+            if "create" in path and "inbox-lens-web-1-swap" in path:
+                return 201, json.dumps({"Id": "helperid"}).encode()
+            if "/containers/helperid/start" in path:
+                return 204, b""
+            if method == "DELETE":
+                return 204, b""
+            return 404, b""
+
+        monkeypatch.setattr(updater, "is_docker_managed", lambda: True)
+        monkeypatch.setattr(updater, "_current_container_id", lambda: "abc")
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        updater._perform_update_sync()
+
+        assert "Healthcheck" in captured["body"]
+        assert captured["body"]["Healthcheck"]["Test"][0] == "CMD"
+        assert "ExposedPorts" in captured["body"]
+        updater._set_state("idle")
+
+    def test_helper_failure_cleans_up_new_container(self, monkeypatch):
+        deleted = []
+
+        def fake_request(method, path, body=None, timeout=30):
+            if "/images/create" in path:
+                return 200, b""
+            if "/containers/abc/json" in path:
+                return 200, json.dumps(
+                    {"Name": "/inbox-lens-web-1", "Config": {"Env": ["X=1"]}, "HostConfig": {}}
+                ).encode()
+            if "create" in path and "inbox-lens-web-1-new" in path:
+                return 201, json.dumps({"Id": "newid"}).encode()
+            if "create" in path and "inbox-lens-web-1-swap" in path:
+                return 500, b""
+            if method == "DELETE":
+                deleted.append(path)
+                return 204, b""
+            return 404, b""
+
+        monkeypatch.setattr(updater, "is_docker_managed", lambda: True)
+        monkeypatch.setattr(updater, "_current_container_id", lambda: "abc")
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        result = updater._perform_update_sync()
+
+        assert result["ok"] is False
+        assert any("newid" in p for p in deleted)
         updater._set_state("idle")
 
 

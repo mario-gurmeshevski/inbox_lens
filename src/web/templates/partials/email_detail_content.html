@@ -76,7 +76,10 @@
 <div class="actions">
   <button class="btn btn-danger"
           hx-post="/emails/{{ email_hash }}/delete"
-          hx-confirm="Are you sure you want to delete this email? This will move it to trash."
+          hx-confirm="This will move the email to your trash folder on the server and remove it here."
+          data-confirm-title="Delete this email?"
+          data-confirm-tone="danger"
+          data-confirm-label="Delete"
           hx-target="body">
     <i data-lucide="trash-2" class="icon"></i>
     Delete

@@ -25,7 +25,10 @@
     </button>
     <form method="post"
           action="/account/disconnect"
-          onsubmit=" return confirm( 'Are you sure? This will remove your email credentials.', ); ">
+          data-confirm="This will disconnect your account and permanently delete all locally cached emails. You can reconnect later, but your messages will need to be re-fetched from the server."
+          data-confirm-title="Disconnect account?"
+          data-confirm-tone="danger"
+          data-confirm-label="Disconnect">
       <button type="submit" class="btn btn-lg btn-danger">
         <i data-lucide="log-out" class="icon"></i>
         Disconnect

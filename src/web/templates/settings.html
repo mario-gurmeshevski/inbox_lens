@@ -320,10 +320,12 @@
       {% if api_key_created_at %}
         <form method="post"
               action="/settings/api-key/revoke"
-              class="settings-toggle-form">
-          <button type="submit"
-                  class="btn btn-danger btn-sm"
-                  onclick=" return confirm( 'Revoke the API key? Programmatic access will stop immediately.', ); ">
+              class="settings-toggle-form"
+              data-confirm="Programmatic access will stop immediately. Any tools using this key will be unable to reach the API until you generate a new one."
+              data-confirm-title="Revoke API key?"
+              data-confirm-tone="danger"
+              data-confirm-label="Revoke">
+          <button type="submit" class="btn btn-danger btn-sm">
             <i data-lucide="trash-2" class="icon-sm"></i>
             Revoke
           </button>

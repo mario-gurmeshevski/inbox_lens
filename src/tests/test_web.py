@@ -252,6 +252,24 @@ class TestWebEndpoints:
         assert resp.status_code == 200
         assert "test@test.com" in resp.text
 
+    def test_partial_account_disconnect_uses_confirm_dialog(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/partials/account")
+        assert resp.status_code == 200
+        assert "data-confirm=" in resp.text
+        assert "Disconnect account?" in resp.text
+        assert 'data-confirm-tone="danger"' in resp.text
+
+    def test_keywords_remove_category_uses_confirm_dialog(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/keywords")
+        assert resp.status_code == 200
+        assert "hx-confirm=" in resp.text
+        assert "Remove priority" in resp.text
+        assert 'data-confirm-tone="danger"' in resp.text
+
     def test_keywords_page_returns_200_and_seeds(self):
         with patch.object(web, "DB_PATH", self.db_path):
             client = self._make_client()
@@ -701,11 +719,32 @@ class TestWebExtraEndpoints:
         assert resp.headers["location"] == "/setup"
         assert not cache.has_email_credentials(self.db_path)
 
+    def test_account_disconnect_clears_cached_emails(self):
+        self._seed_emails(3)
+        assert cache.get_total_count(self.db_path) == 3
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post("/account/disconnect", follow_redirects=False)
+        assert resp.status_code == 303
+        assert cache.get_total_count(self.db_path) == 0
+
     def test_settings_page_returns_200(self):
         with patch.object(web, "DB_PATH", self.db_path):
             client = self._make_client()
             resp = client.get("/settings")
         assert resp.status_code == 200
+        assert 'id="confirm-modal"' in resp.text
+
+    def test_settings_revoke_api_key_uses_confirm_dialog(self):
+        from src.scripts import auth
+
+        auth.save_api_key("dummytoken", self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/settings")
+        assert resp.status_code == 200
+        assert "Revoke API key?" in resp.text
+        assert 'data-confirm-tone="danger"' in resp.text
 
     def test_settings_network_access_toggle(self):
         with patch.object(web, "DB_PATH", self.db_path):

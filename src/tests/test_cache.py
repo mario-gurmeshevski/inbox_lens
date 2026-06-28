@@ -150,6 +150,18 @@ class TestDeleteEmail:
         assert result is False
 
 
+class TestClearEmails:
+    def test_clears_all_emails(self, tmp_db, sample_emails_batch):
+        _save_fetched_batch(sample_emails_batch, tmp_db)
+        assert cache.get_total_count(tmp_db) == len(sample_emails_batch)
+        cache.clear_emails(tmp_db)
+        assert cache.get_total_count(tmp_db) == 0
+
+    def test_clear_when_empty_is_noop(self, tmp_db):
+        cache.clear_emails(tmp_db)
+        assert cache.get_total_count(tmp_db) == 0
+
+
 class TestScanKeywords:
     def test_finds_matching_keywords(self, compiled_patterns):
         text = "This is an important problem that needs to be resolved immediately"

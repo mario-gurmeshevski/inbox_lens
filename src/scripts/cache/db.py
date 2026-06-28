@@ -152,6 +152,11 @@ def delete_email(message_id: str, db_path: str) -> bool:
     return cursor.rowcount > 0
 
 
+def clear_emails(db_path: str) -> None:
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM emails")
+
+
 def read_emails(db_path: str) -> list[dict]:
     with _connect(db_path) as conn:
         rows = conn.execute("SELECT * FROM emails ORDER BY date_parsed DESC").fetchall()

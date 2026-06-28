@@ -642,6 +642,7 @@ async def account_disconnect(request: Request):
         _monitor = None
     cache.delete_email_credentials(DB_PATH)
     cache.delete_setting("imap_server", DB_PATH)
+    cache.clear_emails(DB_PATH)
     return RedirectResponse("/setup", status_code=303)
 
 

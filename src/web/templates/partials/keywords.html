@@ -38,11 +38,13 @@
         <form hx-post="/keywords/category/remove"
               hx-target="#keywords-cards"
               hx-swap="innerHTML"
+              hx-confirm="This will remove priority {{ level }} and every word assigned to it."
+              data-confirm-title="Remove priority {{ level }}?"
+              data-confirm-tone="danger"
+              data-confirm-label="Remove"
               class="inline-form">
           <input type="hidden" name="level" value="{{ level }}" />
-          <button type="submit"
-                  class="btn btn-danger btn-sm remove-cat-btn"
-                  onclick="return confirm('Remove priority {{ level }} and all its words?');">
+          <button type="submit" class="btn btn-danger btn-sm remove-cat-btn">
             <i data-lucide="trash-2" class="icon-sm"></i>
             Remove
           </button>

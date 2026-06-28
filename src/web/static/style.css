@@ -129,31 +129,61 @@ nav .brand svg {
   flex: 1;
 }
 
-nav a {
+.nav-links a {
   color: var(--text-muted);
   text-decoration: none;
-  padding: 0.4rem 0.75rem;
-  border-radius: var(--radius-sm);
-  transition: var(--transition);
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--radius-pill);
+  transition: color var(--transition);
   font-size: 0.88rem;
   display: flex;
   align-items: center;
   gap: 0.4rem;
   white-space: nowrap;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
 }
 
-nav a:hover {
-  color: var(--text);
+.nav-links a::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0;
   background: var(--bg-surface);
+  border-radius: inherit;
+  z-index: -1;
+  transition: width var(--transition-slow);
 }
 
-nav a.active {
+.nav-links a:hover {
   color: var(--text);
-  background: var(--bg-surface);
+}
+
+.nav-links a:hover::before,
+.nav-links a:focus-visible::before {
+  width: 100%;
+}
+
+.nav-links a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  color: var(--text);
+}
+
+.nav-links a:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.nav-links a.active {
+  color: var(--accent);
+  background: var(--accent-tint);
   font-weight: 500;
 }
 
-nav a.nav-spacer {
+.nav-links a.nav-spacer {
   margin-left: auto;
 }
 
@@ -162,16 +192,46 @@ nav a.nav-spacer {
   border: none;
   cursor: pointer;
   color: var(--text-muted);
-  padding: 0.4rem 0.75rem;
-  border-radius: var(--radius-sm);
-  transition: var(--transition);
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--radius-pill);
+  transition: color var(--transition);
   display: flex;
   align-items: center;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.nav-link-btn::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0;
+  background: var(--bg-surface);
+  border-radius: inherit;
+  z-index: -1;
+  transition: width var(--transition-slow);
 }
 
 .nav-link-btn:hover {
   color: var(--text);
-  background: var(--bg-surface);
+}
+
+.nav-link-btn:hover::before,
+.nav-link-btn:focus-visible::before {
+  width: 100%;
+}
+
+.nav-link-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  color: var(--text);
+}
+
+.nav-link-btn:focus:not(:focus-visible) {
+  outline: none;
 }
 
 .container {
@@ -651,7 +711,7 @@ td a:hover {
     padding-top: env(safe-area-inset-top);
     height: calc(56px + env(safe-area-inset-top));
   }
-  nav a {
+  .nav-links a {
     padding: 0.4rem 0.5rem;
     font-size: 0.8rem;
     min-height: 40px;
@@ -1030,25 +1090,140 @@ td a:hover {
   }
 }
 
+.confirm-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.confirm-modal[hidden] {
+  display: none;
+}
+
+.confirm-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+  animation: account-modal-fade-in 0.2s ease;
+}
+
+.confirm-card {
+  position: relative;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  width: 100%;
+  max-width: 420px;
+  padding: 2.25rem 2rem 1.75rem;
+  text-align: center;
+  animation: account-modal-pop-in 0.2s ease;
+}
+
+.confirm-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 1.1rem;
+  background: var(--accent-tint);
+  color: var(--accent);
+}
+
+.confirm-icon.is-danger {
+  background: rgba(220, 38, 38, 0.12);
+  color: var(--danger);
+}
+
+.confirm-icon.is-warning {
+  background: rgba(217, 119, 6, 0.12);
+  color: var(--warning);
+}
+
+.confirm-icon svg {
+  width: 26px;
+  height: 26px;
+}
+
+.confirm-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.confirm-message {
+  margin: 0 0 1.5rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.confirm-actions .btn {
+  flex: 1;
+  margin-top: 0;
+}
+
 .account-nav-btn {
   background: none;
   border: none;
   cursor: pointer;
   font: inherit;
   color: var(--text-muted);
-  padding: 0.4rem 0.75rem;
-  border-radius: var(--radius-sm);
-  transition: var(--transition);
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--radius-pill);
+  transition: color var(--transition);
   font-size: 0.88rem;
   display: flex;
   align-items: center;
   gap: 0.4rem;
   white-space: nowrap;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.account-nav-btn::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0;
+  background: var(--bg-surface);
+  border-radius: inherit;
+  z-index: -1;
+  transition: width var(--transition-slow);
 }
 
 .account-nav-btn:hover {
   color: var(--text);
-  background: var(--bg-surface);
+}
+
+.account-nav-btn:hover::before,
+.account-nav-btn:focus-visible::before {
+  width: 100%;
+}
+
+.account-nav-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  color: var(--text);
+}
+
+.account-nav-btn:focus:not(:focus-visible) {
+  outline: none;
 }
 
 @media (max-width: 480px) {
@@ -1063,5 +1238,13 @@ td a:hover {
   }
   .account-modal {
     padding: 0.5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-links a::before,
+  .nav-link-btn::before,
+  .account-nav-btn::before {
+    transition: none;
   }
 }

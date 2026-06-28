@@ -21,6 +21,8 @@ function closeAccountModal() {
 
 document.addEventListener("keydown", function (e) {
   if (e.key === "Escape") {
+    var confirmModal = document.getElementById("confirm-modal");
+    if (confirmModal && !confirmModal.hasAttribute("hidden")) return;
     var modal = document.getElementById("account-modal");
     if (modal && !modal.hasAttribute("hidden")) {
       closeAccountModal();
@@ -209,5 +211,120 @@ function kwCancelEdit(input) {
 
   document.body.addEventListener("htmx:sseOpen", function () {
     sseRetries = 0;
+  });
+})();
+
+(function () {
+  var modal = document.getElementById("confirm-modal");
+  if (!modal) return;
+  var titleEl = document.getElementById("confirm-title");
+  var msgEl = document.getElementById("confirm-message");
+  var iconEl = document.getElementById("confirm-icon");
+  var okBtn = document.getElementById("confirm-ok-btn");
+  var lastFocus = null;
+  var current = null;
+
+  var ICONS = {
+    danger: "alert-triangle",
+    warning: "alert-triangle",
+    info: "info",
+  };
+
+  function open(opts) {
+    opts = opts || {};
+    var tone = opts.tone || "danger";
+    titleEl.textContent = opts.title || "Are you sure?";
+    msgEl.textContent = opts.message || "";
+    iconEl.className =
+      "confirm-icon " + (tone === "warning" ? "is-warning" : tone === "info" ? "" : "is-danger");
+    iconEl.innerHTML =
+      '<i data-lucide="' + (ICONS[tone] || "alert-triangle") + '" class="icon-md"></i>';
+    okBtn.textContent = opts.confirmLabel || "Confirm";
+    okBtn.className = tone === "danger" ? "btn btn-danger" : "btn";
+    lucide.createIcons();
+
+    lastFocus = document.activeElement;
+    modal.removeAttribute("hidden");
+    document.body.style.overflow = "hidden";
+    setTimeout(function () {
+      okBtn.focus();
+    }, 0);
+  }
+
+  function close(result) {
+    modal.setAttribute("hidden", "");
+    document.body.style.overflow = "";
+    var resolve = current;
+    current = null;
+    if (resolve) resolve(result);
+    if (lastFocus && typeof lastFocus.focus === "function") {
+      lastFocus.focus();
+      lastFocus = null;
+    }
+  }
+
+  window.confirmDialog = function (opts) {
+    return new Promise(function (resolve) {
+      current = resolve;
+      open(opts);
+    });
+  };
+
+  okBtn.addEventListener("click", function () {
+    close(true);
+  });
+
+  modal.querySelectorAll("[data-confirm-cancel]").forEach(function (el) {
+    el.addEventListener("click", function () {
+      close(false);
+    });
+  });
+
+  document.addEventListener("keydown", function (e) {
+    if (!current) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      close(false);
+    }
+  });
+
+  document.addEventListener("submit", function (e) {
+    var form = e.target;
+    if (!(form instanceof HTMLFormElement) || !form.hasAttribute("data-confirm")) {
+      return;
+    }
+    e.preventDefault();
+    window
+      .confirmDialog({
+        title: form.getAttribute("data-confirm-title") || "Are you sure?",
+        message: form.getAttribute("data-confirm") || "",
+        tone: form.getAttribute("data-confirm-tone") || "danger",
+        confirmLabel: form.getAttribute("data-confirm-label") || "Confirm",
+      })
+      .then(function (ok) {
+        if (ok) {
+          form.removeAttribute("data-confirm");
+          form.submit();
+        }
+      });
+  }, true);
+
+  document.body.addEventListener("htmx:confirm", function (e) {
+    var question = e.detail && e.detail.question;
+    if (!question) return;
+    e.preventDefault();
+    var elt = e.detail.elt;
+    window
+      .confirmDialog({
+        title: (elt && elt.getAttribute("data-confirm-title")) || "Are you sure?",
+        message: question,
+        tone: (elt && elt.getAttribute("data-confirm-tone")) || "danger",
+        confirmLabel: (elt && elt.getAttribute("data-confirm-label")) || "Confirm",
+      })
+      .then(function (ok) {
+        if (ok && e.detail.issueRequest) {
+          e.detail.issueRequest(true);
+        }
+      });
   });
 })();

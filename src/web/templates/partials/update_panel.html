@@ -72,7 +72,10 @@
         <form hx-post="/api/update/run"
               hx-target="#update-panel"
               hx-swap="outerHTML"
-              hx-confirm="Apply the update now? The app will restart and be unavailable briefly."
+              hx-confirm="The app will pull the latest image and restart. It will be unavailable for a minute or two."
+              data-confirm-title="Update now?"
+              data-confirm-tone="warning"
+              data-confirm-label="Update"
               class="inline-form">
           <button type="submit" class="btn btn-sm">
             <i data-lucide="download" class="icon-sm"></i>

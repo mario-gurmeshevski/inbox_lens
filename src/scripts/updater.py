@@ -192,6 +192,7 @@ def _image_name() -> str:
 
 
 def _container_id_from_proc() -> str | None:
+    expected_image = _image_name()
     candidates: list[str] = []
     for proc_path in ("/proc/1/cgroup", "/proc/self/cgroup"):
         try:
@@ -204,8 +205,11 @@ def _container_id_from_proc() -> str | None:
         pass
     for cid in candidates:
         try:
-            status, _ = _docker_request("GET", f"{DOCKER_API}/containers/{cid}/json", timeout=5)
-            if status == 200:
+            status, raw = _docker_request("GET", f"{DOCKER_API}/containers/{cid}/json", timeout=5)
+            if status != 200:
+                continue
+            info = json.loads(raw.decode("utf-8"))
+            if (info.get("Config") or {}).get("Image", "") == expected_image:
                 return cid
         except Exception:
             continue
@@ -302,6 +306,77 @@ def _update_worker() -> None:
         _set_state("failed", f"Update failed: {exc}")
 
 
+def _cleanup_stale_containers(name: str) -> None:
+    if not name:
+        return
+    for suffix in ("-old", "-new", "-swap"):
+        stale = urllib.parse.quote(name + suffix)
+        try:
+            _docker_request("DELETE", f"{DOCKER_API}/containers/{stale}?force=true", timeout=10)
+        except Exception:
+            pass
+
+
+def _launch_swap_helper(image: str, name: str, old_cid: str, new_cid: str) -> bool:
+    old_rename = urllib.parse.quote(name + "-old") if name else ""
+    new_rename = urllib.parse.quote(name) if name else ""
+
+    steps = [
+        f"curl -sf -X POST --unix-socket /var/run/docker.sock"
+        f" 'http://localhost{DOCKER_API}/containers/{old_cid}/stop?t=10'",
+    ]
+    if name:
+        steps.append(
+            f"curl -sf -X POST --unix-socket /var/run/docker.sock"
+            f" 'http://localhost{DOCKER_API}/containers/{old_cid}/rename?name={old_rename}'"
+        )
+        steps.append(
+            f"curl -sf -X POST --unix-socket /var/run/docker.sock"
+            f" 'http://localhost{DOCKER_API}/containers/{new_cid}/rename?name={new_rename}'"
+        )
+    steps.append(
+        f"curl -sf -X POST --unix-socket /var/run/docker.sock 'http://localhost{DOCKER_API}/containers/{new_cid}/start'"
+    )
+    steps.append(
+        f"curl -sf -X DELETE --unix-socket /var/run/docker.sock"
+        f" 'http://localhost{DOCKER_API}/containers/{old_cid}?force=true'"
+    )
+
+    helper_cmd = "sleep 2 && " + " && ".join(steps)
+
+    helper_body = {
+        "Image": image,
+        "Cmd": ["sh", "-c", helper_cmd],
+        "HostConfig": {
+            "AutoRemove": True,
+            "Binds": ["/var/run/docker.sock:/var/run/docker.sock"],
+            "NetworkMode": "none",
+        },
+    }
+
+    create_qs = f"?name={urllib.parse.quote(name + '-swap')}" if name else ""
+    try:
+        status, raw = _docker_request("POST", f"{DOCKER_API}/containers/create{create_qs}", body=helper_body)
+        if status not in (200, 201):
+            logger.warning("Could not create swap helper (HTTP %d)", status)
+            return False
+        helper_cid = (json.loads(raw.decode("utf-8")) or {}).get("Id")
+        if not helper_cid:
+            return False
+        status, _ = _docker_request("POST", f"{DOCKER_API}/containers/{helper_cid}/start")
+        if status not in (200, 204):
+            logger.warning("Could not start swap helper (HTTP %d)", status)
+            try:
+                _docker_request("DELETE", f"{DOCKER_API}/containers/{helper_cid}?force=true")
+            except Exception:
+                pass
+            return False
+    except Exception:
+        logger.warning("Swap helper setup failed", exc_info=True)
+        return False
+    return True
+
+
 def _perform_update_sync() -> dict:
     if not is_docker_managed():
         return {
@@ -335,9 +410,22 @@ def _perform_update_sync() -> dict:
         return {"ok": False, "message": "Could not inspect the running container."}
 
     name = (info.get("Name") or "").lstrip("/")
+    _cleanup_stale_containers(name)
+
     config = info.get("Config") or {}
     create_body: dict = {"Image": image}
-    for key in ("Cmd", "Entrypoint", "Env", "WorkingDir", "Labels", "User", "Tty", "OpenStdin"):
+    for key in (
+        "Cmd",
+        "Entrypoint",
+        "Env",
+        "WorkingDir",
+        "Labels",
+        "User",
+        "Tty",
+        "OpenStdin",
+        "Healthcheck",
+        "ExposedPorts",
+    ):
         if key in config:
             create_body[key] = config[key]
     create_body["HostConfig"] = info.get("HostConfig") or {}
@@ -356,28 +444,12 @@ def _perform_update_sync() -> dict:
     except Exception:
         return {"ok": False, "message": "Could not create the replacement container."}
 
-    try:
-        _docker_request("POST", f"{DOCKER_API}/containers/{cid}/stop?t=10")
-        if name:
-            _docker_request(
-                "POST",
-                f"{DOCKER_API}/containers/{cid}/rename?name={urllib.parse.quote(name + '-old')}",
-            )
-            _docker_request(
-                "POST",
-                f"{DOCKER_API}/containers/{new_cid}/rename?name={urllib.parse.quote(name)}",
-            )
-        _docker_request("POST", f"{DOCKER_API}/containers/{new_cid}/start")
-    except Exception:
-        logger.warning("Container swap failed; original preserved as backup", exc_info=True)
-        return {
-            "ok": False,
-            "message": "Update partially failed. The original container was preserved as a backup.",
-        }
-    try:
-        _docker_request("DELETE", f"{DOCKER_API}/containers/{cid}?force=true")
-    except Exception:
-        pass
+    if not _launch_swap_helper(image, name, cid, new_cid):
+        try:
+            _docker_request("DELETE", f"{DOCKER_API}/containers/{new_cid}?force=true")
+        except Exception:
+            pass
+        return {"ok": False, "message": "Could not start the swap helper container."}
 
     return {"ok": True, "message": "Update applied. The app is restarting with the new version."}
 

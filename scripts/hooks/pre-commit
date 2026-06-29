@@ -1,0 +1,14 @@
+#!/bin/sh
+
+PATTERN='\.sh$|(^|/)Dockerfile$'
+
+status=0
+for file in $(git diff --cached --name-only --diff-filter=ACM); do
+    printf '%s\n' "$file" | grep -Eq "$PATTERN" || continue
+    if git show ":$file" | grep -q "$(printf '\r')"; then
+        echo "pre-commit: CRLF line endings found in '$file' (use LF)" >&2
+        status=1
+    fi
+done
+
+exit $status

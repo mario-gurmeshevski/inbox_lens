@@ -5,23 +5,35 @@ mkdir -p "$DATA_DIR" 2>/dev/null || true
 chown -R appuser:appuser "$DATA_DIR" 2>/dev/null || true
 SOCK="/var/run/docker.sock"
 if [ -S "$SOCK" ]; then
-    SOCK_GID=$(stat -c '%g' "$SOCK" 2>/dev/null || echo "")
-    if [ -n "$SOCK_GID" ]; then
-        if ! getent group "$SOCK_GID" >/dev/null 2>&1; then
-            groupadd -g "$SOCK_GID" dockerhost 2>/dev/null || true
-        fi
-        usermod -aG "$SOCK_GID" appuser 2>/dev/null || true
-    fi
+    python3 - "$SOCK" <<'PY' 2>/dev/null || true
+import grp, os, subprocess, sys
+sock = sys.argv[1]
+try:
+    gid = os.stat(sock).st_gid
+except OSError:
+    sys.exit(0)
+try:
+    name = grp.getgrgid(gid).gr_name
+except KeyError:
+    name = "dockerhost"
+    r = subprocess.run(["addgroup", "-g", str(gid), "dockerhost"], check=False)
+    if r.returncode != 0:
+        print("entrypoint: could not create group dockerhost gid=%d" % gid)
+        sys.exit(0)
+r = subprocess.run(["addgroup", "appuser", name], check=False)
+if r.returncode != 0:
+    print("entrypoint: could not add appuser to group %s" % name)
+PY
 fi
 
 DB="$DATA_DIR/emails.db"
 HOST="0.0.0.0"
 if [ -d /shared ]; then
-    exec gosu appuser uvicorn src.scripts.web:app --host "$HOST" --port 8000
+    exec su-exec appuser uvicorn src.scripts.web:app --host "$HOST" --port 8000
 fi
 
 if [ -f "$DB" ]; then
-    VAL=$(gosu appuser python3 -c "
+    VAL=$(su-exec appuser python3 -c "
 import sqlite3
 try:
     c = sqlite3.connect('$DB')
@@ -41,4 +53,4 @@ except Exception:
     fi
 fi
 
-exec gosu appuser uvicorn src.scripts.web:app --host "$HOST" --port 8000
+exec su-exec appuser uvicorn src.scripts.web:app --host "$HOST" --port 8000

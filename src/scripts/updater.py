@@ -344,36 +344,61 @@ def _cleanup_stale_containers(name: str) -> None:
             pass
 
 
+_SWAP_HELPER_SCRIPT = """
+import http.client, socket, time, sys
+API = "%(api)s"
+SOCK = "/var/run/docker.sock"
+old, new, oname, nname = sys.argv[1:5]
+
+
+class C(http.client.HTTPConnection):
+    def __init__(self):
+        super().__init__("localhost", timeout=30)
+
+    def connect(self):
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(self.timeout)
+        s.connect(SOCK)
+        self.sock = s
+
+
+def call(method, path):
+    c = C()
+    try:
+        c.request(method, path, headers={"Host": "localhost"})
+        r = c.getresponse()
+        r.read()
+        if r.status >= 300:
+            sys.exit(1)
+    finally:
+        c.close()
+
+
+time.sleep(2)
+call("POST", API + "/containers/" + old + "/stop?t=10")
+if oname:
+    call("POST", API + "/containers/" + old + "/rename?name=" + oname)
+    call("POST", API + "/containers/" + new + "/rename?name=" + nname)
+call("POST", API + "/containers/" + new + "/start")
+call("DELETE", API + "/containers/" + old + "?force=true")
+"""
+
+
 def _launch_swap_helper(image: str, name: str, old_cid: str, new_cid: str) -> bool:
     old_rename = urllib.parse.quote(name + "-old") if name else ""
     new_rename = urllib.parse.quote(name) if name else ""
 
-    steps = [
-        f"curl -sf -X POST --unix-socket /var/run/docker.sock"
-        f" 'http://localhost{DOCKER_API}/containers/{old_cid}/stop?t=10'",
-    ]
-    if name:
-        steps.append(
-            f"curl -sf -X POST --unix-socket /var/run/docker.sock"
-            f" 'http://localhost{DOCKER_API}/containers/{old_cid}/rename?name={old_rename}'"
-        )
-        steps.append(
-            f"curl -sf -X POST --unix-socket /var/run/docker.sock"
-            f" 'http://localhost{DOCKER_API}/containers/{new_cid}/rename?name={new_rename}'"
-        )
-    steps.append(
-        f"curl -sf -X POST --unix-socket /var/run/docker.sock 'http://localhost{DOCKER_API}/containers/{new_cid}/start'"
-    )
-    steps.append(
-        f"curl -sf -X DELETE --unix-socket /var/run/docker.sock"
-        f" 'http://localhost{DOCKER_API}/containers/{old_cid}?force=true'"
-    )
-
-    helper_cmd = "sleep 2 && " + " && ".join(steps)
-
     helper_body = {
         "Image": image,
-        "Cmd": ["sh", "-c", helper_cmd],
+        "Cmd": [
+            "python3",
+            "-c",
+            _SWAP_HELPER_SCRIPT % {"api": DOCKER_API},
+            old_cid,
+            new_cid,
+            old_rename,
+            new_rename,
+        ],
         "HostConfig": {
             "AutoRemove": True,
             "Binds": ["/var/run/docker.sock:/var/run/docker.sock"],

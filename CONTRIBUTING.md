@@ -9,6 +9,26 @@
 
 Formatting and linting (Ruff for Python, djlint for templates) are enforced in CI via the **Lint** GitHub Actions workflow (`.github/workflows/lint.yaml`), which runs `make lint` on every pull request.
 
+## Line endings
+
+Shell scripts (`*.sh`) and `Dockerfile` must use **LF** line endings. CRLF breaks the container's shebang (the image errors with `no such file or directory` on `/entrypoint.sh`). This is enforced two ways:
+
+- `.gitattributes` normalizes endings at checkout on every platform.
+- The **Line endings** workflow (`.github/workflows/line-endings.yaml`) rejects any CRLF in shell scripts / Dockerfiles on pull requests.
+
+To get the same check locally, enable the committed pre-commit hook once:
+
+```bash
+git config core.hooksPath scripts/hooks
+```
+
+If you already have a CRLF checkout (common on Windows), renormalize after pulling:
+
+```bash
+git rm --cached -r .
+git reset --hard
+```
+
 ## Python
 
 - Format/lint Python with Ruff:

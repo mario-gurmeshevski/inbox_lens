@@ -521,6 +521,7 @@ class TestPerformUpdateSync:
 
         hb = captured["body"]
         assert hb["HostConfig"]["AutoRemove"] is True
+        assert hb["Entrypoint"] == []
         assert "/var/run/docker.sock:/var/run/docker.sock" in hb["HostConfig"]["Binds"]
         cmd = hb["Cmd"]
         assert cmd[0] == "python3"

@@ -1,105 +1,91 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Dashboard Setup — Email Reader</title>
-    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
-    <link rel="stylesheet" href="/static/theme.css" />
-    <link rel="stylesheet" href="/static/style.css" />
-  </head>
-  <body>
-    <div class="setup-container">
-      <div class="setup-card">
-        <div class="setup-header">
-          <i data-lucide="shield-check" class="icon-2xl"></i>
-          <h1>Protect Your Dashboard</h1>
-          <p>
-            Set a password to secure the dashboard before exposing it beyond
-            localhost.
-          </p>
+{% extends "auth_base.html" %}
+{% block title %}Dashboard Setup — Email Reader{% endblock %}
+{% block card %}
+  <div class="setup-header">
+    <i data-lucide="shield-check" class="icon-2xl"></i>
+    <h1>Protect Your Dashboard</h1>
+    <p>
+      Set a password to secure the dashboard before exposing it beyond
+      localhost.
+    </p>
+  </div>
+  {% if generated_api_key %}
+    <div class="status-box status-done">
+      <i data-lucide="check-circle" class="icon-md"></i>
+      <div class="status-content">
+        <strong>Password set.</strong> You are now logged in.
+        <div class="settings-url is-spaced">
+          <code>{{ generated_api_key }}</code>
+          <button type="button"
+                  class="btn btn-sm"
+                  onclick="navigator.clipboard.writeText('{{ generated_api_key }}')">
+            <i data-lucide="copy" class="icon-sm"></i>
+            Copy
+          </button>
         </div>
-        {% if generated_api_key %}
-          <div class="status-box status-done">
-            <i data-lucide="check-circle" class="icon-md"></i>
-            <div class="status-content">
-              <strong>Password set.</strong> You are now logged in.
-              <div class="settings-url is-spaced">
-                <code>{{ generated_api_key }}</code>
-                <button type="button"
-                        class="btn btn-sm"
-                        onclick="navigator.clipboard.writeText('{{ generated_api_key }}')">
-                  <i data-lucide="copy" class="icon-sm"></i>
-                  Copy
-                </button>
-              </div>
-              <p class="settings-desc is-spaced">
-                This is your API key for programmatic access. Copy it now — it
-                won't be shown again.
-              </p>
-            </div>
-          </div>
-          <a href="/" class="btn btn-lg">
-            <i data-lucide="arrow-right" class="icon"></i>
-            Continue to Dashboard
-          </a>
-        {% else %}
-          {% if error %}
-            <div class="setup-error">
-              <i data-lucide="alert-circle" class="icon"></i>
-              {{ error }}
-            </div>
-          {% endif %}
-          <form method="post" action="/setup-dashboard" class="setup-form">
-            <div class="form-group">
-              <label for="password">Dashboard Password</label>
-              <div class="password-field">
-                <input type="password"
-                       id="password"
-                       name="password"
-                       placeholder="Choose a password (min 8 characters)"
-                       minlength="8"
-                       required />
-                <button type="button"
-                        class="password-toggle"
-                        onclick="togglePassword('password')"
-                        aria-label="Show password">
-                  <i data-lucide="eye" class="icon"></i>
-                </button>
-              </div>
-              <span class="form-hint">Used to log in to the dashboard.</span>
-            </div>
-            <div class="form-group">
-              <label for="confirm">Confirm Password</label>
-              <div class="password-field">
-                <input type="password"
-                       id="confirm"
-                       name="confirm"
-                       placeholder="Re-enter your password"
-                       minlength="8"
-                       required />
-                <button type="button"
-                        class="password-toggle"
-                        onclick="togglePassword('confirm')"
-                        aria-label="Show password">
-                  <i data-lucide="eye" class="icon"></i>
-                </button>
-              </div>
-            </div>
-            <div class="form-group">
-              <label class="checkbox-label">
-                <input type="checkbox" name="generate_api_key" />
-                Also generate an API key for programmatic access
-              </label>
-            </div>
-            <button type="submit" class="btn btn-lg">
-              <i data-lucide="shield-check" class="icon"></i>
-              Set Password
-            </button>
-          </form>
-        {% endif %}
+        <p class="settings-desc is-spaced">
+          This is your API key for programmatic access. Copy it now — it
+          won't be shown again.
+        </p>
       </div>
     </div>
-    <script src="/static/js/base.js"></script>
-  </body>
-</html>
+    <a href="/" class="btn btn-lg">
+      <i data-lucide="arrow-right" class="icon"></i>
+      Continue to Dashboard
+    </a>
+  {% else %}
+    {% if error %}
+      <div class="setup-error">
+        <i data-lucide="alert-circle" class="icon"></i>
+        {{ error }}
+      </div>
+    {% endif %}
+    <form method="post" action="/setup-dashboard" class="setup-form">
+      <div class="form-group">
+        <label for="password">Dashboard Password</label>
+        <div class="password-field">
+          <input type="password"
+                 id="password"
+                 name="password"
+                 placeholder="Choose a password (min 8 characters)"
+                 minlength="8"
+                 required />
+          <button type="button"
+                  class="password-toggle"
+                  onclick="togglePassword('password')"
+                  aria-label="Show password">
+            <i data-lucide="eye" class="icon"></i>
+          </button>
+        </div>
+        <span class="form-hint">Used to log in to the dashboard.</span>
+      </div>
+      <div class="form-group">
+        <label for="confirm">Confirm Password</label>
+        <div class="password-field">
+          <input type="password"
+                 id="confirm"
+                 name="confirm"
+                 placeholder="Re-enter your password"
+                 minlength="8"
+                 required />
+          <button type="button"
+                  class="password-toggle"
+                  onclick="togglePassword('confirm')"
+                  aria-label="Show password">
+            <i data-lucide="eye" class="icon"></i>
+          </button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="checkbox-label">
+          <input type="checkbox" name="generate_api_key" />
+          Also generate an API key for programmatic access
+        </label>
+      </div>
+      <button type="submit" class="btn btn-lg">
+        <i data-lucide="shield-check" class="icon"></i>
+        Set Password
+      </button>
+    </form>
+  {% endif %}
+{% endblock %}

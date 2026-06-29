@@ -64,14 +64,6 @@
            hx-get="/partials/update-banner"
            hx-trigger="load, sse:update_available from:/api/events"
            hx-swap="outerHTML"></div>
-      <div id="action-status">
-        {% if task_running %}
-          <div hx-get="/api/status"
-               hx-trigger="load"
-               hx-target="#action-status"
-               hx-swap="innerHTML"></div>
-        {% endif %}
-      </div>
       {% block content %}
       {% endblock %}
     </div>
@@ -110,8 +102,7 @@
         </div>
       </div>
     </div>
-    {% block scripts %}
-    {% endblock %}
+    {% block scripts %}{% endblock %}
     <script src="/static/js/base.js"></script>
   </body>
 </html>

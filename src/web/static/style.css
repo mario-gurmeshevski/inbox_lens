@@ -536,12 +536,6 @@ td a:hover {
   animation: spin 1s linear infinite;
 }
 
-.status-running {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  color: var(--text);
-}
-
 .status-done {
   background: #f0fdf4;
   border: 1px solid #bbf7d0;
@@ -552,12 +546,6 @@ td a:hover {
   background: #fef2f2;
   border: 1px solid #fecaca;
   color: var(--danger);
-}
-
-.status-busy {
-  background: #fffbeb;
-  border: 1px solid #fde68a;
-  color: var(--warning);
 }
 
 .status-info {

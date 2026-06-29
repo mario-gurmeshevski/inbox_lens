@@ -9,7 +9,7 @@
     Emails
     <span class="total-count">({{ total_rows }} total)</span>
   </h1>
-  <div class="filter-bar">
+  <form class="filter-bar" method="get" action="/emails">
     <select name="status" id="filter-status">
       <option value="" {% if status == "" %}selected{% endif %}>All Status</option>
       <option value="fetched" {% if status == "fetched" %}selected{% endif %}>Fetched</option>
@@ -28,17 +28,15 @@
            id="filter-search"
            placeholder="Search subject or sender..."
            value="{{ search }}" />
-    <button type="button" class="btn btn-sm" onclick="applyFilters()">
+    <button type="submit" class="btn btn-sm">
       <i data-lucide="search" class="icon-sm"></i>
       Filter
     </button>
-    <button type="button"
-            class="btn btn-sm"
-            onclick="window.location.href='/emails'">
+    <a href="/emails" class="btn btn-sm">
       <i data-lucide="x" class="icon-sm"></i>
       Clear
-    </button>
-  </div>
+    </a>
+  </form>
   <div id="email-table"
        hx-get="/partials/emails?status={{ status }}&priority={{ priority }}&search={{ search }}&page={{ page }}"
        hx-trigger="sse:refresh"
@@ -54,5 +52,4 @@
       {% endif %}
     </div>
   {% endif %}
-  <script src="/static/js/emails.js"></script>
 {% endblock %}

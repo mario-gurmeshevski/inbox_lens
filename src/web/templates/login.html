@@ -1,53 +1,39 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Login — Email Reader</title>
-    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
-    <link rel="stylesheet" href="/static/theme.css" />
-    <link rel="stylesheet" href="/static/style.css" />
-  </head>
-  <body>
-    <div class="setup-container">
-      <div class="setup-card">
-        <div class="setup-header">
-          <i data-lucide="lock" class="icon-2xl"></i>
-          <h1>Login</h1>
-          <p>Enter your dashboard password to continue.</p>
-        </div>
-        {% if error %}
-          <div class="setup-error">
-            <i data-lucide="alert-circle" class="icon"></i>
-            {{ error }}
-          </div>
-        {% endif %}
-        <form method="post" action="/login" class="setup-form">
-          <input type="hidden" name="next" value="{{ next }}" />
-          <div class="form-group">
-            <label for="password">Password</label>
-            <div class="password-field">
-              <input type="password"
-                     id="password"
-                     name="password"
-                     placeholder="Enter your password"
-                     autofocus
-                     required />
-              <button type="button"
-                      class="password-toggle"
-                      onclick="togglePassword('password')"
-                      aria-label="Show password">
-                <i data-lucide="eye" class="icon"></i>
-              </button>
-            </div>
-          </div>
-          <button type="submit" class="btn btn-lg">
-            <i data-lucide="log-in" class="icon"></i>
-            Log In
-          </button>
-        </form>
+{% extends "auth_base.html" %}
+{% block title %}Login — Email Reader{% endblock %}
+{% block card %}
+  <div class="setup-header">
+    <i data-lucide="lock" class="icon-2xl"></i>
+    <h1>Login</h1>
+    <p>Enter your dashboard password to continue.</p>
+  </div>
+  {% if error %}
+    <div class="setup-error">
+      <i data-lucide="alert-circle" class="icon"></i>
+      {{ error }}
+    </div>
+  {% endif %}
+  <form method="post" action="/login" class="setup-form">
+    <input type="hidden" name="next" value="{{ next }}" />
+    <div class="form-group">
+      <label for="password">Password</label>
+      <div class="password-field">
+        <input type="password"
+               id="password"
+               name="password"
+               placeholder="Enter your password"
+               autofocus
+               required />
+        <button type="button"
+                class="password-toggle"
+                onclick="togglePassword('password')"
+                aria-label="Show password">
+          <i data-lucide="eye" class="icon"></i>
+        </button>
       </div>
     </div>
-    <script src="/static/js/base.js"></script>
-  </body>
-</html>
+    <button type="submit" class="btn btn-lg">
+      <i data-lucide="log-in" class="icon"></i>
+      Log In
+    </button>
+  </form>
+{% endblock %}

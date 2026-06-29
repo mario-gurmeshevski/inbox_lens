@@ -390,6 +390,7 @@ def _launch_swap_helper(image: str, name: str, old_cid: str, new_cid: str) -> bo
 
     helper_body = {
         "Image": image,
+        "Entrypoint": [],
         "Cmd": [
             "python3",
             "-c",

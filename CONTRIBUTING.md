@@ -7,20 +7,11 @@
     ./commands.ps1 dev-install # For Windows
   ```
 
-Formatting and linting (Ruff for Python, djlint for templates) are enforced in CI via the **Lint** GitHub Actions workflow (`.github/workflows/lint.yaml`), which runs `make lint` on every pull request.
+Formatting and linting (Ruff for Python, djlint for templates) are enforced in CI via the **CI** GitHub Actions workflow (`.github/workflows/ci.yaml`), which runs `make lint` on every pull request.
 
 ## Line endings
 
-Shell scripts (`*.sh`) and `Dockerfile` must use **LF** line endings. CRLF breaks the container's shebang (the image errors with `no such file or directory` on `/entrypoint.sh`). This is enforced two ways:
-
-- `.gitattributes` normalizes endings at checkout on every platform.
-- The **Line endings** workflow (`.github/workflows/line-endings.yaml`) rejects any CRLF in shell scripts / Dockerfiles on pull requests.
-
-To get the same check locally, enable the committed pre-commit hook once:
-
-```bash
-git config core.hooksPath scripts/hooks
-```
+Shell scripts (`*.sh`) and `Dockerfile` must use **LF** line endings. CRLF breaks the container's shebang (the image errors with `no such file or directory` on `/entrypoint.sh`). `.gitattributes` normalizes endings to LF on every platform, and the Docker build strips any stray CR (`sed 's/\r$//'`), so committed files always end up LF.
 
 If you already have a CRLF checkout (common on Windows), renormalize after pulling:
 
@@ -64,11 +55,11 @@ Templates live in `src/web/templates/` and are formatted with [djlint](https://w
 
 Jinja2 `{% %}` / `{{ }}` tags are not valid HTML, so editors' built-in HTML formatters (Prettier, the VSCode/IntelliJ HTML formatter, Zed's prettier) mangle them — e.g. `{% if timezone == tz_id %}` gets split into `=""` and `="tz_id"`. That is why this project formats templates with djlint instead.
 
-The **Lint** GitHub Actions workflow runs `make lint` (Ruff + `djlint --check`) on every pull request. If it fails, run `make format` locally and push again. This catches mangled or unformatted templates before they merge, regardless of which editor a contributor uses.
+The **CI** GitHub Actions workflow runs `make lint` (Ruff + `djlint --check`) on every pull request. If it fails, run `make format` locally and push again. This catches mangled or unformatted templates before they merge, regardless of which editor a contributor uses.
 
 ## Editor-specific setup
 
-Format-on-save is inherently editor-specific, so it is configured per editor below. The CLI (`make format`) works the same in every editor; the Lint workflow enforces it on pull requests.
+Format-on-save is inherently editor-specific, so it is configured per editor below. The CLI (`make format`) works the same in every editor; the CI workflow enforces it on pull requests.
 
 ### VS Code / Cursor
 
@@ -114,4 +105,4 @@ Then `gq` reformats. Ensure `djlint` is on `$PATH`.
 
 ### Zed / other editors
 
-No first-party djlint integration. Disable HTML format-on-save for this project so the built-in prettier does not mangle Jinja, and rely on `make format` plus the Lint workflow on pull requests.
+No first-party djlint integration. Disable HTML format-on-save for this project so the built-in prettier does not mangle Jinja, and rely on `make format` plus the CI workflow on pull requests.

@@ -1,6 +1,6 @@
-FROM python:3.12-slim
+FROM python:3.14-alpine
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl gosu && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache su-exec
 
 WORKDIR /app
 
@@ -11,13 +11,14 @@ COPY src/ src/
 RUN pip install --no-cache-dir .
 COPY entrypoint.sh /entrypoint.sh
 
-RUN useradd -m appuser \
+RUN sed -i 's/\r$//' /entrypoint.sh \
+    && adduser -D -h /home/appuser -s /bin/sh appuser \
     && chown -R appuser:appuser /app \
     && chmod +x /entrypoint.sh
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=10s \
-  CMD curl -f http://localhost:8000/health || exit 1
+  CMD python3 /app/src/scripts/healthcheck.py
 
 ENTRYPOINT ["/entrypoint.sh"]

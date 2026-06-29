@@ -1,7 +1,68 @@
 import json
+import os
+import socketserver
+import subprocess
+import sys
+import tempfile
+import threading
 from io import BytesIO
 
 from src.scripts import updater
+
+
+def _run_swap_helper(responses: dict, args: list):
+    class _Handler(socketserver.BaseRequestHandler):
+        def handle(self):
+            self.request.settimeout(2)
+            data = b""
+            try:
+                while b"\r\n\r\n" not in data:
+                    chunk = self.request.recv(4096)
+                    if not chunk:
+                        return
+                    data += chunk
+            except OSError:
+                return
+            parts = data.split(b"\r\n", 1)[0].decode("latin-1").split(" ")
+            status = 204
+            if len(parts) >= 2:
+                recorded.append((parts[0], parts[1]))
+                for key, val in responses.items():
+                    if key in parts[1]:
+                        status = val
+                        break
+            head = ("HTTP/1.1 %d OK\r\nContent-Length: 0\r\n\r\n" % status).encode()
+            try:
+                self.request.sendall(head)
+            except OSError:
+                return
+
+    recorded: list = []
+    base = "/tmp" if os.path.isdir("/tmp") else tempfile.gettempdir()
+    work = tempfile.mkdtemp(prefix="sw", dir=base)
+    sock_path = os.path.join(work, "s.sock")
+    server = socketserver.UnixStreamServer(sock_path, _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        script = updater._SWAP_HELPER_SCRIPT % {"api": updater.DOCKER_API}
+        script = script.replace('SOCK = "/var/run/docker.sock"', 'SOCK = %r' % sock_path)
+        script = script.replace("time.sleep(2)", "time.sleep(0)")
+        proc = subprocess.run(
+            [sys.executable, "-c", script, *args],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        for path in (sock_path, work):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+    return recorded, proc.returncode
 
 
 class TestVersionParsing:
@@ -461,16 +522,43 @@ class TestPerformUpdateSync:
         hb = captured["body"]
         assert hb["HostConfig"]["AutoRemove"] is True
         assert "/var/run/docker.sock:/var/run/docker.sock" in hb["HostConfig"]["Binds"]
-        cmd_str = " ".join(hb["Cmd"])
-        assert "sleep 2" in cmd_str
-        assert "curl" in cmd_str
-        assert "--unix-socket" in cmd_str
-        assert "containers/abc/stop" in cmd_str
-        assert "containers/abc/rename" in cmd_str
-        assert "containers/newid/rename" in cmd_str
-        assert "containers/newid/start" in cmd_str
-        assert "containers/abc?force=true" in cmd_str
+        cmd = hb["Cmd"]
+        assert cmd[0] == "python3"
+        assert "abc" in cmd
+        assert "newid" in cmd
+        script_and_args = " ".join(cmd)
+        assert "/var/run/docker.sock" in script_and_args
+        assert "time.sleep" in script_and_args
+        assert "stop?t=10" in script_and_args
+        assert "rename?name=" in script_and_args
+        assert "/start" in script_and_args
+        assert "force=true" in script_and_args
         updater._set_state("idle")
+
+    def test_swap_helper_script_compiles(self):
+        compile(
+            updater._SWAP_HELPER_SCRIPT % {"api": updater.DOCKER_API},
+            "<swap_helper>",
+            "exec",
+        )
+
+    def test_swap_helper_aborts_when_stop_fails(self):
+        recorded, rc = _run_swap_helper({"stop?t=10": 500}, ["old", "new", "oldn", "newn"])
+        paths = [p for _, p in recorded]
+        assert any("stop?t=10" in p for p in paths)
+        assert not any("/start" in p for p in paths)
+        assert not any("force=true" in p for p in paths)
+        assert rc != 0
+
+    def test_swap_helper_runs_full_sequence_on_success(self):
+        recorded, rc = _run_swap_helper({}, ["old", "new", "oldn", "newn"])
+        paths = [p for _, p in recorded]
+        assert any("stop?t=10" in p for p in paths)
+        assert any("rename?name=oldn" in p for p in paths)
+        assert any("rename?name=newn" in p for p in paths)
+        assert any("/start" in p for p in paths)
+        assert any("force=true" in p for p in paths)
+        assert rc == 0
 
     def test_cleans_up_stale_containers(self, monkeypatch):
         deleted = []
@@ -514,7 +602,7 @@ class TestPerformUpdateSync:
                         "Config": {
                             "Env": ["X=1"],
                             "Healthcheck": {
-                                "Test": ["CMD", "curl", "-f", "http://localhost:8000/health"],
+                                "Test": ["CMD", "python3", "/app/src/scripts/healthcheck.py"],
                             },
                             "ExposedPorts": {"8000/tcp": {}},
                         },
@@ -621,7 +709,7 @@ class TestPerformUpdateSync:
                             "Env": ["X=1"],
                             "ExposedPorts": {"8000/tcp": {}},
                             "Healthcheck": {
-                                "Test": ["CMD", "curl", "-f", "http://localhost:8000/health"],
+                                "Test": ["CMD", "python3", "/app/src/scripts/healthcheck.py"],
                             },
                         },
                         "HostConfig": {

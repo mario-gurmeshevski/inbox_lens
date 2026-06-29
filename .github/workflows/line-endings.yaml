@@ -1,0 +1,23 @@
+name: Line endings
+
+on:
+  pull_request:
+
+jobs:
+  check-crlf:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject CRLF in shell scripts and Dockerfiles
+        run: |
+          set -e
+          status=0
+          while IFS= read -r f; do
+            if grep -IlP '\r' "$f" >/dev/null 2>&1; then
+              echo "::error file=$f::CRLF line endings found. Convert to LF." >&2
+              status=1
+            fi
+          done < <(git ls-files '*.sh' 'Dockerfile' '*/Dockerfile')
+          exit $status

@@ -58,15 +58,19 @@ def delete_email_credentials(db_path: str = DB_PATH) -> None:
     delete_setting("email_pass", db_path)
 
 
-def _ensure_secret_key() -> bytes:
-    path = Path(SECRET_KEY_PATH)
+def _ensure_key_file(path_str: str, generator, label: str) -> bytes:
+    path = Path(path_str)
     path.resolve().parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         return path.read_bytes().strip()
-    key = Fernet.generate_key()
+    key = generator()
     path.write_bytes(key)
-    logger.info("Generated new encryption key at %s", SECRET_KEY_PATH)
+    logger.info("Generated new %s at %s", label, path_str)
     return key
+
+
+def _ensure_secret_key() -> bytes:
+    return _ensure_key_file(SECRET_KEY_PATH, Fernet.generate_key, "encryption key")
 
 
 _fernet_instance: Fernet | None = None
@@ -88,11 +92,4 @@ def _decrypt(ciphertext: str) -> str:
 
 
 def _ensure_session_key() -> str:
-    path = Path(SESSION_SECRET_PATH)
-    path.resolve().parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        return path.read_text().strip()
-    key = secrets.token_urlsafe(64)
-    path.write_text(key)
-    logger.info("Generated new session secret at %s", SESSION_SECRET_PATH)
-    return key
+    return _ensure_key_file(SESSION_SECRET_PATH, lambda: secrets.token_urlsafe(64).encode(), "session secret").decode()

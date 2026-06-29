@@ -227,7 +227,6 @@ function kwCancelEdit(input) {
   var ICONS = {
     danger: "alert-triangle",
     warning: "alert-triangle",
-    info: "info",
   };
 
   function open(opts) {
@@ -236,7 +235,7 @@ function kwCancelEdit(input) {
     titleEl.textContent = opts.title || "Are you sure?";
     msgEl.textContent = opts.message || "";
     iconEl.className =
-      "confirm-icon " + (tone === "warning" ? "is-warning" : tone === "info" ? "" : "is-danger");
+      "confirm-icon " + (tone === "warning" ? "is-warning" : "is-danger");
     iconEl.innerHTML =
       '<i data-lucide="' + (ICONS[tone] || "alert-triangle") + '" class="icon-md"></i>';
     okBtn.textContent = opts.confirmLabel || "Confirm";

@@ -327,3 +327,48 @@ function kwCancelEdit(input) {
       });
   });
 })();
+
+(function () {
+  var KEY = "inbox-lens-theme";
+  var mq = window.matchMedia
+    ? window.matchMedia("(prefers-color-scheme: dark)")
+    : null;
+
+  function getPref() {
+    try {
+      var v = localStorage.getItem(KEY);
+      if (v === "light" || v === "dark" || v === "system") return v;
+    } catch (e) {}
+    return "system";
+  }
+
+  function apply() {
+    var p = getPref();
+    var resolved = (p === "light" || p === "dark") ? p : (mq && mq.matches ? "dark" : "light");
+    document.documentElement.setAttribute("data-theme", resolved);
+    var select = document.getElementById("theme-select");
+    if (select && select.value !== p) select.value = p;
+  }
+
+  function init() {
+    apply();
+    var select = document.getElementById("theme-select");
+    if (select) {
+      select.value = getPref();
+      select.addEventListener("change", function () {
+        try { localStorage.setItem(KEY, select.value); } catch (e) {}
+        apply();
+      });
+    }
+    if (mq) mq.addEventListener("change", function () { if (getPref() === "system") apply(); });
+    window.addEventListener("storage", function (e) {
+      if (e.key === KEY) apply();
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();

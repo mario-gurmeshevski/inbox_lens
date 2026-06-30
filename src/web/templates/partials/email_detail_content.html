@@ -3,7 +3,7 @@
   <dl>
     <dt><i data-lucide="user" class="icon-sm"></i> From</dt>
     <dd>
-      {{ email.from or "" }}
+      {{ (email.from or "") | format_sender }}
     </dd>
     <dt><i data-lucide="calendar" class="icon-sm"></i> Date</dt>
     <dd>

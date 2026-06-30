@@ -21,15 +21,6 @@ Expand beyond Gmail to support other major email providers out of the box.
 - **Apple Mail / iCloud** (`imap.mail.me.com`)
 - Pre-configured IMAP server presets (select provider during setup instead of manual entry)
 
-## Dark Mode
-
-System-aware dark/light theme toggle for the web dashboard.
-
-- Auto-detect system preference via `prefers-color-scheme`
-- Manual toggle persisted across sessions
-- Full CSS variable theme system (already partially in place)
-- Optimized contrast for email body text and priority colors
-
 ## Email Actions
 
 Manage emails directly from the dashboard without leaving the UI.

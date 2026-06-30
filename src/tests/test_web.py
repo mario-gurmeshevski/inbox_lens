@@ -1426,6 +1426,94 @@ class TestUpdateEndpoints:
         assert resp.status_code == 200
         assert b'value="Europe/Berlin"' in resp.content
 
+    def test_settings_preferences_save_valid(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+        ):
+            client = self._make_client()
+            resp = client.post(
+                "/settings/preferences",
+                data={"date_format": "iso", "sender_display": "name"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 200
+        assert cache.get_setting("date_format", self.db_path) == "iso"
+        assert cache.get_setting("sender_display", self.db_path) == "name"
+
+    def test_settings_preferences_rejects_invalid(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+        ):
+            client = self._make_client()
+            resp = client.post(
+                "/settings/preferences",
+                data={"date_format": "nonsense", "sender_display": "also-bad"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 200
+        # Invalid inputs fall back to the defaults.
+        assert cache.get_setting("date_format", self.db_path) == "default"
+        assert cache.get_setting("sender_display", self.db_path) == "both"
+
+    def test_settings_page_preferences_selects_carry_saved_values(self):
+        cache.save_setting("date_format", "iso", self.db_path)
+        cache.save_setting("sender_display", "email", self.db_path)
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+        ):
+            client = self._make_client()
+            resp = client.get("/settings")
+        assert resp.status_code == 200
+        assert b'name="date_format"' in resp.content
+        assert b'value="iso" selected' in resp.content
+        assert b'name="sender_display"' in resp.content
+        assert b'value="email" selected' in resp.content
+
+    def test_settings_page_renders_tab_nav(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+        ):
+            client = self._make_client()
+            resp = client.get("/settings")
+        assert resp.status_code == 200
+        assert b'class="settings-tabs"' in resp.content
+        assert b'data-tab="preferences"' in resp.content
+        assert b'data-tab="system"' in resp.content
+        assert b'data-tab="security"' in resp.content
+
+    def test_format_sender_modes(self):
+        raw = "Jane Doe <jane@example.com>"
+        both = str(web._format_sender(raw, "both"))
+        assert "sender-name" in both and "Jane Doe" in both
+        assert "sender-email" in both and "jane@example.com" in both
+        assert str(web._format_sender(raw, "name")) == "Jane Doe"
+        assert str(web._format_sender(raw, "email")) == "jane@example.com"
+
+    def test_format_sender_name_only_falls_back_to_email(self):
+        raw = "plain@example.com"
+        assert str(web._format_sender(raw, "name")) == "plain@example.com"
+        assert str(web._format_sender(raw, "email")) == "plain@example.com"
+        # "both" with no name renders only the email line.
+        both = str(web._format_sender(raw, "both"))
+        assert "sender-email" in both and "sender-name" not in both
+
+    def test_format_sender_default_reads_setting(self):
+        cache.save_setting("sender_display", "name", self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            assert str(web._format_sender("Jane Doe <jane@example.com>")) == "Jane Doe"
+
     def test_timezone_groups_contains_all_major_zones(self):
         tz_ids = set(web._flat_timezone_ids())
         assert "Asia/Tokyo" in tz_ids

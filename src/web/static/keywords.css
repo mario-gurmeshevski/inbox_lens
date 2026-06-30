@@ -28,7 +28,7 @@
 .file-input:focus-visible + .btn {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .file-name {
@@ -62,7 +62,7 @@
 .add-cat-form input[type="number"]:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .add-cat-form input[type="number"]::-webkit-outer-spin-button,
@@ -130,7 +130,7 @@
 }
 
 .word:focus-visible {
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+  box-shadow: 0 0 0 2px var(--accent-ring-strong);
 }
 
 .chip {
@@ -160,7 +160,7 @@
   font-size: 0.82rem;
   color: var(--text);
   outline: none;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px var(--accent-ring);
   width: auto;
   max-width: 16ch;
 }
@@ -204,7 +204,7 @@
 .add-input:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .status-dismissable {
@@ -229,5 +229,5 @@
 
 .status-close:hover {
   opacity: 1;
-  background: rgba(0, 0, 0, 0.06);
+  background: var(--overlay-hover);
 }

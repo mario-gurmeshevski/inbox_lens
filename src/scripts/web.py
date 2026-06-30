@@ -10,11 +10,11 @@ from fastapi import FastAPI, Request, Query
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from markupsafe import Markup
+from markupsafe import Markup, escape
 import markdown
 import nh3
 from datetime import datetime
-from email.utils import parsedate_to_datetime
+from email.utils import parsedate_to_datetime, parseaddr
 from pathlib import Path
 from zoneinfo import ZoneInfo, available_timezones
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -81,6 +81,7 @@ app = FastAPI(title="Email Reader Dashboard", lifespan=lifespan)
 _WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 templates = Jinja2Templates(directory=str(_WEB_DIR / "templates"))
 templates.env.filters["format_date"] = lambda d: _format_date(d)
+templates.env.filters["format_sender"] = lambda raw: _format_sender(raw)
 templates.env.filters["priority_bucket"] = lambda lvl: _priority_bucket(lvl) or "none"
 templates.env.filters["markdown"] = lambda t: _render_markdown(t)
 app.mount("/static/js", StaticFiles(directory=str(_WEB_DIR / "js")), name="js")
@@ -244,6 +245,18 @@ def _detect_local_timezone() -> str:
 _LOCAL_TIMEZONE = _detect_local_timezone()
 
 
+_DATE_FORMATS = {
+    "default": "%a, %d %b %Y %H:%M",
+    "iso": "%Y-%m-%d %H:%M",
+    "us_12hr": "%b %d, %Y %I:%M %p",
+}
+
+_SAMPLE_DT = datetime(2026, 6, 29, 14, 30)
+_DATE_FORMAT_OPTIONS = [(key, _SAMPLE_DT.strftime(pattern)) for key, pattern in _DATE_FORMATS.items()]
+
+_SENDER_MODES = {"name", "email", "both"}
+
+
 def _format_date(date_str):
     if not date_str:
         return ""
@@ -251,9 +264,35 @@ def _format_date(date_str):
         dt = parsedate_to_datetime(date_str)
         tz_name = cache.get_setting("timezone", DB_PATH) or _LOCAL_TIMEZONE
         dt = dt.astimezone(ZoneInfo(tz_name))
-        return dt.strftime("%a, %d %b %Y %H:%M")
+        fmt_key = cache.get_setting("date_format", DB_PATH) or "default"
+        fmt = _DATE_FORMATS.get(fmt_key, _DATE_FORMATS["default"])
+        return dt.strftime(fmt)
     except Exception:
         return date_str
+
+
+def _format_sender(raw, mode=None):
+    if mode is None:
+        mode = cache.get_setting("sender_display", DB_PATH) or "both"
+    if mode not in _SENDER_MODES:
+        mode = "both"
+    if not raw:
+        return Markup("")
+    name, email_addr = parseaddr(str(raw))
+    name = (name or "").strip()
+    email_addr = (email_addr or "").strip()
+    if mode == "name":
+        return escape(name or email_addr or str(raw))
+    if mode == "email":
+        return escape(email_addr or name or str(raw))
+    parts = []
+    if name:
+        parts.append(f'<span class="sender-name">{escape(name)}</span>')
+    if email_addr:
+        parts.append(f'<span class="sender-email">{escape(email_addr)}</span>')
+    if not parts:
+        return escape(str(raw))
+    return Markup("".join(parts))
 
 
 _MD_EXTENSIONS = ["fenced_code", "tables", "nl2br", "sane_lists"]
@@ -670,10 +709,17 @@ def _settings_context(
     api_key_msg: str | None = None,
     new_api_key: str | None = None,
     timezone_msg: str | None = None,
+    preferences_msg: str | None = None,
 ) -> dict:
     network_access = cache.get_setting("network_access", db_path) or "true"
     network_on = network_access == "true"
     timezone_setting = cache.get_setting("timezone", db_path) or _LOCAL_TIMEZONE
+    date_format = cache.get_setting("date_format", db_path) or "default"
+    if date_format not in _DATE_FORMATS:
+        date_format = "default"
+    sender_display = cache.get_setting("sender_display", db_path) or "both"
+    if sender_display not in _SENDER_MODES:
+        sender_display = "both"
     local_ips = _get_local_ips() if network_on else []
     host_ip = os.getenv("HOST_IP", "")
     tailscale_ip = _get_tailscale_ip()
@@ -702,6 +748,10 @@ def _settings_context(
         "timezone": timezone_setting,
         "timezone_groups": _TIMEZONE_GROUPS,
         "timezone_msg": timezone_msg,
+        "date_format": date_format,
+        "date_format_options": _DATE_FORMAT_OPTIONS,
+        "sender_display": sender_display,
+        "preferences_msg": preferences_msg,
     }
 
 
@@ -772,6 +822,22 @@ async def settings_timezone(request: Request):
     cache.save_setting("timezone", tz, DB_PATH)
     return templates.TemplateResponse(
         request, "settings.html", _settings_context(DB_PATH, timezone_msg="Timezone updated.")
+    )
+
+
+@app.post("/settings/preferences", response_class=HTMLResponse)
+async def settings_preferences(request: Request):
+    form = await request.form()
+    date_format = str(form.get("date_format", "default")).strip()
+    sender_display = str(form.get("sender_display", "both")).strip()
+    if date_format not in _DATE_FORMATS:
+        date_format = "default"
+    if sender_display not in _SENDER_MODES:
+        sender_display = "both"
+    cache.save_setting("date_format", date_format, DB_PATH)
+    cache.save_setting("sender_display", sender_display, DB_PATH)
+    return templates.TemplateResponse(
+        request, "settings.html", _settings_context(DB_PATH, preferences_msg="Preferences updated.")
     )
 
 

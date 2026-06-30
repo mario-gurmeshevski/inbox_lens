@@ -5,6 +5,54 @@
   gap: 1.5rem;
 }
 
+.settings-tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1.5rem;
+  overflow-x: auto;
+}
+
+.settings-tab {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.6rem 1rem;
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--transition), border-color var(--transition);
+}
+
+.settings-tab:hover {
+  color: var(--text);
+}
+
+.settings-tab.is-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.settings-tab:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-ring);
+  border-radius: var(--radius-sm);
+}
+
+.sender-name {
+  display: block;
+}
+
+.sender-email {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 0.85em;
+}
+
 .settings-info {
   flex: 1;
   min-width: 0;
@@ -21,6 +69,45 @@
 
 .settings-toggle-form {
   flex-shrink: 0;
+}
+
+.theme-select-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.theme-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  font-family: inherit;
+  font-size: 0.9rem;
+  padding: 0.6rem 2rem 0.6rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background-color: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+
+.theme-select:hover {
+  border-color: var(--border-bright);
+}
+
+.theme-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.theme-select-chevron {
+  position: absolute;
+  right: 0.6rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  pointer-events: none;
 }
 
 .toggle-switch {
@@ -118,7 +205,7 @@
 .combobox-btn:focus,
 .combobox-btn[aria-expanded="true"] {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .combobox-label {
@@ -179,7 +266,7 @@
 
 .search-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .options {
@@ -222,7 +309,7 @@
 }
 
 .option[aria-selected="true"] {
-  background-color: rgba(59, 130, 246, 0.12);
+  background-color: var(--accent-tint-strong);
   color: var(--accent);
   font-weight: 600;
 }

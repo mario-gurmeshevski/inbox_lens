@@ -1,5 +1,8 @@
 #!/bin/sh
 set -e
+if [ $# -gt 0 ]; then
+    exec "$@"
+fi
 DATA_DIR="/app/src/data"
 mkdir -p "$DATA_DIR" 2>/dev/null || true
 chown -R appuser:appuser "$DATA_DIR" 2>/dev/null || true

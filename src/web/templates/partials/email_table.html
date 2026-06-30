@@ -34,7 +34,7 @@
         <td data-label="Subject">
           <a class="email-subject-link" href="/emails/{{ email.message_id_hash }}">{{ email.subject or "(no subject)" }}</a>
         </td>
-        <td data-label="From">{{ (email.from or "")[:35] }}</td>
+        <td data-label="From">{{ (email.from or "") | format_sender }}</td>
         <td data-label="Date">{{ email.date | format_date }}</td>
         <td data-label="Tags">
           {% for cat, words in matches.items() %}

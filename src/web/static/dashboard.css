@@ -83,16 +83,16 @@
 }
 
 .priority-bar-segment.critical {
-  background: var(--danger);
+  background: var(--pri-critical);
 }
 .priority-bar-segment.high {
-  background: var(--warning);
+  background: var(--pri-high);
 }
 .priority-bar-segment.medium {
-  background: #ca8a04;
+  background: var(--pri-medium);
 }
 .priority-bar-segment.low {
-  background: #facc15;
+  background: var(--pri-low);
 }
 .priority-bar-segment.unclassified {
   background: var(--border);
@@ -122,16 +122,16 @@
 }
 
 .legend-dot.critical {
-  background: var(--danger);
+  background: var(--pri-critical);
 }
 .legend-dot.high {
-  background: var(--warning);
+  background: var(--pri-high);
 }
 .legend-dot.medium {
-  background: #ca8a04;
+  background: var(--pri-medium);
 }
 .legend-dot.low {
-  background: #facc15;
+  background: var(--pri-low);
 }
 .legend-dot.unclassified {
   background: var(--border);

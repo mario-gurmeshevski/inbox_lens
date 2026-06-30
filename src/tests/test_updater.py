@@ -6,6 +6,7 @@ import sys
 import tempfile
 import threading
 from io import BytesIO
+from pathlib import Path
 
 from src.scripts import updater
 
@@ -46,7 +47,7 @@ def _run_swap_helper(responses: dict, args: list):
     thread.start()
     try:
         script = updater._SWAP_HELPER_SCRIPT % {"api": updater.DOCKER_API}
-        script = script.replace('SOCK = "/var/run/docker.sock"', 'SOCK = %r' % sock_path)
+        script = script.replace('SOCK = "/var/run/docker.sock"', "SOCK = %r" % sock_path)
         script = script.replace("time.sleep(2)", "time.sleep(0)")
         proc = subprocess.run(
             [sys.executable, "-c", script, *args],
@@ -542,6 +543,15 @@ class TestPerformUpdateSync:
             "<swap_helper>",
             "exec",
         )
+
+    def test_entrypoint_passes_through_args(self):
+        entrypoint = Path(__file__).resolve().parents[2] / "entrypoint.sh"
+        text = entrypoint.read_text()
+        guard_idx = text.index("if [ $# -gt 0 ]")
+        exec_idx = text.index('exec "$@"')
+        data_idx = text.index("DATA_DIR=")
+        assert exec_idx > guard_idx
+        assert guard_idx < data_idx
 
     def test_swap_helper_aborts_when_stop_fails(self):
         recorded, rc = _run_swap_helper({"stop?t=10": 500}, ["old", "new", "oldn", "newn"])

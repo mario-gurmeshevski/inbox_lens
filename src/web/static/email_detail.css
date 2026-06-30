@@ -2,7 +2,7 @@
   width: 4px;
 }
 .body-block::-webkit-scrollbar-thumb {
-  background: #ddd;
+  background: var(--scrollbar-thumb);
   border-radius: 2px;
 }
 
@@ -141,8 +141,8 @@
 .markdown-body pre {
   margin: 0 0 0.75rem;
   padding: 0.75rem 0.85rem;
-  background: var(--text);
-  color: #f5f5f5;
+  background: var(--code-bg);
+  color: var(--code-text);
   border-radius: var(--radius-md);
   overflow-x: auto;
   font-size: 0.82rem;

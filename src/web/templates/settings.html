@@ -44,7 +44,7 @@
             {% if update.update_error %}
               <div class="status-box status-error is-spaced">
                 <i data-lucide="wifi-off" class="icon-md"></i>
-                <span>Couldn't reach the version source. Check your connection.</span>
+                <span>{{ update.update_message or "Couldn't reach the version source. Check your connection." }}</span>
               </div>
             {% elif update.update_available %}
               <div class="status-box status-warning is-spaced">
@@ -464,4 +464,5 @@
 {% block scripts %}
   <script src="/static/js/settings.js"></script>
   <script src="/static/js/settings-tabs.js"></script>
+  <script src="/static/js/update-panel.js"></script>
 {% endblock %}

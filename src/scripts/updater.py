@@ -7,6 +7,8 @@ import socket
 import ssl
 import threading
 import time
+import traceback
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -25,11 +27,35 @@ DEFAULT_IMAGE = f"ghcr.io/{REPO_OWNER}/{REPO_NAME}:latest"
 CHECK_INTERVAL = 6 * 60 * 60  # 6 hours between background checks
 FETCH_CACHE_TTL = 15 * 60  # 15 min cache to respect GitHub rate limits
 UPDATE_TIMEOUT = 5 * 60  # 5 min ceiling for the whole update
+_SWAP_HEALTH_TIMEOUT = 60  # seconds to wait for the new container to become healthy
 
 DISMISSED_VERSION_KEY = "update_dismissed_version"
+LAST_UPDATE_ROLLED_BACK_KEY = "update_last_rolled_back"
 
 
-def get_current_version() -> str:
+def cleanup_stale_containers() -> bool:
+    if not is_docker_managed():
+        return False
+    try:
+        cid = _current_container_id()
+        if not cid:
+            return False
+        status, raw = _docker_request("GET", f"{DOCKER_API}/containers/{cid}/json", timeout=5)
+        if status != 200:
+            return False
+        name = (json.loads(raw.decode("utf-8")).get("Name") or "").lstrip("/")
+        if not name:
+            return False
+        rolled_back = _failed_container_exists(name)
+        _cleanup_stale_containers(name)
+        logger.debug("Stale container cleanup completed for %s", name)
+        return rolled_back
+    except Exception:
+        logger.debug("Stale container cleanup failed", exc_info=True)
+        return False
+
+
+def get_current_version() -> str | None:
     try:
         pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
         for line in pyproject.read_text().splitlines():
@@ -47,11 +73,18 @@ def get_current_version() -> str:
             return _v("inbox_lens")
     except Exception:
         pass
-    return "0.0.0"
+    return None
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
     v = (v or "").strip().lstrip("vV")
+    if not v:
+        return ()
+    for sep in ("-", "+"):
+        idx = v.find(sep)
+        if idx >= 0:
+            v = v[:idx]
+            break
     if not v:
         return ()
     parts: list[int] = []
@@ -75,6 +108,9 @@ def is_newer(latest: str, current: str) -> bool:
 
 _latest_cache: dict = {"value": None, "at": 0.0}
 _cache_lock = threading.Lock()
+_fetch_lock = threading.Lock()
+_rate_limited_at: float = 0.0
+_rate_limit_lock = threading.Lock()
 
 _ssl_context: ssl.SSLContext | None = None
 
@@ -100,40 +136,87 @@ def fetch_latest_version(force: bool = False) -> str | None:
         cached = _latest_cache["value"]
         if not force and cached is not None and (now - _latest_cache["at"]) < FETCH_CACHE_TTL:
             return cached
-    try:
-        req = urllib.request.Request(
-            TAGS_URL,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "inbox-lens-updater",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=10, context=_build_ssl_context()) as resp:
-            tags = json.loads(resp.read().decode("utf-8"))
-        if not isinstance(tags, list) or not tags:
-            return None
-        name = tags[0].get("name", "")
-        if not name:
-            return None
+        observed_at = _latest_cache["at"]
+
+    with _fetch_lock:
         with _cache_lock:
-            _latest_cache["value"] = name
-            _latest_cache["at"] = now
-        return name
-    except Exception:
-        logger.warning("Failed to fetch latest version", exc_info=True)
-        return None
+            if _latest_cache["at"] != observed_at and _latest_cache["value"] is not None:
+                return _latest_cache["value"]
+        try:
+            req = urllib.request.Request(
+                TAGS_URL,
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "inbox-lens-updater",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=10, context=_build_ssl_context()) as resp:
+                tags = json.loads(resp.read().decode("utf-8"))
+            if not isinstance(tags, list) or not tags:
+                return None
+            name = tags[0].get("name", "")
+            if not name:
+                return None
+            fetched_at = time.monotonic()
+            with _cache_lock:
+                _latest_cache["value"] = name
+                _latest_cache["at"] = fetched_at
+            with _rate_limit_lock:
+                global _rate_limited_at
+                _rate_limited_at = 0.0
+            return name
+        except urllib.error.HTTPError as e:
+            if e.code in (403, 429):
+                with _rate_limit_lock:
+                    _rate_limited_at = time.monotonic()
+                logger.warning("GitHub API rate limit reached (HTTP %d)", e.code)
+            else:
+                logger.warning("Failed to fetch latest version: HTTP %d", e.code)
+            return None
+        except Exception:
+            logger.warning("Failed to fetch latest version", exc_info=True)
+            return None
+
+
+def is_rate_limited() -> bool:
+    with _rate_limit_lock:
+        return _rate_limited_at > 0.0
+
+
+def reset_rate_limit() -> None:
+    global _rate_limited_at
+    with _rate_limit_lock:
+        _rate_limited_at = 0.0
 
 
 def check_for_update(force: bool = False) -> dict:
     current = get_current_version()
     latest = fetch_latest_version(force=force)
+    if current is None:
+        return {
+            "current": None,
+            "latest": latest,
+            "update_available": False,
+            "error": True,
+            "message": "Could not determine the current version.",
+        }
     if latest is None:
-        return {"current": current, "latest": None, "update_available": False, "error": True}
+        message = "Couldn't reach the version source. Check your connection."
+        if is_rate_limited():
+            message = "GitHub rate limit reached — try again in a few minutes."
+        return {
+            "current": current,
+            "latest": None,
+            "update_available": False,
+            "error": True,
+            "message": message,
+        }
     return {
         "current": current,
         "latest": latest,
         "update_available": is_newer(latest, current),
         "error": False,
+        "message": "",
     }
 
 
@@ -212,6 +295,7 @@ def _network_mode_shares_namespace(net_mode: str) -> bool:
 
 _CONTAINER_ID_RE = re.compile(r"[0-9a-f]{64}")
 _MOUNT_CONTAINER_RE = re.compile(r"/containers/([0-9a-f]{64})/")
+_SELF_LABEL = "inbox-lens.self=true"
 
 
 def _image_name() -> str:
@@ -263,7 +347,25 @@ def _own_image_container_id(containers: list[dict], image: str) -> str | None:
     return None
 
 
+def _container_id_by_label() -> str | None:
+    expected_image = _image_name()
+    filters = urllib.parse.quote(json.dumps({"label": [_SELF_LABEL]}))
+    try:
+        status, raw = _docker_request("GET", f"{DOCKER_API}/containers/json?filters={filters}", timeout=5)
+        if status != 200:
+            return None
+        for c in json.loads(raw.decode("utf-8")) or []:
+            if (c.get("Image") or "") == expected_image and c.get("Id"):
+                return c.get("Id")
+    except Exception:
+        return None
+    return None
+
+
 def _current_container_id() -> str | None:
+    cid = _container_id_by_label()
+    if cid:
+        return cid
     cid = _container_id_from_proc()
     if cid:
         return cid
@@ -284,7 +386,7 @@ def _current_container_id() -> str | None:
     return None
 
 
-_update_state: dict = {"phase": "idle", "message": "", "started_at": 0.0}
+_update_state: dict = {"phase": "idle", "message": "", "started_at": 0.0, "failed_at": 0.0, "error_detail": ""}
 _state_lock = threading.Lock()
 
 _PHASES_ACTIVE = {"pulling", "recreating", "restarting"}
@@ -300,12 +402,17 @@ def update_in_progress() -> bool:
         return _update_state["phase"] in _PHASES_ACTIVE
 
 
-def _set_state(phase: str, message: str = "") -> None:
+def _set_state(phase: str, message: str = "", detail: str = "") -> None:
     with _state_lock:
         _update_state["phase"] = phase
         _update_state["message"] = message
         if phase in _PHASES_ACTIVE:
             _update_state["started_at"] = time.time()
+            _update_state["failed_at"] = 0.0
+            _update_state["error_detail"] = ""
+        elif phase == "failed":
+            _update_state["failed_at"] = time.time()
+            _update_state["error_detail"] = detail
 
 
 def trigger_update() -> bool:
@@ -327,16 +434,16 @@ def _update_worker() -> None:
             _set_state("restarting", result["message"])
         else:
             logger.warning("Update failed: %s", result["message"])
-            _set_state("failed", result["message"])
+            _set_state("failed", result["message"], result.get("detail", ""))
     except Exception as exc:
         logger.warning("Update worker crashed", exc_info=True)
-        _set_state("failed", f"Update failed: {exc}")
+        _set_state("failed", f"Update failed: {exc}", traceback.format_exc())
 
 
 def _cleanup_stale_containers(name: str) -> None:
     if not name:
         return
-    for suffix in ("-old", "-new", "-swap"):
+    for suffix in ("-old", "-new", "-swap", "-failed"):
         stale = urllib.parse.quote(name + suffix)
         try:
             _docker_request("DELETE", f"{DOCKER_API}/containers/{stale}?force=true", timeout=10)
@@ -345,10 +452,12 @@ def _cleanup_stale_containers(name: str) -> None:
 
 
 _SWAP_HELPER_SCRIPT = """
-import http.client, socket, time, sys
+import http.client, socket, time, sys, json
 API = "%(api)s"
 SOCK = "/var/run/docker.sock"
-old, new, oname, nname = sys.argv[1:5]
+old, new, oname, nname, fname = sys.argv[1:6]
+HEALTH_TIMEOUT = %(health_timeout)s
+POLL_INTERVAL = 1
 
 
 class C(http.client.HTTPConnection):
@@ -362,31 +471,151 @@ class C(http.client.HTTPConnection):
         self.sock = s
 
 
-def call(method, path):
+def call(method, path, body=None):
     c = C()
     try:
-        c.request(method, path, headers={"Host": "localhost"})
+        hdrs = {"Host": "localhost"}
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode("utf-8")
+            hdrs["Content-Type"] = "application/json"
+        c.request(method, path, body=data, headers=hdrs)
         r = c.getresponse()
-        r.read()
-        if r.status >= 300:
-            sys.exit(1)
+        code = r.status
+        raw = r.read()
+        return code, raw
     finally:
         c.close()
 
 
-time.sleep(2)
-call("POST", API + "/containers/" + old + "/stop?t=10")
+def call_ok(method, path, body=None):
+    try:
+        code, _ = call(method, path, body)
+        return code < 300
+    except Exception:
+        return False
+
+
+def safe_call(method, path, body=None):
+    try:
+        call(method, path, body)
+    except Exception:
+        pass
+
+
+def rollback():
+    safe_call("POST", API + "/containers/" + new + "/stop?t=10")
+    if fname:
+        safe_call("POST", API + "/containers/" + new + "/rename?name=" + fname)
+    if oname:
+        safe_call("POST", API + "/containers/" + old + "/rename?name=" + nname)
+        safe_call("POST", API + "/containers/" + old + "/start")
+
+
+def container_state(cid):
+    code, raw = call("GET", API + "/containers/" + cid + "/json")
+    if code >= 300:
+        return None
+    try:
+        return (json.loads(raw.decode("utf-8")) or {}).get("State") or {}
+    except Exception:
+        return None
+
+
+def health_signal():
+    st = container_state(new)
+    if not st:
+        return "wait"
+    health = (st.get("Health") or {}).get("Status")
+    if health:
+        if health == "healthy":
+            return "healthy"
+        if health == "unhealthy":
+            return "bad"
+        return "wait"
+    return "healthy" if st.get("Running") else "bad"
+
+
+safe_call("POST", API + "/containers/" + old + "/update", {"RestartPolicy": {"Name": "none", "MaximumRetryCount": 0}})
+if not call_ok("POST", API + "/containers/" + old + "/stop?t=10"):
+    sys.exit(1)  # old still runs; nothing to roll back
 if oname:
-    call("POST", API + "/containers/" + old + "/rename?name=" + oname)
-    call("POST", API + "/containers/" + new + "/rename?name=" + nname)
-call("POST", API + "/containers/" + new + "/start")
-call("DELETE", API + "/containers/" + old + "?force=true")
+    if not call_ok("POST", API + "/containers/" + old + "/rename?name=" + oname):
+        rollback()
+        sys.exit(1)
+    if not call_ok("POST", API + "/containers/" + new + "/rename?name=" + nname):
+        rollback()
+        sys.exit(1)
+if not call_ok("POST", API + "/containers/" + new + "/start"):
+    rollback()
+    sys.exit(1)
+
+deadline = time.time() + HEALTH_TIMEOUT
+while time.time() < deadline:
+    signal = health_signal()
+    if signal == "healthy":
+        break
+    if signal == "bad":
+        rollback()
+        sys.exit(1)
+    time.sleep(POLL_INTERVAL)
+else:
+    rollback()
+    sys.exit(1)
+
+safe_call("DELETE", API + "/containers/" + old + "?force=true")
 """
 
 
-def _launch_swap_helper(image: str, name: str, old_cid: str, new_cid: str) -> bool:
+def _remove_container(cid: str) -> None:
+    try:
+        _docker_request("DELETE", f"{DOCKER_API}/containers/{cid}?force=true", timeout=10)
+    except Exception:
+        pass
+
+
+def _failed_container_exists(name: str) -> bool:
+    if not name:
+        return False
+    failed = urllib.parse.quote(name + "-failed")
+    try:
+        status, _ = _docker_request("GET", f"{DOCKER_API}/containers/{failed}/json", timeout=5)
+        return status == 200
+    except Exception:
+        return False
+
+
+def _await_container_exit(cid: str, timeout: float) -> int | None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            status, raw = _docker_request("GET", f"{DOCKER_API}/containers/{cid}/json")
+            if status == 404:
+                return None
+            if status == 200:
+                state = (json.loads(raw.decode("utf-8")) or {}).get("State") or {}
+                if state.get("Status") in ("exited", "dead"):
+                    return state.get("ExitCode")
+        except Exception:
+            pass
+        time.sleep(1)
+    return None
+
+
+def _container_logs(cid: str) -> str:
+    try:
+        status, raw = _docker_request("GET", f"{DOCKER_API}/containers/{cid}/logs?stdout=true&stderr=true", timeout=10)
+        if status == 200:
+            return raw.decode("utf-8", "replace").strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _launch_swap_helper(image: str, name: str, old_cid: str, new_cid: str) -> str | None:
     old_rename = urllib.parse.quote(name + "-old") if name else ""
     new_rename = urllib.parse.quote(name) if name else ""
+    failed_rename = urllib.parse.quote(name + "-failed") if name else ""
 
     helper_body = {
         "Image": image,
@@ -394,20 +623,21 @@ def _launch_swap_helper(image: str, name: str, old_cid: str, new_cid: str) -> bo
         "Cmd": [
             "python3",
             "-c",
-            _SWAP_HELPER_SCRIPT % {"api": DOCKER_API},
+            _SWAP_HELPER_SCRIPT % {"api": DOCKER_API, "health_timeout": _SWAP_HEALTH_TIMEOUT},
             old_cid,
             new_cid,
             old_rename,
             new_rename,
+            failed_rename,
         ],
         "HostConfig": {
-            "AutoRemove": True,
             "Binds": ["/var/run/docker.sock:/var/run/docker.sock"],
             "NetworkMode": "none",
         },
     }
 
     create_qs = f"?name={urllib.parse.quote(name + '-swap')}" if name else ""
+    helper_cid: str | None = None
     try:
         status, raw = _docker_request("POST", f"{DOCKER_API}/containers/create{create_qs}", body=helper_body)
         if status not in (200, 201):
@@ -416,22 +646,28 @@ def _launch_swap_helper(image: str, name: str, old_cid: str, new_cid: str) -> bo
                 status,
                 _docker_error(raw, raw.decode("utf-8", "replace")),
             )
-            return False
+            return "Could not create the swap helper container."
         helper_cid = (json.loads(raw.decode("utf-8")) or {}).get("Id")
         if not helper_cid:
-            return False
+            return "Swap helper container was created without an id."
         status, _ = _docker_request("POST", f"{DOCKER_API}/containers/{helper_cid}/start")
         if status not in (200, 204):
             logger.warning("Could not start swap helper (HTTP %d)", status)
-            try:
-                _docker_request("DELETE", f"{DOCKER_API}/containers/{helper_cid}?force=true")
-            except Exception:
-                pass
-            return False
+            _remove_container(helper_cid)
+            return "Could not start the swap helper container."
     except Exception:
         logger.warning("Swap helper setup failed", exc_info=True)
-        return False
-    return True
+        if helper_cid:
+            _remove_container(helper_cid)
+        return traceback.format_exc()
+
+    exit_code = _await_container_exit(helper_cid, UPDATE_TIMEOUT)
+    helper_detail = _container_logs(helper_cid) if exit_code != 0 else ""
+    _remove_container(helper_cid)
+    if exit_code != 0:
+        logger.warning("Swap helper exited with code %s; previous container was restored", exit_code)
+        return helper_detail or f"Swap helper exited with code {exit_code}."
+    return None
 
 
 def _perform_update_sync() -> dict:
@@ -457,10 +693,10 @@ def _perform_update_sync() -> dict:
             msg = f"Image pull failed (HTTP {status})."
             if detail:
                 msg = f"{msg} {detail}"
-            return {"ok": False, "message": msg}
+            return {"ok": False, "message": msg, "detail": detail}
     except Exception:
         logger.warning("Image pull failed", exc_info=True)
-        return {"ok": False, "message": "Image pull failed."}
+        return {"ok": False, "message": "Image pull failed.", "detail": traceback.format_exc()}
 
     _set_state("recreating", "Preparing the replacement container...")
     try:
@@ -469,7 +705,7 @@ def _perform_update_sync() -> dict:
             return {"ok": False, "message": "Could not inspect the running container."}
         info = json.loads(raw.decode("utf-8"))
     except Exception:
-        return {"ok": False, "message": "Could not inspect the running container."}
+        return {"ok": False, "message": "Could not inspect the running container.", "detail": traceback.format_exc()}
 
     name = (info.get("Name") or "").lstrip("/")
     _cleanup_stale_containers(name)
@@ -516,19 +752,27 @@ def _perform_update_sync() -> dict:
             msg = f"Could not create the replacement container (HTTP {status})."
             if detail:
                 msg = f"{msg} {detail}"
-            return {"ok": False, "message": msg}
+            return {"ok": False, "message": msg, "detail": detail}
         new_cid = (json.loads(raw.decode("utf-8")) or {}).get("Id")
         if not new_cid:
             return {"ok": False, "message": "Replacement container created without an id."}
     except Exception:
-        return {"ok": False, "message": "Could not create the replacement container."}
+        return {"ok": False, "message": "Could not create the replacement container.", "detail": traceback.format_exc()}
 
-    if not _launch_swap_helper(image, name, cid, new_cid):
-        try:
-            _docker_request("DELETE", f"{DOCKER_API}/containers/{new_cid}?force=true")
-        except Exception:
-            pass
-        return {"ok": False, "message": "Could not start the swap helper container."}
+    swap_error = _launch_swap_helper(image, name, cid, new_cid)
+    if swap_error is not None:
+        _remove_container(new_cid)
+        if name:
+            failed_qs = urllib.parse.quote(name + "-failed")
+            try:
+                _docker_request("DELETE", f"{DOCKER_API}/containers/{failed_qs}?force=true", timeout=10)
+            except Exception:
+                pass
+        return {
+            "ok": False,
+            "message": "Update failed. The previous container was restored.",
+            "detail": swap_error,
+        }
 
     return {"ok": True, "message": "Update applied. The app is restarting with the new version."}
 

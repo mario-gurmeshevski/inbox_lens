@@ -3,6 +3,7 @@ import json
 import os
 import socket
 import threading
+import time
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -65,6 +66,8 @@ async def lifespan(app: FastAPI):
         _monitor.start()
 
     if updater.is_docker_environment():
+        if updater.cleanup_stale_containers():
+            cache.save_setting(updater.LAST_UPDATE_ROLLED_BACK_KEY, "1", DB_PATH)
         _update_checker = updater.UpdateChecker(on_update=_on_update_available)
         _update_checker.start()
 
@@ -77,6 +80,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Email Reader Dashboard", lifespan=lifespan)
+
+MANUAL_CHECK_COOLDOWN = 30
 
 _WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 templates = Jinja2Templates(directory=str(_WEB_DIR / "templates"))
@@ -691,12 +696,14 @@ def _update_info(db_path: str = DB_PATH) -> dict:
     dismissed = cache.get_setting(updater.DISMISSED_VERSION_KEY, db_path)
     banner_dismissed = bool(latest and dismissed == latest)
     return {
-        "current_version": updater.get_current_version(),
+        "current_version": check.get("current") or "Unknown",
         "latest_version": latest,
         "update_available": check.get("update_available", False),
         "update_error": check.get("error", False),
+        "update_message": check.get("message", ""),
         "docker_managed": updater.is_docker_managed(),
         "update_state": updater.update_state(),
+        "update_rolled_back": bool(cache.get_setting(updater.LAST_UPDATE_ROLLED_BACK_KEY, db_path)),
         "banner_dismissed": banner_dismissed,
     }
 
@@ -1053,12 +1060,18 @@ async def partial_update_panel(request: Request):
 
 @app.post("/api/update/check", response_class=HTMLResponse)
 async def api_update_check(request: Request):
-    updater.fetch_latest_version(force=True)
+    now = time.time()
+    last = request.session.get("last_update_check_at", 0.0)
+    if now - last >= MANUAL_CHECK_COOLDOWN:
+        updater.fetch_latest_version(force=True)
+        request.session["last_update_check_at"] = now
+    cache.delete_setting(updater.LAST_UPDATE_ROLLED_BACK_KEY, DB_PATH)
     return templates.TemplateResponse(request, "partials/update_panel.html", {"update": _update_info(DB_PATH)})
 
 
 @app.post("/api/update/run", response_class=HTMLResponse)
 async def api_update_run(request: Request):
+    cache.delete_setting(updater.LAST_UPDATE_ROLLED_BACK_KEY, DB_PATH)
     if updater.is_docker_managed():
         updater.trigger_update()
     return templates.TemplateResponse(request, "partials/update_panel.html", {"update": _update_info(DB_PATH)})

@@ -1262,7 +1262,7 @@ class TestUpdateEndpoints:
         assert data["update_available"] is True
         assert "phase" in data["update_state"]
 
-    def test_banner_partial_hidden_in_non_docker(self):
+    def test_banner_partial_shown_in_non_docker(self):
         with (
             patch.object(web, "DB_PATH", self.db_path),
             patch.object(web, "_is_docker", lambda: False),
@@ -1272,7 +1272,9 @@ class TestUpdateEndpoints:
             client = self._make_client()
             resp = client.get("/partials/update-banner")
         assert resp.status_code == 200
-        assert b"A new update is available" not in resp.content
+        assert b"A new version is available" in resp.content
+        assert b"git" in resp.content
+        assert b"Click here to update" not in resp.content
 
     def test_banner_partial_shown_in_docker_when_update_available(self):
         with (
@@ -1285,6 +1287,20 @@ class TestUpdateEndpoints:
             resp = client.get("/partials/update-banner")
         assert resp.status_code == 200
         assert b"A new update is available" in resp.content
+        assert b"Click here to update" in resp.content
+
+    def test_banner_partial_hidden_when_dismissed(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: True),
+            patch.object(web.updater, "get_current_version", lambda: "1.2.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: "v1.3.0"),
+            patch.object(web.cache, "get_setting", lambda *a, **k: "v1.3.0"),
+        ):
+            client = self._make_client()
+            resp = client.get("/partials/update-banner")
+        assert resp.status_code == 200
+        assert b"A new" not in resp.content
 
     def test_dismiss_persists_latest_version(self):
         with (
@@ -1309,6 +1325,97 @@ class TestUpdateEndpoints:
             resp = client.post("/api/update/check")
         assert resp.status_code == 200
         assert any(call.kwargs.get("force") for call in mock_fetch.call_args_list)
+
+    def test_check_endpoint_cooldown_skips_repeated_force(self):
+        forced = {"n": 0}
+
+        def fake_fetch(force=False):
+            if force:
+                forced["n"] += 1
+            return "v1.3.0"
+
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web.updater, "fetch_latest_version", side_effect=fake_fetch),
+            patch.object(web.updater, "get_current_version", lambda: "1.3.0"),
+            patch.object(web, "MANUAL_CHECK_COOLDOWN", 30),
+        ):
+            client = self._make_client()
+            r1 = client.post("/api/update/check")
+            r2 = client.post("/api/update/check")  # within cooldown
+        assert r1.status_code == 200 and r2.status_code == 200
+        assert forced["n"] == 1  # only the first call bypassed the cache
+
+    def test_check_endpoint_cooldown_expires(self):
+        forced = {"n": 0}
+
+        def fake_fetch(force=False):
+            if force:
+                forced["n"] += 1
+            return "v1.3.0"
+
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web.updater, "fetch_latest_version", side_effect=fake_fetch),
+            patch.object(web.updater, "get_current_version", lambda: "1.3.0"),
+            patch.object(web, "MANUAL_CHECK_COOLDOWN", 0),
+        ):
+            client = self._make_client()
+            client.post("/api/update/check")
+            client.post("/api/update/check")
+        assert forced["n"] == 2  # cooldown expired immediately -> both forced
+
+    def test_update_info_exposes_rolled_back_flag(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web.updater, "get_current_version", lambda: "1.2.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: "v1.3.0"),
+            patch.object(web.cache, "get_setting", lambda key, *a, **k: "1" if key == web.updater.LAST_UPDATE_ROLLED_BACK_KEY else None),
+        ):
+            info = web._update_info(self.db_path)
+        assert info["update_rolled_back"] is True
+
+    def test_check_endpoint_clears_rolled_back_flag(self):
+        cleared = []
+
+        def fake_get_setting(key, *a, **k):
+            return "1" if key == web.updater.LAST_UPDATE_ROLLED_BACK_KEY else None
+
+        def fake_delete_setting(key, *a, **k):
+            cleared.append(key)
+
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: "v1.3.0"),
+            patch.object(web.updater, "get_current_version", lambda: "1.3.0"),
+            patch.object(web.cache, "get_setting", side_effect=fake_get_setting),
+            patch.object(web.cache, "delete_setting", side_effect=fake_delete_setting),
+            patch.object(web, "MANUAL_CHECK_COOLDOWN", 0),
+        ):
+            client = self._make_client()
+            resp = client.post("/api/update/check")
+        assert resp.status_code == 200
+        assert web.updater.LAST_UPDATE_ROLLED_BACK_KEY in cleared
+
+    def test_run_endpoint_clears_rolled_back_flag(self):
+        cleared = []
+
+        def fake_delete_setting(key, *a, **k):
+            cleared.append(key)
+
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web.updater, "is_docker_managed", lambda: True),
+            patch.object(web.updater, "trigger_update", lambda: True),
+            patch.object(web.updater, "get_current_version", lambda: "1.2.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: "v1.3.0"),
+            patch.object(web.cache, "get_setting", lambda *a, **k: None),
+            patch.object(web.cache, "delete_setting", side_effect=fake_delete_setting),
+        ):
+            client = self._make_client()
+            resp = client.post("/api/update/run")
+        assert resp.status_code == 200
+        assert web.updater.LAST_UPDATE_ROLLED_BACK_KEY in cleared
 
     def test_run_endpoint_triggers_update_when_managed(self):
         with (

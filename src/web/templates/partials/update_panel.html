@@ -8,7 +8,7 @@
   if
   phase
   in
-  ["pulling", "recreating", "restarting"]
+  ["pulling", "recreating"]
   %}
   hx-get="/partials/update-panel"
   hx-trigger="every 2s"
@@ -32,15 +32,36 @@
       </p>
     </div>
   </div>
-  {% if phase in ["pulling", "recreating", "restarting"] %}
+  {% if phase in ["pulling", "recreating"] %}
     <div class="status-box status-info is-spaced">
       <i data-lucide="loader" class="icon-md spin"></i>
       <span>{{ update.update_state.message or "Update in progress..." }}</span>
+    </div>
+  {% elif phase == "restarting" %}
+    <div id="restart-status"
+         class="status-box status-info is-spaced"
+         data-version="{{ update.current_version }}"
+         data-message="{{ update.update_state.message or 'The app is restarting with the new version. The page will reload automatically.' }}">
+      <i data-lucide="loader" class="icon-md spin"></i>
+      <span>{{ update.update_state.message or "The app is restarting with the new version. The page will reload automatically." }}</span>
     </div>
   {% elif phase == "failed" %}
     <div class="status-box status-error is-spaced">
       <i data-lucide="alert-circle" class="icon-md"></i>
       <span>{{ update.update_state.message or "Update failed." }}</span>
+    </div>
+    {% if update.update_state.error_detail %}
+      <details class="settings-hint is-spaced update-error-details">
+        <summary>Show details</summary>
+        <pre>{{ update.update_state.error_detail }}</pre>
+      </details>
+    {% endif %}
+    <div class="settings-hint is-spaced">
+      <i data-lucide="info" class="icon-sm"></i>
+      <span>
+        Need more? Check the host logs with:
+        <code>docker logs inbox-lens-web-1</code>
+      </span>
     </div>
     <div class="settings-network-info">
       <form hx-post="/api/update/run"
@@ -52,6 +73,46 @@
           Retry Update
         </button>
       </form>
+      <form hx-post="/api/update/check"
+            hx-target="#update-panel"
+            hx-swap="outerHTML"
+            class="inline-form">
+        <button type="submit" class="btn btn-sm">
+          <i data-lucide="search-check" class="icon-sm"></i>
+          Check Again
+        </button>
+      </form>
+      <button type="button"
+              class="btn btn-sm"
+              data-copy-error="{{ update.update_state.error_detail or update.update_state.message }}">
+        <i data-lucide="copy" class="icon-sm"></i>
+        Copy Error
+      </button>
+    </div>
+  {% elif update.update_rolled_back %}
+    <div class="status-box status-warning is-spaced">
+      <i data-lucide="alert-triangle" class="icon-md"></i>
+      <span>
+        The last update failed and was rolled back — this container is still
+        running the previous version ({{ update.current_version }}).
+      </span>
+    </div>
+    <div class="settings-network-info">
+      {% if update.docker_managed %}
+        <form hx-post="/api/update/run"
+              hx-target="#update-panel"
+              hx-swap="outerHTML"
+              hx-confirm="The app will pull the latest image and restart. It will be unavailable for a minute or two."
+              data-confirm-title="Update now?"
+              data-confirm-tone="warning"
+              data-confirm-label="Update"
+              class="inline-form">
+          <button type="submit" class="btn btn-sm">
+            <i data-lucide="download" class="icon-sm"></i>
+            Retry Update
+          </button>
+        </form>
+      {% endif %}
       <form hx-post="/api/update/check"
             hx-target="#update-panel"
             hx-swap="outerHTML"
@@ -116,7 +177,7 @@
   {% elif update.update_error %}
     <div class="status-box status-error is-spaced">
       <i data-lucide="wifi-off" class="icon-md"></i>
-      <span>Couldn't reach the version source. Check your connection.</span>
+      <span>{{ update.update_message or "Couldn't reach the version source. Check your connection." }}</span>
     </div>
     <div class="settings-network-info">
       <form hx-post="/api/update/check"

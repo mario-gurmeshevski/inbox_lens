@@ -103,7 +103,7 @@ Fetch emails from a Gmail inbox via IMAP, cache them in a local SQLite database,
 
 ## Testing
 
-The project includes 539 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
+The project includes 601 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
 
 ```bash
 
@@ -117,19 +117,19 @@ make test-cov   # For Mac/Linux
 
 ### Test structure
 
-| File                   | Tests | Coverage                                                    |
-| ---------------------- | ----- | ----------------------------------------------------------- |
-| `test_cache.py`        | 78    | DB ops, hashing, scanning, search, threads                  |
-| `test_email_reader.py` | 72    | Parsing, body cleaning, thread extraction, keywords         |
-| `test_web.py`          | 136   | FastAPI endpoints, SSE, Tailscale, auth middleware, updates |
-| `test_auth.py`         | 42    | Password hashing, API keys, sessions, rate limiting         |
-| `test_imap.py`         | 58    | IMAP helpers, connection, fetch, delete                     |
-| `test_idle_monitor.py` | 63    | IDLE loop, ConnectionLost, run_initial_fetch                |
-| `test_crypto.py`       | 22    | Encryption, settings, credentials                           |
-| `test_event_bus.py`    | 12    | Pub/sub dispatch                                            |
-| `test_utils.py`        | 8     | Keyword parsing, priority buckets                           |
-| `test_constants.py`    | 7     | Env var defaults and overrides                              |
-| `test_updater.py`      | 41    | Version checking, semver compare, Docker self-update        |
+| File                   | Tests | Coverage                                                                                       |
+| ---------------------- | ----- | ---------------------------------------------------------------------------------------------- |
+| `test_cache.py`        | 80    | DB ops, hashing, scanning, search, threads                                                     |
+| `test_web.py`          | 153   | FastAPI endpoints, SSE, Tailscale, auth middleware, update banner/panel, rate-limit cooldown   |
+| `test_updater.py`      | 84    | Version parsing/checking, GitHub fetch cache + rate-limit, Docker self-update, swap-helper rollback |
+| `test_email_reader.py` | 72    | Parsing, body cleaning, thread extraction, keywords                                            |
+| `test_idle_monitor.py` | 63    | IDLE loop, ConnectionLost, run_initial_fetch                                                   |
+| `test_auth.py`         | 42    | Password hashing, API keys, sessions, rate limiting                                            |
+| `test_imap.py`         | 58    | IMAP helpers, connection, fetch, delete                                                        |
+| `test_crypto.py`       | 22    | Encryption, settings, credentials                                                              |
+| `test_event_bus.py`    | 12    | Pub/sub dispatch                                                                               |
+| `test_utils.py`        | 8     | Keyword parsing, priority buckets                                                              |
+| `test_constants.py`    | 7     | Env var defaults and overrides                                                                 |
 
 ### Linting
 
@@ -245,7 +245,7 @@ Opens at `http://localhost:8000`. Set `WEB_HOST` and `WEB_PORT` in `.env` to cus
 
 - **Settings page** — toggle network access (bind to `0.0.0.0` vs `127.0.0.1`), view local IPs and access URLs
 
-- **In-app updates** — Docker deployments get a dismissible update banner, a Settings panel with version check, and optional one-click self-update (pulls the new image and recreates the container). See [Updates](#updates).
+- **In-app updates** — a dismissible update banner (shown to Docker and non-Docker users alike) plus a Settings panel with version check. Docker deployments get optional one-click self-update (pulls the new image and recreates the container); non-Docker installs see the host update command. See [Updates](#updates).
 
 - **Account page** — view connected email address, masked password, disconnect button
 
@@ -446,7 +446,10 @@ The app checks for updates every 6 hours. An **update banner** appears when one 
 
 **One-click update** — if the Docker socket is mounted, **Update Now** pulls the latest image and recreates the container in place. The app is briefly unavailable during the swap.
 
-> **Security note:** mounting `/var/run/docker.sock` grants host-level Docker control. Remove it from `docker-compose.yaml` to disable one-click updates.
+> **Security note:** mounting `/var/run/docker.sock` grants the container host-equivalent root — anything that can drive the Docker engine can create a privileged container and escape to the host.
+>
+> One-click updates require **full container lifecycle control** (create, start, stop, rename, update, and delete containers, plus image pulls), so there is no way to sandbox the socket while keeping one-click updates working. The only complete mitigation is to **remove the `/var/run/docker.sock` mount** from `docker-compose.yaml` (this disables one-click updates; you'll update manually via `docker compose pull && docker compose up -d`).
+>
 
 **Socket permissions:** When the Docker socket is mounted, the container automatically grants `appuser` read/write access — it detects the socket's group ID and adds the user to that group on startup, so one-click updates work without extra configuration. If your setup prevents this, fall back to either:
 
@@ -463,10 +466,12 @@ docker compose pull && docker compose up -d
 
 ### Non-Docker
 
-The Settings page still checks for new releases and shows the current vs. latest version, but one-click self-update isn't available (no container to recreate). To update a local checkout:
+The app checks for new releases and shows the current vs. latest version in both the update banner and Settings. One-click self-update isn't available (no container to recreate) — the banner points you to the host command. To update a local checkout:
 
 ```bash
-git pull && make install(or `./commands.ps1 install` on Windows).
+git pull && make install
+
+# (or `./commands.ps1 install` on Windows).
 ```
 
 Then restart `make web` (or `./commands.ps1 web` on Windows).

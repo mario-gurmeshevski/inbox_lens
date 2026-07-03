@@ -5,13 +5,15 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
+import urllib.error
 from io import BytesIO
 from pathlib import Path
 
 from src.scripts import updater
 
 
-def _run_swap_helper(responses: dict, args: list):
+def _run_swap_helper(responses: dict, args: list, inspect_state: dict | None = None):
     class _Handler(socketserver.BaseRequestHandler):
         def handle(self):
             self.request.settimeout(2)
@@ -25,16 +27,28 @@ def _run_swap_helper(responses: dict, args: list):
             except OSError:
                 return
             parts = data.split(b"\r\n", 1)[0].decode("latin-1").split(" ")
+            method = parts[0] if parts else ""
+            path = parts[1] if len(parts) >= 2 else ""
             status = 204
-            if len(parts) >= 2:
-                recorded.append((parts[0], parts[1]))
+            body = b""
+            if path:
+                recorded.append((method, path))
                 for key, val in responses.items():
-                    if key in parts[1]:
+                    if key in path:
                         status = val
                         break
-            head = ("HTTP/1.1 %d OK\r\nContent-Length: 0\r\n\r\n" % status).encode()
+            if method == "GET" and path.endswith("/json"):
+                status = 200
+                state = {"State": {"Running": True, "Health": {"Status": "healthy"}}}
+                if inspect_state:
+                    for key, val in inspect_state.items():
+                        if key in path:
+                            state = val
+                            break
+                body = json.dumps(state).encode()
+            head = ("HTTP/1.1 %d OK\r\nContent-Length: %d\r\n\r\n" % (status, len(body))).encode()
             try:
-                self.request.sendall(head)
+                self.request.sendall(head + body)
             except OSError:
                 return
 
@@ -46,9 +60,8 @@ def _run_swap_helper(responses: dict, args: list):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        script = updater._SWAP_HELPER_SCRIPT % {"api": updater.DOCKER_API}
+        script = updater._SWAP_HELPER_SCRIPT % {"api": updater.DOCKER_API, "health_timeout": 3}
         script = script.replace('SOCK = "/var/run/docker.sock"', "SOCK = %r" % sock_path)
-        script = script.replace("time.sleep(2)", "time.sleep(0)")
         proc = subprocess.run(
             [sys.executable, "-c", script, *args],
             capture_output=True,
@@ -86,6 +99,12 @@ class TestVersionParsing:
     def test_parse_none(self):
         assert updater._parse_version(None) == ()
 
+    def test_parse_strips_alpha_beta_prerelease(self):
+        assert updater._parse_version("1.5.0-alpha") == (1, 5, 0)
+        assert updater._parse_version("1.5.0-beta.1") == (1, 5, 0)
+        assert updater._parse_version("2.0.0-rc1") == (2, 0, 0)
+        assert updater._parse_version("1.5.0+build.7") == (1, 5, 0)
+
 
 class TestIsNewer:
     def test_greater(self):
@@ -109,11 +128,36 @@ class TestIsNewer:
     def test_malformed_returns_false(self):
         assert updater.is_newer(None, "1.0.0") is False
 
+    def test_clean_patch_progression(self):
+        assert updater.is_newer("1.5.1", "1.5.0") is True
+        assert updater.is_newer("1.5.0", "1.5.1") is False
+
+    def test_prerelease_not_treated_as_newer(self):
+        assert updater.is_newer("1.5.0-beta", "1.5.0") is False
+        assert updater.is_newer("1.5.0-alpha.3", "1.5.0") is False
+        assert updater.is_newer("2.0.0-rc1", "2.0.0") is False
+
 
 class TestGetCurrentVersion:
     def test_returns_nonempty_string(self):
         v = updater.get_current_version()
         assert isinstance(v, str) and v
+
+    def test_returns_none_when_undetectable(self, monkeypatch):
+        class _UnreadablePath:
+            def __init__(self, target):
+                pass
+
+            def read_text(self, errors="ignore"):
+                raise OSError("no pyproject")
+
+        monkeypatch.setattr(updater, "Path", lambda target: _UnreadablePath(target))
+
+        def _missing(_name):
+            raise ModuleNotFoundError("not installed")
+
+        monkeypatch.setattr("importlib.metadata.version", _missing)
+        assert updater.get_current_version() is None
 
 
 class TestFetchLatestVersion:
@@ -163,11 +207,127 @@ class TestFetchLatestVersion:
         updater._latest_cache["value"] = None
         assert updater.fetch_latest_version(force=True) is None
 
+    def test_fetch_detects_github_rate_limit(self, monkeypatch):
+        # GitHub rejects with 403 when the unauthenticated quota is exhausted.
+        def rate_limited(*a, **k):
+            raise urllib.error.HTTPError(updater.TAGS_URL, 403, "Forbidden", hdrs={}, fp=BytesIO(b"{}"))
+
+        monkeypatch.setattr(updater.urllib.request, "urlopen", rate_limited)
+        updater._latest_cache["value"] = None
+        updater.reset_rate_limit()
+        try:
+            assert updater.fetch_latest_version(force=True) is None
+            assert updater.is_rate_limited() is True
+        finally:
+            updater.reset_rate_limit()
+
+    def test_successful_fetch_clears_rate_limit_flag(self, monkeypatch):
+        class FakeResp:
+            def __init__(self, data):
+                self._buf = BytesIO(data)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def read(self):
+                return self._buf.read()
+
+        payload = json.dumps([{"name": "v1.4.0"}]).encode()
+        monkeypatch.setattr(updater.urllib.request, "urlopen", lambda req, timeout=10, **k: FakeResp(payload))
+        updater._latest_cache["value"] = None
+        updater._rate_limited_at = time.monotonic()  # pretend a prior call was limited
+        try:
+            assert updater.fetch_latest_version(force=True) == "v1.4.0"
+            assert updater.is_rate_limited() is False
+        finally:
+            updater.reset_rate_limit()
+            updater._latest_cache["value"] = None
+
     def test_uses_cache_when_fresh(self):
         updater._latest_cache["value"] = "v9.9.9"
         updater._latest_cache["at"] = float("inf")
         try:
             assert updater.fetch_latest_version(force=False) == "v9.9.9"
+        finally:
+            updater._latest_cache["value"] = None
+            updater._latest_cache["at"] = 0.0
+
+    def test_concurrent_calls_share_one_fetch(self, monkeypatch):
+        calls = {"n": 0}
+
+        class FakeResp:
+            def __init__(self, data):
+                self._buf = BytesIO(data)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def read(self):
+                return self._buf.read()
+
+        def fake_urlopen(req, timeout=10, **k):
+            calls["n"] += 1
+            time.sleep(0.5)
+            return FakeResp(json.dumps([{"name": "v1.4.0"}]).encode())
+
+        monkeypatch.setattr(updater.urllib.request, "urlopen", fake_urlopen)
+        updater._latest_cache["value"] = None
+        updater._latest_cache["at"] = 0.0
+
+        barrier = threading.Barrier(2)
+        results: list = [None, None]
+
+        def runner(idx, force):
+            barrier.wait()
+            results[idx] = updater.fetch_latest_version(force=force)
+
+        threads = [
+            threading.Thread(target=runner, args=(0, True)),
+            threading.Thread(target=runner, args=(1, False)),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert calls["n"] == 1
+        assert results == ["v1.4.0", "v1.4.0"]
+        updater._latest_cache["value"] = None
+        updater._latest_cache["at"] = 0.0
+
+    def test_force_bypasses_fresh_cache(self, monkeypatch):
+        calls = {"n": 0}
+
+        class FakeResp:
+            def __init__(self, data):
+                self._buf = BytesIO(data)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def read(self):
+                return self._buf.read()
+
+        def fake_urlopen(req, timeout=10, **k):
+            calls["n"] += 1
+            return FakeResp(json.dumps([{"name": "v1.5.0"}]).encode())
+
+        monkeypatch.setattr(updater.urllib.request, "urlopen", fake_urlopen)
+        updater._latest_cache["value"] = "v9.9.9"
+        updater._latest_cache["at"] = float("inf")  # fresh
+        try:
+            # A lone force call must still fetch even when the cache is fresh.
+            assert updater.fetch_latest_version(force=True) == "v1.5.0"
+            assert calls["n"] == 1
         finally:
             updater._latest_cache["value"] = None
             updater._latest_cache["at"] = 0.0
@@ -195,6 +355,28 @@ class TestCheckForUpdate:
         result = updater.check_for_update()
         assert result["error"] is True
         assert result["update_available"] is False
+
+    def test_error_message_when_version_undetectable(self, monkeypatch):
+        monkeypatch.setattr(updater, "get_current_version", lambda: None)
+        monkeypatch.setattr(updater, "fetch_latest_version", lambda force=False: "v1.3.0")
+        result = updater.check_for_update()
+        assert result["error"] is True
+        assert result["update_available"] is False
+        assert result["current"] is None
+        assert "current version" in result["message"].lower()
+
+    def test_no_false_positive_when_version_undetectable(self, monkeypatch):
+        monkeypatch.setattr(updater, "get_current_version", lambda: None)
+        monkeypatch.setattr(updater, "fetch_latest_version", lambda force=False: "v9.9.9")
+        result = updater.check_for_update()
+        assert result["update_available"] is False
+
+    def test_network_error_message(self, monkeypatch):
+        monkeypatch.setattr(updater, "get_current_version", lambda: "1.2.0")
+        monkeypatch.setattr(updater, "fetch_latest_version", lambda force=False: None)
+        result = updater.check_for_update()
+        assert result["error"] is True
+        assert "version source" in result["message"].lower()
 
 
 class TestDockerDetection:
@@ -256,6 +438,81 @@ class TestUpdateState:
         assert started["called"] is True
         updater._set_state("idle")
 
+    def test_failed_state_records_timestamp_and_detail(self):
+        updater._set_state("failed", "boom", "raw daemon: nope")
+        state = updater.update_state()
+        assert state["phase"] == "failed"
+        assert state["message"] == "boom"
+        assert state["error_detail"] == "raw daemon: nope"
+        assert state["failed_at"] > 0.0
+
+    def test_active_state_clears_error_detail(self):
+        # Entering an active phase should reset prior failure fields.
+        updater._set_state("failed", "boom", "detail")
+        updater._set_state("pulling", "retrying")
+        state = updater.update_state()
+        assert state["error_detail"] == ""
+        assert state["failed_at"] == 0.0
+
+    def test_worker_surfaces_detail_from_failure_result(self, monkeypatch):
+        monkeypatch.setattr(
+            updater,
+            "_perform_update_sync",
+            lambda: {"ok": False, "message": "boom", "detail": "raw daemon: x"},
+        )
+        updater._update_worker()
+        state = updater.update_state()
+        assert state["phase"] == "failed"
+        assert state["error_detail"] == "raw daemon: x"
+        assert state["failed_at"] > 0.0
+        updater._set_state("idle")
+
+    def test_worker_captures_traceback_on_crash(self, monkeypatch):
+        def boom():
+            raise RuntimeError("kaboom")
+
+        monkeypatch.setattr(updater, "_perform_update_sync", boom)
+        updater._update_worker()
+        state = updater.update_state()
+        assert state["phase"] == "failed"
+        assert "Traceback" in state["error_detail"]
+        assert "kaboom" in state["message"]
+        updater._set_state("idle")
+
+    def test_concurrent_trigger_update_one_starts_one_rejects(self, monkeypatch):
+        started = threading.Event()
+
+        def blocking_worker():
+            started.set()
+            # Hold the active phase until the test releases us.
+            hold.wait(5)
+            updater._set_state("idle")
+
+        hold = threading.Event()
+        monkeypatch.setattr(updater, "_update_worker", blocking_worker)
+        updater._set_state("idle")
+
+        results: list = [None, None]
+        barrier = threading.Barrier(2)
+
+        def runner(idx):
+            barrier.wait()
+            results[idx] = updater.trigger_update()
+
+        threads = [threading.Thread(target=runner, args=(i,)) for i in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        hold.set()  # release the stubbed worker
+        for _ in range(200):
+            if updater.update_state()["phase"] == "idle":
+                break
+            time.sleep(0.01)
+
+        assert sorted(results) == [False, True]
+
 
 class TestCurrentContainerId:
     @staticmethod
@@ -270,7 +527,6 @@ class TestCurrentContainerId:
         return lambda target: _P(target)
 
     def test_resolves_via_proc_when_hostname_overridden(self, monkeypatch):
-        # Reproduces the Tailscale setup: HOSTNAME is a name, not the short id.
         real_id = "a" * 64
         monkeypatch.setenv("HOSTNAME", "inbox-lens")
         monkeypatch.delenv("INBOX_LENS_IMAGE", raising=False)
@@ -434,6 +690,55 @@ class TestCurrentContainerId:
         monkeypatch.setattr(updater, "_docker_request", fake_request)
         assert updater._current_container_id() is None
 
+    def test_resolves_via_self_label(self, monkeypatch):
+        web_cid = "a" * 64
+        monkeypatch.setenv("HOSTNAME", "inbox-lens")
+        monkeypatch.delenv("INBOX_LENS_IMAGE", raising=False)
+        monkeypatch.setattr(updater, "Path", self._fake_path({}))
+
+        def fake_request(method, path, body=None, timeout=30):
+            if "filters=" in path and "/containers/json" in path:
+                assert "inbox-lens.self" in path
+                return 200, json.dumps([{"Id": web_cid, "Image": updater.DEFAULT_IMAGE}]).encode()
+            return 404, b""
+
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        assert updater._current_container_id() == web_cid
+
+    def test_label_lookup_rejected_when_image_mismatch(self, monkeypatch):
+        # A container carrying our label but a different image must not be used.
+        monkeypatch.setenv("HOSTNAME", "inbox-lens")
+        monkeypatch.delenv("INBOX_LENS_IMAGE", raising=False)
+        monkeypatch.setattr(updater, "Path", self._fake_path({}))
+
+        def fake_request(method, path, body=None, timeout=30):
+            if "filters=" in path and "/containers/json" in path:
+                return 200, json.dumps([{"Id": "stray", "Image": "other/image:latest"}]).encode()
+            return 404, b""
+
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        assert updater._current_container_id() is None
+
+    def test_falls_through_to_proc_when_unlabeled(self, monkeypatch):
+        real_id = "b" * 64
+        monkeypatch.setenv("HOSTNAME", "inbox-lens")
+        monkeypatch.delenv("INBOX_LENS_IMAGE", raising=False)
+        monkeypatch.setattr(
+            updater,
+            "Path",
+            self._fake_path({"/proc/1/cgroup": f"0::/docker/{real_id}\n"}),
+        )
+
+        def fake_request(method, path, body=None, timeout=30):
+            if "filters=" in path and "/containers/json" in path:
+                return 200, json.dumps([]).encode()
+            if path == f"/v1.41/containers/{real_id}/json":
+                return 200, json.dumps({"Config": {"Image": updater.DEFAULT_IMAGE}}).encode()
+            return 404, b""
+
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        assert updater._current_container_id() == real_id
+
 
 class TestPerformUpdateSync:
     def setup_method(self):
@@ -477,6 +782,8 @@ class TestPerformUpdateSync:
                 return 201, json.dumps({"Id": "helperid"}).encode()
             if "/containers/helperid/start" in path:
                 return 204, b""
+            if "/containers/helperid/json" in path:
+                return 200, json.dumps({"State": {"Status": "exited", "ExitCode": 0}}).encode()
             if method == "DELETE":
                 return 204, b""
             return 404, b""
@@ -511,6 +818,8 @@ class TestPerformUpdateSync:
                 return 201, json.dumps({"Id": "helperid"}).encode()
             if "/containers/helperid/start" in path:
                 return 204, b""
+            if "/containers/helperid/json" in path:
+                return 200, json.dumps({"State": {"Status": "exited", "ExitCode": 0}}).encode()
             if method == "DELETE":
                 return 204, b""
             return 404, b""
@@ -521,25 +830,27 @@ class TestPerformUpdateSync:
         updater._perform_update_sync()
 
         hb = captured["body"]
-        assert hb["HostConfig"]["AutoRemove"] is True
+        assert "AutoRemove" not in hb["HostConfig"]
         assert hb["Entrypoint"] == []
         assert "/var/run/docker.sock:/var/run/docker.sock" in hb["HostConfig"]["Binds"]
         cmd = hb["Cmd"]
         assert cmd[0] == "python3"
         assert "abc" in cmd
         assert "newid" in cmd
+        assert "inbox-lens-web-1-failed" in cmd
         script_and_args = " ".join(cmd)
         assert "/var/run/docker.sock" in script_and_args
-        assert "time.sleep" in script_and_args
         assert "stop?t=10" in script_and_args
         assert "rename?name=" in script_and_args
         assert "/start" in script_and_args
         assert "force=true" in script_and_args
+        assert "rollback" in script_and_args
+        assert "HEALTH_TIMEOUT" in script_and_args
         updater._set_state("idle")
 
     def test_swap_helper_script_compiles(self):
         compile(
-            updater._SWAP_HELPER_SCRIPT % {"api": updater.DOCKER_API},
+            updater._SWAP_HELPER_SCRIPT % {"api": updater.DOCKER_API, "health_timeout": updater._SWAP_HEALTH_TIMEOUT},
             "<swap_helper>",
             "exec",
         )
@@ -554,7 +865,7 @@ class TestPerformUpdateSync:
         assert guard_idx < data_idx
 
     def test_swap_helper_aborts_when_stop_fails(self):
-        recorded, rc = _run_swap_helper({"stop?t=10": 500}, ["old", "new", "oldn", "newn"])
+        recorded, rc = _run_swap_helper({"stop?t=10": 500}, ["old", "new", "oldn", "newn", "failedn"])
         paths = [p for _, p in recorded]
         assert any("stop?t=10" in p for p in paths)
         assert not any("/start" in p for p in paths)
@@ -562,7 +873,7 @@ class TestPerformUpdateSync:
         assert rc != 0
 
     def test_swap_helper_runs_full_sequence_on_success(self):
-        recorded, rc = _run_swap_helper({}, ["old", "new", "oldn", "newn"])
+        recorded, rc = _run_swap_helper({}, ["old", "new", "oldn", "newn", "failedn"])
         paths = [p for _, p in recorded]
         assert any("stop?t=10" in p for p in paths)
         assert any("rename?name=oldn" in p for p in paths)
@@ -570,6 +881,40 @@ class TestPerformUpdateSync:
         assert any("/start" in p for p in paths)
         assert any("force=true" in p for p in paths)
         assert rc == 0
+
+    def test_swap_helper_rolls_back_when_new_unhealthy(self):
+        unhealthy = {"State": {"Running": True, "Health": {"Status": "unhealthy"}}}
+        recorded, rc = _run_swap_helper(
+            {}, ["old", "new", "oldn", "newn", "failedn"], inspect_state={"/containers/new/json": unhealthy}
+        )
+        paths = [p for _, p in recorded]
+        assert rc != 0  # rolled back
+        assert any("/containers/old/stop" in p for p in paths)
+        assert any("/containers/new/stop" in p for p in paths)
+        assert any("rename?name=failedn" in p for p in paths)
+        assert any("rename?name=newn" in p for p in paths)
+        assert any("/containers/old/start" in p for p in paths)
+        # The old container is NOT deleted on rollback (only on success).
+        assert not any("/containers/old" in p and "force=true" in p for p in paths)
+
+    def test_swap_helper_rolls_back_on_health_timeout(self):
+        starting = {"State": {"Running": True, "Health": {"Status": "starting"}}}
+        recorded, rc = _run_swap_helper(
+            {}, ["old", "new", "oldn", "newn", "failedn"], inspect_state={"/containers/new/json": starting}
+        )
+        paths = [p for _, p in recorded]
+        assert rc != 0  # timed out + rolled back
+        assert any("/containers/new/stop" in p for p in paths)
+        assert any("rename?name=failedn" in p for p in paths)
+        assert any("/containers/old/start" in p for p in paths)
+
+    def test_swap_helper_aborts_on_start_network_conflict(self):
+        recorded, rc = _run_swap_helper({"/containers/new/start": 409}, ["old", "new", "oldn", "newn", "failedn"])
+        paths = [p for _, p in recorded]
+        assert rc != 0
+        assert any("/containers/new/stop" in p for p in paths)
+        assert any("rename?name=failedn" in p for p in paths)
+        assert any("/containers/old/start" in p for p in paths)
 
     def test_cleans_up_stale_containers(self, monkeypatch):
         deleted = []
@@ -627,6 +972,8 @@ class TestPerformUpdateSync:
                 return 201, json.dumps({"Id": "helperid"}).encode()
             if "/containers/helperid/start" in path:
                 return 204, b""
+            if "/containers/helperid/json" in path:
+                return 200, json.dumps({"State": {"Status": "exited", "ExitCode": 0}}).encode()
             if method == "DELETE":
                 return 204, b""
             return 404, b""
@@ -667,6 +1014,44 @@ class TestPerformUpdateSync:
 
         assert result["ok"] is False
         assert any("newid" in p for p in deleted)
+        updater._set_state("idle")
+
+    def test_stale_bind_failure_rolls_back_and_surfaces_detail(self, monkeypatch):
+        deleted = []
+
+        def fake_request(method, path, body=None, timeout=30):
+            if "/images/create" in path:
+                return 200, b""
+            if "/containers/abc/json" in path and method == "GET":
+                return 200, json.dumps(
+                    {"Name": "/inbox-lens-web-1", "Config": {"Env": ["X=1"]}, "HostConfig": {}}
+                ).encode()
+            if "create" in path and "inbox-lens-web-1-new" in path:
+                return 201, json.dumps({"Id": "newid"}).encode()
+            if "create" in path and "inbox-lens-web-1-swap" in path:
+                return 201, json.dumps({"Id": "swapid"}).encode()
+            if path.endswith("/containers/swapid/start"):
+                return 204, b""
+            if path.endswith("/containers/swapid/json"):
+                return 200, json.dumps({"State": {"Status": "exited", "ExitCode": 1}}).encode()
+            if "/containers/swapid/logs" in path:
+                return 200, b"bad mount path: /missing/host/path"
+            if method == "DELETE":
+                deleted.append(path)
+                return 204, b""
+            return 404, b""
+
+        monkeypatch.setattr(updater, "is_docker_managed", lambda: True)
+        monkeypatch.setattr(updater, "_current_container_id", lambda: "abc")
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+        monkeypatch.setattr(updater.time, "sleep", lambda *_: None)
+        result = updater._perform_update_sync()
+
+        assert result["ok"] is False
+        assert result["message"] == "Update failed. The previous container was restored."
+        assert any("newid" in p for p in deleted)
+        assert any("inbox-lens-web-1-failed" in p for p in deleted)
+        assert "/missing/host/path" in result["detail"]
         updater._set_state("idle")
 
     def test_create_failure_surfaces_daemon_message(self, monkeypatch):
@@ -738,6 +1123,8 @@ class TestPerformUpdateSync:
                 return 201, json.dumps({"Id": "helperid"}).encode()
             if "/containers/helperid/start" in path:
                 return 204, b""
+            if "/containers/helperid/json" in path:
+                return 200, json.dumps({"State": {"Status": "exited", "ExitCode": 0}}).encode()
             if method == "DELETE":
                 return 204, b""
             return 404, b""
@@ -752,8 +1139,6 @@ class TestPerformUpdateSync:
         assert "ExposedPorts" not in body
         assert "PortBindings" not in body["HostConfig"]
         assert "NetworkingConfig" not in body
-        # The network mode itself must be preserved so the recreated container
-        # keeps sharing the tailscale container's namespace.
         assert body["HostConfig"]["NetworkMode"] == "container:e0c1ad6f2cfc"
         updater._set_state("idle")
 
@@ -778,6 +1163,8 @@ class TestPerformUpdateSync:
                 return 201, json.dumps({"Id": "helperid"}).encode()
             if "/containers/helperid/start" in path:
                 return 204, b""
+            if "/containers/helperid/json" in path:
+                return 200, json.dumps({"State": {"Status": "exited", "ExitCode": 0}}).encode()
             if method == "DELETE":
                 return 204, b""
             return 404, b""
@@ -826,6 +1213,8 @@ class TestPerformUpdateSync:
                 return 201, json.dumps({"Id": "helperid"}).encode()
             if "/containers/helperid/start" in path:
                 return 204, b""
+            if "/containers/helperid/json" in path:
+                return 200, json.dumps({"State": {"Status": "exited", "ExitCode": 0}}).encode()
             if method == "DELETE":
                 return 204, b""
             return 404, b""
@@ -861,7 +1250,7 @@ class TestPerformUpdateSync:
 
     def test_swap_helper_create_surfaces_daemon_message(self, monkeypatch, caplog):
         import logging
-
+        
         monkeypatch.setattr(updater, "is_docker_managed", lambda: True)
         monkeypatch.setattr(updater, "_current_container_id", lambda: "abc")
         monkeypatch.setattr(updater, "_docker_request", self._helper_fail_request_factory())
@@ -870,6 +1259,78 @@ class TestPerformUpdateSync:
         assert result["ok"] is False
         assert any("helper rejected" in rec.getMessage() for rec in caplog.records)
         updater._set_state("idle")
+
+
+class TestCleanupStaleContainers:
+    def test_preserves_foreign_named_container(self, monkeypatch):
+        deleted = []
+
+        def fake_request(method, path, body=None, timeout=30):
+            if method == "GET" and path.endswith("/containers/selfcid/json"):
+                return 200, json.dumps({"Name": "/inbox-lens-web-1"}).encode()
+            if method == "DELETE":
+                deleted.append(path)
+                return 204, b""
+            return 404, b""
+
+        monkeypatch.setattr(updater, "is_docker_managed", lambda: True)
+        monkeypatch.setattr(updater, "_current_container_id", lambda: "selfcid")
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+
+        updater.cleanup_stale_containers()
+
+        assert any("inbox-lens-web-1-old" in p for p in deleted)
+        assert any("inbox-lens-web-1-new" in p for p in deleted)
+        assert any("inbox-lens-web-1-swap" in p for p in deleted)
+        assert any("inbox-lens-web-1-failed" in p for p in deleted)
+        assert not any("myapp-old" in p for p in deleted)
+
+    def test_no_self_cid_does_nothing(self, monkeypatch):
+        deleted = []
+        monkeypatch.setattr(updater, "is_docker_managed", lambda: True)
+        monkeypatch.setattr(updater, "_current_container_id", lambda: None)
+        monkeypatch.setattr(updater, "_docker_request", lambda *a, **k: deleted.append("call") or (404, b""))
+
+        updater.cleanup_stale_containers()
+        assert deleted == []  # never inspects/deletes when we can't identify self
+
+    def test_skips_when_not_docker_managed(self, monkeypatch):
+        called = []
+        monkeypatch.setattr(updater, "is_docker_managed", lambda: False)
+        monkeypatch.setattr(updater, "_docker_request", lambda *a, **k: called.append("call") or (404, b""))
+        updater.cleanup_stale_containers()
+        assert called == []
+
+    def test_returns_true_when_failed_container_present(self, monkeypatch):
+        # A leftover <name>-failed container means the previous update rolled back.
+        def fake_request(method, path, body=None, timeout=30):
+            if method == "GET" and path.endswith("/containers/selfcid/json"):
+                return 200, json.dumps({"Name": "/inbox-lens-web-1"}).encode()
+            if method == "GET" and "inbox-lens-web-1-failed" in path:
+                return 200, json.dumps({"State": {"Status": "exited"}}).encode()
+            if method == "DELETE":
+                return 204, b""
+            return 404, b""
+
+        monkeypatch.setattr(updater, "is_docker_managed", lambda: True)
+        monkeypatch.setattr(updater, "_current_container_id", lambda: "selfcid")
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+
+        assert updater.cleanup_stale_containers() is True
+
+    def test_returns_false_when_no_failed_container(self, monkeypatch):
+        def fake_request(method, path, body=None, timeout=30):
+            if method == "GET" and path.endswith("/containers/selfcid/json"):
+                return 200, json.dumps({"Name": "/inbox-lens-web-1"}).encode()
+            if method == "DELETE":
+                return 204, b""
+            return 404, b""  # the -failed inspect misses
+
+        monkeypatch.setattr(updater, "is_docker_managed", lambda: True)
+        monkeypatch.setattr(updater, "_current_container_id", lambda: "selfcid")
+        monkeypatch.setattr(updater, "_docker_request", fake_request)
+
+        assert updater.cleanup_stale_containers() is False
 
 
 class TestUpdateChecker:

@@ -1,13 +1,13 @@
 (function () {
   function makeIcon(name, cls) {
-    var i = document.createElement("i");
+    const i = document.createElement("i");
     i.setAttribute("data-lucide", name);
     if (cls) i.className = cls;
     return i;
   }
 
   function makeTextSpan(text) {
-    var span = document.createElement("span");
+    const span = document.createElement("span");
     span.textContent = text == null ? "" : String(text);
     return span;
   }
@@ -15,11 +15,11 @@
   function setupDebounce() {
     if (window.__debounceUpdateCheck) return;
     window.__debounceUpdateCheck = true;
-    var COOLDOWN = 30000;
+    const COOLDOWN = 30000;
     document.addEventListener("submit", function (e) {
-      var form = e.target;
+      const form = e.target;
       if (!form || form.getAttribute("hx-post") !== "/api/update/check") return;
-      var btn = form.querySelector('button[type="submit"]');
+      const btn = form.querySelector('button[type="submit"]');
       if (!btn || btn.disabled) return;
       btn.disabled = true;
       btn.style.opacity = "0.6";
@@ -31,19 +31,19 @@
   }
 
   function setupRestartPolling() {
-    var box = document.getElementById("restart-status");
+    const box = document.getElementById("restart-status");
     if (!box || box.dataset.ready) return;
     box.dataset.ready = "1";
 
-    var savedVersion = box.getAttribute("data-version") || "";
-    var initialMessage = box.getAttribute("data-message") || "";
-    var maxTries = 120;
+    const savedVersion = box.getAttribute("data-version") || "";
+    const initialMessage = box.getAttribute("data-message") || "";
+    let maxTries = 120;
 
     function isDone(data) {
       // New version detected, or restart cycle completed, or server moved to a failed phase.
       if (data && data.current_version && data.current_version !== savedVersion) return true;
       if (data && data.update_state) {
-        var phase = data.update_state.phase;
+        const phase = data.update_state.phase;
         if (phase === "idle") return true;
         if (phase === "failed") return true;
       }
@@ -56,7 +56,7 @@
         makeIcon("loader", "icon-md spin"),
         makeTextSpan(initialMessage)
       );
-      var actions = document.getElementById("restart-actions");
+      const actions = document.getElementById("restart-actions");
       if (actions) actions.remove();
       if (window.lucide) lucide.createIcons();
     }
@@ -70,16 +70,16 @@
         )
       );
       if (document.getElementById("restart-actions")) return;
-      var actions = document.createElement("div");
+      const actions = document.createElement("div");
       actions.id = "restart-actions";
       actions.className = "settings-network-info";
-      var retryBtn = document.createElement("button");
+      const retryBtn = document.createElement("button");
       retryBtn.type = "button";
       retryBtn.id = "restart-retry";
       retryBtn.className = "btn btn-sm";
       retryBtn.appendChild(makeIcon("rotate-cw", "icon-sm"));
       retryBtn.appendChild(document.createTextNode(" Retry Polling"));
-      var reloadBtn = document.createElement("button");
+      const reloadBtn = document.createElement("button");
       reloadBtn.type = "button";
       reloadBtn.id = "restart-reload";
       reloadBtn.className = "btn btn-sm";
@@ -124,11 +124,11 @@
     if (window.__copyUpdateError) return;
     window.__copyUpdateError = true;
     document.addEventListener("click", function (e) {
-      var btn = e.target.closest("[data-copy-error]");
+      const btn = e.target.closest("[data-copy-error]");
       if (!btn) return;
-      var text = btn.getAttribute("data-copy-error") || "";
+      const text = btn.getAttribute("data-copy-error") || "";
       if (!text) return;
-      var originalNodes = Array.prototype.slice.call(btn.childNodes);
+      const originalNodes = Array.prototype.slice.call(btn.childNodes);
       function restore() {
         btn.replaceChildren.apply(btn, originalNodes);
         if (window.lucide) lucide.createIcons();

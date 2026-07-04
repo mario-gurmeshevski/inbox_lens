@@ -4,6 +4,11 @@
   box-sizing: border-box;
 }
 
+button {
+  font: inherit;
+  color: inherit;
+}
+
 html {
   scrollbar-color: var(--scrollbar-thumb) transparent;
   scrollbar-width: thin;

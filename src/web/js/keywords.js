@@ -1,8 +1,8 @@
 (function () {
-  var box = document.getElementById("kw-status");
+  const box = document.getElementById("kw-status");
   if (!box) return;
   try {
-    var url = new URL(window.location.href);
+    const url = new URL(window.location.href);
     if (url.searchParams.has("import")) {
       url.searchParams.delete("import");
       window.history.replaceState({}, "", url.toString());

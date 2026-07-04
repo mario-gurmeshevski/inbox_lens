@@ -1,13 +1,13 @@
 (function () {
-  var STORAGE_KEY = "inbox-lens-settings-tab";
-  var tabs = [].slice.call(document.querySelectorAll(".settings-tab"));
-  var panels = [].slice.call(document.querySelectorAll("[data-tab-panel]"));
+  const STORAGE_KEY = "inbox-lens-settings-tab";
+  const tabs = [].slice.call(document.querySelectorAll(".settings-tab"));
+  const panels = [].slice.call(document.querySelectorAll("[data-tab-panel]"));
   if (!tabs.length || !panels.length) return;
 
   function activate(name) {
-    var found = false;
+    let found = false;
     tabs.forEach(function (t) {
-      var match = t.getAttribute("data-tab") === name;
+      const match = t.getAttribute("data-tab") === name;
       t.classList.toggle("is-active", match);
       if (match) {
         t.setAttribute("aria-selected", "true");
@@ -34,7 +34,7 @@
     });
   });
 
-  var saved = null;
+  let saved = null;
   try {
     saved = localStorage.getItem(STORAGE_KEY);
   } catch (e) {}

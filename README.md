@@ -103,7 +103,7 @@ Fetch emails from a Gmail inbox via IMAP, cache them in a local SQLite database,
 
 ## Testing
 
-The project includes 601 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
+The project includes 608 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
 
 ```bash
 
@@ -120,7 +120,7 @@ make test-cov   # For Mac/Linux
 | File                   | Tests | Coverage                                                                                       |
 | ---------------------- | ----- | ---------------------------------------------------------------------------------------------- |
 | `test_cache.py`        | 80    | DB ops, hashing, scanning, search, threads                                                     |
-| `test_web.py`          | 153   | FastAPI endpoints, SSE, Tailscale, auth middleware, update banner/panel, rate-limit cooldown   |
+| `test_web.py`          | 160   | FastAPI endpoints, SSE, Tailscale, auth middleware, update banner/panel, rate-limit cooldown   |
 | `test_updater.py`      | 84    | Version parsing/checking, GitHub fetch cache + rate-limit, Docker self-update, swap-helper rollback |
 | `test_email_reader.py` | 72    | Parsing, body cleaning, thread extraction, keywords                                            |
 | `test_idle_monitor.py` | 63    | IDLE loop, ConnectionLost, run_initial_fetch                                                   |

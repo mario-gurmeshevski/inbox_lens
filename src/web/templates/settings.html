@@ -170,64 +170,45 @@
           </p>
         </div>
         <div class="settings-toggle-form">
-          <div class="theme-select-wrap">
-            <select id="theme-select" class="theme-select" aria-label="Color theme">
-              <option value="system">System</option>
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
-            </select>
-            <i data-lucide="chevron-down" class="theme-select-chevron icon"></i>
-          </div>
+          <form hx-post="/settings/theme" hx-trigger="change">
+            <div class="theme-select-wrap">
+              <select id="theme-select"
+                      name="theme"
+                      class="theme-select"
+                      aria-label="Color theme">
+                <option value="system" {% if theme == "system" %}selected{% endif %}>System</option>
+                <option value="light" {% if theme == "light" %}selected{% endif %}>Light</option>
+                <option value="dark" {% if theme == "dark" %}selected{% endif %}>Dark</option>
+              </select>
+              <i data-lucide="chevron-down" class="theme-select-chevron icon"></i>
+            </div>
+          </form>
         </div>
       </div>
     </div>
-    <div class="detail-card is-spaced">
+    <div class="detail-card">
       <div class="settings-row">
         <div class="settings-info">
           <div class="settings-label">
-            <i data-lucide="sliders-horizontal" class="icon"></i>
-            Display
+            <i data-lucide="list" class="icon"></i>
+            Number of emails
           </div>
-          <p class="settings-desc">
-            Control how dates, times, and senders are shown across the dashboard and
-            email list.
-          </p>
+          <p class="settings-desc">How many emails to show per page in the email list. Saves automatically.</p>
         </div>
       </div>
-      {% if preferences_msg %}
-        <div class="status-box status-done is-spaced">
-          <i data-lucide="check-circle" class="icon-md"></i>
-          <span>{{ preferences_msg }}</span>
-        </div>
-      {% endif %}
       <div class="settings-network-info">
-        <form method="post" action="/settings/preferences" class="setup-form">
+        <form hx-post="/settings/page-size" hx-trigger="change" class="setup-form">
           <div class="form-group">
-            <label for="date-format">Date & Time Format</label>
+            <label for="page-size">Emails per page</label>
             <div class="theme-select-wrap">
-              <select id="date-format" name="date_format" class="theme-select">
-                {% for key, sample in date_format_options %}
-                  <option value="{{ key }}" {% if date_format == key %}selected{% endif %}>{{ sample }}</option>
+              <select id="page-size" name="page_size" class="theme-select">
+                {% for size in page_size_options %}
+                  <option value="{{ size }}" {% if page_size == size %}selected{% endif %}>{{ size }}</option>
                 {% endfor %}
               </select>
               <i data-lucide="chevron-down" class="theme-select-chevron icon"></i>
             </div>
           </div>
-          <div class="form-group">
-            <label for="sender-display">Show Sender As</label>
-            <div class="theme-select-wrap">
-              <select id="sender-display" name="sender_display" class="theme-select">
-                <option value="both" {% if sender_display == 'both' %}selected{% endif %}>Name above email</option>
-                <option value="name" {% if sender_display == 'name' %}selected{% endif %}>Name only</option>
-                <option value="email" {% if sender_display == 'email' %}selected{% endif %}>Email only</option>
-              </select>
-              <i data-lucide="chevron-down" class="theme-select-chevron icon"></i>
-            </div>
-          </div>
-          <button type="submit" class="btn">
-            <i data-lucide="save" class="icon"></i>
-            Save Preferences
-          </button>
         </form>
       </div>
     </div>
@@ -238,17 +219,11 @@
             <i data-lucide="clock" class="icon"></i>
             Timezone
           </div>
-          <p class="settings-desc">Email timestamps are displayed in this timezone.</p>
+          <p class="settings-desc">Email timestamps are displayed in this timezone. Saves automatically.</p>
         </div>
       </div>
-      {% if timezone_msg %}
-        <div class="status-box status-done is-spaced">
-          <i data-lucide="check-circle" class="icon-md"></i>
-          <span>{{ timezone_msg }}</span>
-        </div>
-      {% endif %}
       <div class="settings-network-info">
-        <form method="post" action="/settings/timezone" class="setup-form">
+        <form hx-post="/settings/timezone" class="setup-form">
           <div class="form-group">
             <label for="timezone-btn">Display Timezone</label>
             {% set ns = namespace(label="UTC") %}
@@ -301,10 +276,48 @@
               </div>
             </div>
           </div>
-          <button type="submit" class="btn">
-            <i data-lucide="save" class="icon"></i>
-            Save Timezone
-          </button>
+        </form>
+      </div>
+    </div>
+    <div class="detail-card is-spaced">
+      <div class="settings-row">
+        <div class="settings-info">
+          <div class="settings-label">
+            <i data-lucide="sliders-horizontal" class="icon"></i>
+            Display
+          </div>
+          <p class="settings-desc">
+            Control how dates, times, and senders are shown across the dashboard and
+            email list. Saves automatically.
+          </p>
+        </div>
+      </div>
+      <div class="settings-network-info">
+        <form hx-post="/settings/preferences"
+              hx-trigger="change"
+              class="setup-form">
+          <div class="form-group">
+            <label for="date-format">Date & Time Format</label>
+            <div class="theme-select-wrap">
+              <select id="date-format" name="date_format" class="theme-select">
+                {% for key, sample in date_format_options %}
+                  <option value="{{ key }}" {% if date_format == key %}selected{% endif %}>{{ sample }}</option>
+                {% endfor %}
+              </select>
+              <i data-lucide="chevron-down" class="theme-select-chevron icon"></i>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="sender-display">Show Sender As</label>
+            <div class="theme-select-wrap">
+              <select id="sender-display" name="sender_display" class="theme-select">
+                <option value="both" {% if sender_display == 'both' %}selected{% endif %}>Name above email</option>
+                <option value="name" {% if sender_display == 'name' %}selected{% endif %}>Name only</option>
+                <option value="email" {% if sender_display == 'email' %}selected{% endif %}>Email only</option>
+              </select>
+              <i data-lucide="chevron-down" class="theme-select-chevron icon"></i>
+            </div>
+          </div>
         </form>
       </div>
     </div>

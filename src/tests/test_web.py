@@ -1370,7 +1370,11 @@ class TestUpdateEndpoints:
             patch.object(web, "DB_PATH", self.db_path),
             patch.object(web.updater, "get_current_version", lambda: "1.2.0"),
             patch.object(web.updater, "fetch_latest_version", lambda force=False: "v1.3.0"),
-            patch.object(web.cache, "get_setting", lambda key, *a, **k: "1" if key == web.updater.LAST_UPDATE_ROLLED_BACK_KEY else None),
+            patch.object(
+                web.cache,
+                "get_setting",
+                lambda key, *a, **k: "1" if key == web.updater.LAST_UPDATE_ROLLED_BACK_KEY else None,
+            ),
         ):
             info = web._update_info(self.db_path)
         assert info["update_rolled_back"] is True
@@ -1483,7 +1487,8 @@ class TestUpdateEndpoints:
                 data={"timezone": "Asia/Tokyo"},
                 follow_redirects=False,
             )
-        assert resp.status_code == 200
+        assert resp.status_code == 204
+        assert resp.headers.get("X-Toast") == "Updated"
         assert cache.get_setting("timezone", self.db_path) == "Asia/Tokyo"
 
     def test_settings_timezone_rejects_invalid(self):
@@ -1500,7 +1505,7 @@ class TestUpdateEndpoints:
                 data={"timezone": "Fake/Invalid_Zone"},
                 follow_redirects=False,
             )
-        assert resp.status_code == 200
+        assert resp.status_code == 204
         # Invalid input falls back to the detected device timezone.
         assert cache.get_setting("timezone", self.db_path) == "Asia/Tokyo"
 
@@ -1546,7 +1551,8 @@ class TestUpdateEndpoints:
                 data={"date_format": "iso", "sender_display": "name"},
                 follow_redirects=False,
             )
-        assert resp.status_code == 200
+        assert resp.status_code == 204
+        assert resp.headers.get("X-Toast") == "Updated"
         assert cache.get_setting("date_format", self.db_path) == "iso"
         assert cache.get_setting("sender_display", self.db_path) == "name"
 
@@ -1563,7 +1569,7 @@ class TestUpdateEndpoints:
                 data={"date_format": "nonsense", "sender_display": "also-bad"},
                 follow_redirects=False,
             )
-        assert resp.status_code == 200
+        assert resp.status_code == 204
         # Invalid inputs fall back to the defaults.
         assert cache.get_setting("date_format", self.db_path) == "default"
         assert cache.get_setting("sender_display", self.db_path) == "both"
@@ -1584,6 +1590,119 @@ class TestUpdateEndpoints:
         assert b'value="iso" selected' in resp.content
         assert b'name="sender_display"' in resp.content
         assert b'value="email" selected' in resp.content
+
+    def test_settings_theme_save_valid(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+        ):
+            client = self._make_client()
+            resp = client.post(
+                "/settings/theme",
+                data={"theme": "dark"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 204
+        assert resp.headers.get("X-Toast") == "Updated"
+        assert cache.get_setting("theme", self.db_path) == "dark"
+
+    def test_settings_theme_rejects_invalid(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+        ):
+            client = self._make_client()
+            resp = client.post(
+                "/settings/theme",
+                data={"theme": "neon"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 204
+        # Invalid input falls back to the default.
+        assert cache.get_setting("theme", self.db_path) == "system"
+
+    def test_settings_page_theme_select_carries_saved_value(self):
+        cache.save_setting("theme", "dark", self.db_path)
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+        ):
+            client = self._make_client()
+            resp = client.get("/settings")
+        assert resp.status_code == 200
+        assert b'name="theme"' in resp.content
+        assert b'value="dark" selected' in resp.content
+
+    def test_settings_page_size_save_valid(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+        ):
+            client = self._make_client()
+            resp = client.post(
+                "/settings/page-size",
+                data={"page_size": "50"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 204
+        assert resp.headers.get("X-Toast") == "Updated"
+        assert cache.get_setting("page_size", self.db_path) == "50"
+
+    def test_settings_page_size_rejects_invalid_out_of_set(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+        ):
+            client = self._make_client()
+            resp = client.post(
+                "/settings/page-size",
+                data={"page_size": "999"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 204
+        # Out-of-set input falls back to the default.
+        assert cache.get_setting("page_size", self.db_path) == str(web._DEFAULT_PAGE_SIZE)
+
+    def test_settings_page_size_rejects_non_numeric(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+        ):
+            client = self._make_client()
+            resp = client.post(
+                "/settings/page-size",
+                data={"page_size": "abc"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 204
+        # Non-numeric input falls back to the default.
+        assert cache.get_setting("page_size", self.db_path) == str(web._DEFAULT_PAGE_SIZE)
+
+    def test_settings_page_size_select_carries_saved_value(self):
+        cache.save_setting("page_size", "100", self.db_path)
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+        ):
+            client = self._make_client()
+            resp = client.get("/settings")
+        assert resp.status_code == 200
+        assert b'name="page_size"' in resp.content
+        assert b'value="100" selected' in resp.content
 
     def test_settings_page_renders_tab_nav(self):
         with (

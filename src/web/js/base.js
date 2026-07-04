@@ -4,26 +4,26 @@ document.body.addEventListener("htmx:afterSwap", function () {
 });
 
 function openAccountModal() {
-  var modal = document.getElementById("account-modal");
+  const modal = document.getElementById("account-modal");
   if (!modal) return;
   modal.removeAttribute("hidden");
   document.body.style.overflow = "hidden";
 }
 
 function closeAccountModal() {
-  var modal = document.getElementById("account-modal");
+  const modal = document.getElementById("account-modal");
   if (!modal) return;
   modal.setAttribute("hidden", "");
   document.body.style.overflow = "";
-  var body = document.getElementById("account-modal-body");
+  const body = document.getElementById("account-modal-body");
   if (body) body.innerHTML = "";
 }
 
 document.addEventListener("keydown", function (e) {
   if (e.key === "Escape") {
-    var confirmModal = document.getElementById("confirm-modal");
+    const confirmModal = document.getElementById("confirm-modal");
     if (confirmModal && !confirmModal.hasAttribute("hidden")) return;
-    var modal = document.getElementById("account-modal");
+    const modal = document.getElementById("account-modal");
     if (modal && !modal.hasAttribute("hidden")) {
       closeAccountModal();
     }
@@ -31,7 +31,7 @@ document.addEventListener("keydown", function (e) {
 });
 
 document.addEventListener("htmx:afterRequest", function (e) {
-  var target = e.detail && e.detail.target;
+  const target = e.detail && e.detail.target;
   if (
     target &&
     target.id === "account-modal-body" &&
@@ -57,12 +57,12 @@ function togglePassword(id) {
 
 function copyToClipboard(btn, text) {
   if (!btn) return;
-  var icon = btn.querySelector("i[data-lucide]");
-  var label = Array.prototype.find.call(btn.childNodes, function (n) {
+  const icon = btn.querySelector("i[data-lucide]");
+  const label = Array.prototype.find.call(btn.childNodes, function (n) {
     return n.nodeType === 3 && n.textContent.trim().length > 0;
   });
-  var originalIcon = icon ? icon.getAttribute("data-lucide") : "";
-  var originalText = label ? label.textContent : "";
+  const originalIcon = icon ? icon.getAttribute("data-lucide") : "";
+  const originalText = label ? label.textContent : "";
 
   function revert() {
     if (icon) {
@@ -86,19 +86,19 @@ function copyToClipboard(btn, text) {
     setTimeout(revert, 2000);
   }
 
-  var promise;
+  let promise;
   if (navigator.clipboard && window.isSecureContext) {
     promise = navigator.clipboard.writeText(text);
   } else {
     try {
-      var ta = document.createElement("textarea");
+      const ta = document.createElement("textarea");
       ta.value = text;
       ta.setAttribute("readonly", "");
       ta.style.position = "absolute";
       ta.style.left = "-9999px";
       document.body.appendChild(ta);
       ta.select();
-      var ok = document.execCommand("copy");
+      const ok = document.execCommand("copy");
       document.body.removeChild(ta);
       promise = ok
         ? Promise.resolve()
@@ -156,13 +156,13 @@ function kwCancelEdit(input) {
 }
 
 (function () {
-  var fileInput = document.getElementById("kw-import-file");
+  const fileInput = document.getElementById("kw-import-file");
   if (!fileInput) return;
-  var form = fileInput.closest(".import-form");
-  var label = fileInput.parentElement.querySelector(".file-name");
+  const form = fileInput.closest(".import-form");
+  const label = fileInput.parentElement.querySelector(".file-name");
 
   fileInput.addEventListener("change", function () {
-    var name =
+    const name =
       fileInput.files && fileInput.files[0]
         ? fileInput.files[0].name
         : "No file chosen";
@@ -187,11 +187,11 @@ function kwCancelEdit(input) {
 })();
 
 (function () {
-  var sseRetries = 0;
-  var maxRetries = 10;
+  let sseRetries = 0;
+  const maxRetries = 10;
 
   function reconnectSSE() {
-    var container = document.querySelector("[sse-connect]");
+    let container = document.querySelector("[sse-connect]");
     if (!container) container = document.querySelector(".container");
     if (container) {
       sseRetries++;
@@ -204,7 +204,7 @@ function kwCancelEdit(input) {
 
   document.body.addEventListener("htmx:sseError", function (e) {
     if (sseRetries < maxRetries) {
-      var delay = Math.min(5000 * (sseRetries + 1), 30000);
+      const delay = Math.min(5000 * (sseRetries + 1), 30000);
       setTimeout(reconnectSSE, delay);
     }
   });
@@ -215,23 +215,23 @@ function kwCancelEdit(input) {
 })();
 
 (function () {
-  var modal = document.getElementById("confirm-modal");
+  const modal = document.getElementById("confirm-modal");
   if (!modal) return;
-  var titleEl = document.getElementById("confirm-title");
-  var msgEl = document.getElementById("confirm-message");
-  var iconEl = document.getElementById("confirm-icon");
-  var okBtn = document.getElementById("confirm-ok-btn");
-  var lastFocus = null;
-  var current = null;
+  const titleEl = document.getElementById("confirm-title");
+  const msgEl = document.getElementById("confirm-message");
+  const iconEl = document.getElementById("confirm-icon");
+  const okBtn = document.getElementById("confirm-ok-btn");
+  let lastFocus = null;
+  let current = null;
 
-  var ICONS = {
+  const ICONS = {
     danger: "alert-triangle",
     warning: "alert-triangle",
   };
 
   function open(opts) {
     opts = opts || {};
-    var tone = opts.tone || "danger";
+    const tone = opts.tone || "danger";
     titleEl.textContent = opts.title || "Are you sure?";
     msgEl.textContent = opts.message || "";
     iconEl.className =
@@ -253,7 +253,7 @@ function kwCancelEdit(input) {
   function close(result) {
     modal.setAttribute("hidden", "");
     document.body.style.overflow = "";
-    var resolve = current;
+    const resolve = current;
     current = null;
     if (resolve) resolve(result);
     if (lastFocus && typeof lastFocus.focus === "function") {
@@ -288,7 +288,7 @@ function kwCancelEdit(input) {
   });
 
   document.addEventListener("submit", function (e) {
-    var form = e.target;
+    const form = e.target;
     if (!(form instanceof HTMLFormElement) || !form.hasAttribute("data-confirm")) {
       return;
     }
@@ -309,10 +309,10 @@ function kwCancelEdit(input) {
   }, true);
 
   document.body.addEventListener("htmx:confirm", function (e) {
-    var question = e.detail && e.detail.question;
+    const question = e.detail && e.detail.question;
     if (!question) return;
     e.preventDefault();
-    var elt = e.detail.elt;
+    const elt = e.detail.elt;
     window
       .confirmDialog({
         title: (elt && elt.getAttribute("data-confirm-title")) || "Are you sure?",
@@ -329,41 +329,68 @@ function kwCancelEdit(input) {
 })();
 
 (function () {
-  var KEY = "inbox-lens-theme";
-  var mq = window.matchMedia
+  const mq = window.matchMedia
     ? window.matchMedia("(prefers-color-scheme: dark)")
     : null;
 
+  const bc = (typeof BroadcastChannel !== "undefined")
+    ? new BroadcastChannel("inbox-lens-theme")
+    : null;
+
   function getPref() {
-    try {
-      var v = localStorage.getItem(KEY);
-      if (v === "light" || v === "dark" || v === "system") return v;
-    } catch (e) {}
+    const v = document.documentElement.getAttribute("data-theme-pref");
+    if (v === "light" || v === "dark" || v === "system") return v;
     return "system";
   }
 
+  function setPref(p, broadcast) {
+    document.documentElement.setAttribute("data-theme-pref", p);
+    if (broadcast && bc) bc.postMessage(p);
+  }
+
   function apply() {
-    var p = getPref();
-    var resolved = (p === "light" || p === "dark") ? p : (mq && mq.matches ? "dark" : "light");
+    const p = getPref();
+    const resolved = (p === "light" || p === "dark") ? p : (mq && mq.matches ? "dark" : "light");
     document.documentElement.setAttribute("data-theme", resolved);
-    var select = document.getElementById("theme-select");
+    const select = document.getElementById("theme-select");
     if (select && select.value !== p) select.value = p;
+  }
+
+  if (bc) {
+    bc.onmessage = function (e) {
+      const p = e.data;
+      if (p === "light" || p === "dark" || p === "system") {
+        setPref(p, false); // local-only; don't re-broadcast
+        apply();
+      }
+    };
   }
 
   function init() {
     apply();
-    var select = document.getElementById("theme-select");
+    const select = document.getElementById("theme-select");
     if (select) {
       select.value = getPref();
       select.addEventListener("change", function () {
-        try { localStorage.setItem(KEY, select.value); } catch (e) {}
+        const prev = getPref();
+        setPref(select.value, true);
         apply();
+        const form = select.form;
+        if (!form) return;
+        function onAfter(e) {
+          const detail = e.detail || {};
+          const path = detail.requestConfig && detail.requestConfig.path;
+          if (path !== "/settings/theme") return;
+          form.removeEventListener("htmx:afterRequest", onAfter);
+          if (detail.failed) {
+            setPref(prev, true);
+            apply();
+          }
+        }
+        form.addEventListener("htmx:afterRequest", onAfter);
       });
     }
     if (mq) mq.addEventListener("change", function () { if (getPref() === "system") apply(); });
-    window.addEventListener("storage", function (e) {
-      if (e.key === KEY) apply();
-    });
   }
 
   if (document.readyState === "loading") {

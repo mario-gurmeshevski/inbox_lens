@@ -1,24 +1,24 @@
 (function () {
-  var combobox = document.getElementById("timezone-combobox");
+  const combobox = document.getElementById("timezone-combobox");
   if (!combobox) return;
 
-  var btn = document.getElementById("timezone-btn");
-  var panel = document.getElementById("timezone-panel");
-  var search = document.getElementById("timezone-search");
-  var optionsEl = document.getElementById("timezone-options");
-  var hidden = document.getElementById("timezone-hidden");
-  var label = combobox.querySelector(".combobox-label");
-  var groups = Array.prototype.slice.call(optionsEl.querySelectorAll(".group"));
-  var options = Array.prototype.slice.call(optionsEl.querySelectorAll(".option"));
-  var activeIndex = -1;
+  const btn = document.getElementById("timezone-btn");
+  const panel = document.getElementById("timezone-panel");
+  const search = document.getElementById("timezone-search");
+  const optionsEl = document.getElementById("timezone-options");
+  const hidden = document.getElementById("timezone-hidden");
+  const label = combobox.querySelector(".combobox-label");
+  const groups = Array.prototype.slice.call(optionsEl.querySelectorAll(".group"));
+  const options = Array.prototype.slice.call(optionsEl.querySelectorAll(".option"));
+  let activeIndex = -1;
 
-  var BOTTOM_GAP = 16;
-  var MAX_CAP = 320;
+  const BOTTOM_GAP = 16;
+  const MAX_CAP = 320;
 
   function constrainPanelHeight() {
-    var top = panel.getBoundingClientRect().top;
-    var available = window.innerHeight - top - BOTTOM_GAP;
-    var effective = Math.min(MAX_CAP, available);
+    const top = panel.getBoundingClientRect().top;
+    const available = window.innerHeight - top - BOTTOM_GAP;
+    const effective = Math.min(MAX_CAP, available);
     panel.style.setProperty("--panel-max-height", effective + "px");
   }
 
@@ -32,7 +32,7 @@
     btn.setAttribute("aria-expanded", "true");
     setTimeout(function () {
       search.focus();
-      var sel = optionsEl.querySelector('.option[aria-selected="true"]');
+      const sel = optionsEl.querySelector('.option[aria-selected="true"]');
       if (sel) sel.scrollIntoView({ block: "center" });
     }, 0);
   }
@@ -83,21 +83,21 @@
   }
 
   function setActive(idx) {
-    var visible = visibleOptions();
+    const visible = visibleOptions();
     if (!visible.length) return;
     clearActive();
     activeIndex = (idx + visible.length) % visible.length;
-    var el = visible[activeIndex];
+    const el = visible[activeIndex];
     el.classList.add("is-active");
     el.scrollIntoView({ block: "nearest" });
   }
 
   function filter(q) {
     q = q.trim().toLowerCase();
-    var count = 0;
+    let count = 0;
     options.forEach(function (opt) {
-      var hay = opt.getAttribute("data-label") || "";
-      var match = !q || hay.indexOf(q) !== -1;
+      const hay = opt.getAttribute("data-label") || "";
+      const match = !q || hay.indexOf(q) !== -1;
       if (match) {
         opt.removeAttribute("hidden");
         count++;
@@ -106,17 +106,17 @@
       }
     });
     groups.forEach(function (g) {
-      var any = g.querySelectorAll('.option:not([hidden])').length > 0;
+      const any = g.querySelectorAll('.option:not([hidden])').length > 0;
       if (any) g.removeAttribute("hidden");
       else g.setAttribute("hidden", "");
     });
-    var existing = optionsEl.querySelector(".empty");
+    const existing = optionsEl.querySelector(".empty");
     if (count === 0) {
-      var msg = 'No timezones match "' + q + '"';
+      const msg = 'No timezones match "' + q + '"';
       if (existing) {
         existing.textContent = msg;
       } else {
-        var empty = document.createElement("div");
+        const empty = document.createElement("div");
         empty.className = "empty";
         empty.textContent = msg;
         optionsEl.appendChild(empty);
@@ -140,7 +140,7 @@
       setActive(activeIndex - 1);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      var visible = visibleOptions();
+      const visible = visibleOptions();
       if (activeIndex >= 0 && activeIndex < visible.length) {
         selectOption(visible[activeIndex]);
       } else if (visible.length) {
@@ -158,10 +158,20 @@
       else o.removeAttribute("aria-selected");
     });
     close();
+    const body = new FormData();
+    body.append("timezone", hidden.value);
+    fetch("/settings/timezone", { method: "POST", body: body })
+      .then(function (r) {
+        const msg = r.headers.get("X-Toast") || "Updated";
+        if (window.showToast) window.showToast(msg, "success");
+      })
+      .catch(function () {
+        if (window.showToast) window.showToast("Could not save timezone", "error");
+      });
   }
 
   optionsEl.addEventListener("click", function (e) {
-    var opt = e.target.closest(".option");
+    const opt = e.target.closest(".option");
     if (opt) selectOption(opt);
   });
 })();

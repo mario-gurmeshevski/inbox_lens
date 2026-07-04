@@ -1250,7 +1250,7 @@ class TestPerformUpdateSync:
 
     def test_swap_helper_create_surfaces_daemon_message(self, monkeypatch, caplog):
         import logging
-        
+
         monkeypatch.setattr(updater, "is_docker_managed", lambda: True)
         monkeypatch.setattr(updater, "_current_container_id", lambda: "abc")
         monkeypatch.setattr(updater, "_docker_request", self._helper_fail_request_factory())

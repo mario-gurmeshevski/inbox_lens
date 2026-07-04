@@ -89,6 +89,7 @@ templates.env.filters["format_date"] = lambda d: _format_date(d)
 templates.env.filters["format_sender"] = lambda raw: _format_sender(raw)
 templates.env.filters["priority_bucket"] = lambda lvl: _priority_bucket(lvl) or "none"
 templates.env.filters["markdown"] = lambda t: _render_markdown(t)
+templates.env.globals["current_theme"] = lambda: _current_theme()
 app.mount("/static/js", StaticFiles(directory=str(_WEB_DIR / "js")), name="js")
 app.mount("/static", StaticFiles(directory=str(_WEB_DIR / "static")), name="static")
 
@@ -248,18 +249,33 @@ def _detect_local_timezone() -> str:
 
 
 _LOCAL_TIMEZONE = _detect_local_timezone()
-
-
 _DATE_FORMATS = {
     "default": "%a, %d %b %Y %H:%M",
     "iso": "%Y-%m-%d %H:%M",
     "us_12hr": "%b %d, %Y %I:%M %p",
 }
-
 _SAMPLE_DT = datetime(2026, 6, 29, 14, 30)
 _DATE_FORMAT_OPTIONS = [(key, _SAMPLE_DT.strftime(pattern)) for key, pattern in _DATE_FORMATS.items()]
-
 _SENDER_MODES = {"name", "email", "both"}
+_PAGE_SIZE_VALUES = (10, 25, 50, 100)
+_DEFAULT_PAGE_SIZE = 25
+
+
+def _get_page_size(db_path: str) -> int:
+    raw = cache.get_setting("page_size", db_path)
+    try:
+        val = int(raw) if raw else _DEFAULT_PAGE_SIZE
+    except (TypeError, ValueError):
+        val = _DEFAULT_PAGE_SIZE
+    return val if val in _PAGE_SIZE_VALUES else _DEFAULT_PAGE_SIZE
+
+
+_THEMES = {"system", "light", "dark"}
+
+
+def _current_theme() -> str:
+    theme = cache.get_setting("theme", DB_PATH)
+    return theme if theme in _THEMES else "system"
 
 
 def _format_date(date_str):
@@ -715,8 +731,6 @@ def _settings_context(
     password_ok: bool = False,
     api_key_msg: str | None = None,
     new_api_key: str | None = None,
-    timezone_msg: str | None = None,
-    preferences_msg: str | None = None,
 ) -> dict:
     network_access = cache.get_setting("network_access", db_path) or "true"
     network_on = network_access == "true"
@@ -727,6 +741,8 @@ def _settings_context(
     sender_display = cache.get_setting("sender_display", db_path) or "both"
     if sender_display not in _SENDER_MODES:
         sender_display = "both"
+    page_size = _get_page_size(db_path)
+    theme = _current_theme()
     local_ips = _get_local_ips() if network_on else []
     host_ip = os.getenv("HOST_IP", "")
     tailscale_ip = _get_tailscale_ip()
@@ -754,11 +770,12 @@ def _settings_context(
         "update": _update_info(db_path),
         "timezone": timezone_setting,
         "timezone_groups": _TIMEZONE_GROUPS,
-        "timezone_msg": timezone_msg,
         "date_format": date_format,
         "date_format_options": _DATE_FORMAT_OPTIONS,
         "sender_display": sender_display,
-        "preferences_msg": preferences_msg,
+        "page_size": page_size,
+        "page_size_options": _PAGE_SIZE_VALUES,
+        "theme": theme,
     }
 
 
@@ -827,9 +844,7 @@ async def settings_timezone(request: Request):
     if tz not in valid_tzs:
         tz = _LOCAL_TIMEZONE
     cache.save_setting("timezone", tz, DB_PATH)
-    return templates.TemplateResponse(
-        request, "settings.html", _settings_context(DB_PATH, timezone_msg="Timezone updated.")
-    )
+    return Response(status_code=204, headers={"X-Toast": "Updated"})
 
 
 @app.post("/settings/preferences", response_class=HTMLResponse)
@@ -843,9 +858,31 @@ async def settings_preferences(request: Request):
         sender_display = "both"
     cache.save_setting("date_format", date_format, DB_PATH)
     cache.save_setting("sender_display", sender_display, DB_PATH)
-    return templates.TemplateResponse(
-        request, "settings.html", _settings_context(DB_PATH, preferences_msg="Preferences updated.")
-    )
+    return Response(status_code=204, headers={"X-Toast": "Updated"})
+
+
+@app.post("/settings/page-size", response_class=HTMLResponse)
+async def settings_page_size(request: Request):
+    form = await request.form()
+    raw = str(form.get("page_size", str(_DEFAULT_PAGE_SIZE))).strip()
+    try:
+        val = int(raw)
+    except ValueError:
+        val = _DEFAULT_PAGE_SIZE
+    if val not in _PAGE_SIZE_VALUES:
+        val = _DEFAULT_PAGE_SIZE
+    cache.save_setting("page_size", str(val), DB_PATH)
+    return Response(status_code=204, headers={"X-Toast": "Updated"})
+
+
+@app.post("/settings/theme", response_class=HTMLResponse)
+async def settings_theme(request: Request):
+    form = await request.form()
+    theme = str(form.get("theme", "system")).strip()
+    if theme not in _THEMES:
+        theme = "system"
+    cache.save_setting("theme", theme, DB_PATH)
+    return Response(status_code=204, headers={"X-Toast": "Updated"})
 
 
 def _level_sort_key(level):
@@ -1101,7 +1138,9 @@ def _dashboard_context(db_path: str) -> dict:
     }
 
 
-def _email_list_context(db_path, status, priority, search, page, page_size=25) -> dict:
+def _email_list_context(db_path, status, priority, search, page, page_size=None) -> dict:
+    if page_size is None:
+        page_size = _get_page_size(db_path)
     emails, total_rows, total_pages = cache.search_emails(
         db_path,
         status=status or None,

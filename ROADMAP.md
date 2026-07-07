@@ -25,8 +25,4 @@ Expand beyond Gmail to support other major email providers out of the box.
 
 Manage emails directly from the dashboard without leaving the UI.
 
-- Mark as read / unread
-- Star / flag important emails
-- Archive or move to folders
-- Reply or forward via IMAP/SMTP
-- Bulk actions on filtered email lists
+- Reply or forward via IMAP/SMTP (planned — requires SMTP credentials and a compose UI)

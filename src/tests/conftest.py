@@ -1,6 +1,8 @@
 import pytest
+from unittest.mock import patch
 
 from src.scripts import cache, email_reader
+from src.tests._helpers import save_fetched_batch  # noqa: F401
 
 
 @pytest.fixture
@@ -16,6 +18,20 @@ def cleanup_db_connections():
     from src.scripts.cache.db import close_all_connections
 
     close_all_connections()
+    from src.scripts.email_reader import imap as _imap
+
+    _imap.reset_folder_caches()
+
+
+@pytest.fixture(autouse=True)
+def _reset_request_settings():
+    from src.scripts import web
+
+    token = web._request_settings.set(None)
+    try:
+        yield
+    finally:
+        web._request_settings.reset(token)
 
 
 @pytest.fixture
@@ -110,3 +126,27 @@ def sample_headers_batch():
         }
         for i in range(3)
     ]
+
+
+@pytest.fixture
+def save_batch():
+    return save_fetched_batch
+
+
+@pytest.fixture
+def web_db(tmp_path, monkeypatch):
+    from src.scripts import web
+
+    db_path = str(tmp_path / "web_test.db")
+    cache.init_db(db_path)
+    monkeypatch.setattr(web, "DB_PATH", db_path)
+    return db_path
+
+
+@pytest.fixture
+def web_client(web_db):
+    from fastapi.testclient import TestClient
+    from src.scripts import web
+
+    with patch.object(web, "DB_PATH", web_db):
+        yield TestClient(web.app)

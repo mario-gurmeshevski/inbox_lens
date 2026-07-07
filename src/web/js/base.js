@@ -3,18 +3,26 @@ document.body.addEventListener("htmx:afterSwap", function () {
   lucide.createIcons();
 });
 
-function openAccountModal() {
-  const modal = document.getElementById("account-modal");
+function openModal(id) {
+  const modal = document.getElementById(id);
   if (!modal) return;
   modal.removeAttribute("hidden");
   document.body.style.overflow = "hidden";
 }
 
-function closeAccountModal() {
-  const modal = document.getElementById("account-modal");
+function closeModal(id) {
+  const modal = document.getElementById(id);
   if (!modal) return;
   modal.setAttribute("hidden", "");
   document.body.style.overflow = "";
+}
+
+function openAccountModal() {
+  openModal("account-modal");
+}
+
+function closeAccountModal() {
+  closeModal("account-modal");
   const body = document.getElementById("account-modal-body");
   if (body) body.innerHTML = "";
 }
@@ -26,6 +34,30 @@ document.addEventListener("keydown", function (e) {
     const modal = document.getElementById("account-modal");
     if (modal && !modal.hasAttribute("hidden")) {
       closeAccountModal();
+    }
+  }
+});
+
+document.addEventListener("click", function (e) {
+  const closer = e.target.closest("[data-modal-close]");
+  if (closer) {
+    const id = closer.getAttribute("data-modal-close");
+    if (!id) return;
+    if (id === "account-modal") {
+      closeAccountModal();
+    } else if (typeof closeModal === "function") {
+      closeModal(id);
+    }
+    return;
+  }
+  const opener = e.target.closest("[data-modal-open]");
+  if (opener) {
+    const id = opener.getAttribute("data-modal-open");
+    if (!id) return;
+    if (id === "account-modal") {
+      openAccountModal();
+    } else if (typeof openModal === "function") {
+      openModal(id);
     }
   }
 });

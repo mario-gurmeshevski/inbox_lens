@@ -30,6 +30,11 @@ git reset --hard
   make lint # For Mac/Linux
   ./commands.ps1 lint # For Windows
   ```
+- Find unused code (imports/functions/classes) with Vulture. `make lint` also runs Vulture, so dead code will fail CI:
+  ```bash
+  make unused # For Mac/Linux
+  ./commands.ps1 unused # For Windows
+  ```
 - Run tests:
   ```bash
     make test # For Mac/Linux

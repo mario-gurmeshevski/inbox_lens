@@ -103,7 +103,7 @@ Fetch emails from a Gmail inbox via IMAP, cache them in a local SQLite database,
 
 ## Testing
 
-The project includes 608 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
+The project includes 696 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
 
 ```bash
 
@@ -119,13 +119,13 @@ make test-cov   # For Mac/Linux
 
 | File                   | Tests | Coverage                                                                                       |
 | ---------------------- | ----- | ---------------------------------------------------------------------------------------------- |
-| `test_cache.py`        | 80    | DB ops, hashing, scanning, search, threads                                                     |
-| `test_web.py`          | 160   | FastAPI endpoints, SSE, Tailscale, auth middleware, update banner/panel, rate-limit cooldown   |
+| `test_cache.py`        | 92    | DB ops, hashing, scanning, search, threads                                                     |
+| `test_web.py`          | 177   | FastAPI endpoints, SSE, Tailscale, auth middleware, update banner/panel, rate-limit cooldown   |
 | `test_updater.py`      | 84    | Version parsing/checking, GitHub fetch cache + rate-limit, Docker self-update, swap-helper rollback |
 | `test_email_reader.py` | 72    | Parsing, body cleaning, thread extraction, keywords                                            |
 | `test_idle_monitor.py` | 63    | IDLE loop, ConnectionLost, run_initial_fetch                                                   |
 | `test_auth.py`         | 42    | Password hashing, API keys, sessions, rate limiting                                            |
-| `test_imap.py`         | 58    | IMAP helpers, connection, fetch, delete                                                        |
+| `test_imap.py`         | 117   | IMAP helpers, connection, fetch, delete, archive/move, flag sync, bulk ops                     |
 | `test_crypto.py`       | 22    | Encryption, settings, credentials                                                              |
 | `test_event_bus.py`    | 12    | Pub/sub dispatch                                                                               |
 | `test_utils.py`        | 8     | Keyword parsing, priority buckets                                                              |
@@ -237,9 +237,13 @@ Opens at `http://localhost:8000`. Set `WEB_HOST` and `WEB_PORT` in `.env` to cus
 
 - **Live auto-refresh** — Server-Sent Events (SSE) updates the dashboard and email list in real-time as new emails arrive via IMAP IDLE — no page reload needed
 
-- **Email list** — filterable by status, priority, and search text; paginated; responsive card layout on mobile
+- **Email list** — filterable by status, priority, and search text; paginated; responsive card layout on mobile; bulk-select rows to mark read/unread, star/unstar, archive, delete, or move
 
-- **Email detail** — full body view with rendered Markdown (bold, lists, links, code), colored keyword tags, delete button
+- **Email detail** — full body view with rendered Markdown (bold, lists, links, code), colored keyword tags
+
+- **Email actions** — manage mail without leaving the dashboard: mark read/unread and star/unstar (toggle inline), archive, move to folder, and delete. Local state updates instantly and the IMAP mutation syncs in the background; if a remote op fails the affected email reappears on the next refresh
+
+- **Move to folder** — a folder picker populated from your IMAP account's mailbox list; folder names are validated before being sent to the IMAP server
 
 - **Keyword editor** — manage priority keywords from the dashboard: inline add/edit/remove words, add/remove priority categories, import/export JSON config, and re-scan cached emails to apply changes retroactively
 
@@ -526,6 +530,8 @@ All emails are stored in a SQLite database (`emails.db` by default) with the fol
 | `make test`             | Run the test suite                                           |
 | `make lint`             | Lint Python (Ruff) + templates (djlint)                      |
 | `make format`           | Format Python (Ruff) + templates (djlint)                    |
+| `make unused`           | Find unused code: imports/functions/classes (Vulture)        |
+| `make pre-commit`       | Format, lint (incl. Vulture), and test                       |
 | `make clean`            | Remove build artifacts                                       |
 | `make reset`            | Delete DB, WAL files, and secret key                         |
 | `make tailscale-up`     | Show Tailscale logs (login URL on first run)                 |
@@ -550,6 +556,8 @@ All emails are stored in a SQLite database (`emails.db` by default) with the fol
 | `./commands.ps1 test`             | Run the test suite                                           |
 | `./commands.ps1 lint`             | Lint Python (Ruff) + templates (djlint)                      |
 | `./commands.ps1 format`           | Format Python (Ruff) + templates (djlint)                    |
+| `./commands.ps1 unused`           | Find unused code: imports/functions/classes (Vulture)        |
+| `./commands.ps1 pre-commit`       | Format, lint (incl. Vulture), and test                       |
 | `./commands.ps1 clean`            | Remove build artifacts                                       |
 | `./commands.ps1 reset`            | Delete DB, WAL files, and secret key                         |
 | `./commands.ps1 tailscale-up`     | Show Tailscale logs (login URL on first run)                 |

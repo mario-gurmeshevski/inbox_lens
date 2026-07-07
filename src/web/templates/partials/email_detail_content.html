@@ -41,18 +41,9 @@
       Tags
     </div>
     <div class="tags-section">
+      {% from "partials/priority_badge.html" import priority_badge_class %}
       {% for cat, words in matches.items() %}
-        {% if cat | int >= 9 %}
-          {% set
-          badge_class = "badge-critical" %}
-        {% elif cat | int >= 7 %}
-          {% set
-          badge_class = "badge-high" %}
-        {% elif cat | int >= 5 %}
-          {% set badge_class = "badge-medium" %}
-        {% else %}
-          {% set badge_class = "badge-low" %}
-        {% endif %}
+        {% set badge_class = priority_badge_class(cat) %}
         {% for word in words %}
           <span class="badge {{ badge_class }}">L{{ cat }}: {{ word }}</span>
         {% endfor %}
@@ -74,6 +65,41 @@
   </div>
 {% endif %}
 <div class="actions">
+  {# The toggle endpoints return 204 (no content); the button label/icon is
+     refreshed by the sse:refresh handler on #email-detail-content re-swapping
+     this whole partial. No hx-target is needed on a 204. #}
+  <button class="btn btn-sm" hx-post="/emails/{{ email_hash }}/toggle-read">
+    {% if email.is_read %}
+      <i data-lucide="mail" class="icon"></i>
+      Mark unread
+    {% else %}
+      <i data-lucide="mail-open" class="icon"></i>
+      Mark read
+    {% endif %}
+  </button>
+  <button class="btn btn-sm" hx-post="/emails/{{ email_hash }}/toggle-star">
+    {% if email.is_starred %}
+      <i data-lucide="star" class="icon star-on"></i>
+      Unstar
+    {% else %}
+      <i data-lucide="star-off" class="icon"></i>
+      Star
+    {% endif %}
+  </button>
+  <button class="btn btn-sm"
+          hx-post="/emails/{{ email_hash }}/archive"
+          hx-confirm="Archive this email? It will be moved out of your INBOX."
+          data-confirm-title="Archive this email?"
+          data-confirm-tone="warning"
+          data-confirm-label="Archive"
+          hx-target="body">
+    <i data-lucide="archive" class="icon"></i>
+    Archive
+  </button>
+  <button class="btn btn-sm" type="button" data-move-email="{{ email_hash }}">
+    <i data-lucide="folder-input" class="icon"></i>
+    Move
+  </button>
   <button class="btn btn-danger"
           hx-post="/emails/{{ email_hash }}/delete"
           hx-confirm="This will move the email to your trash folder on the server and remove it here."

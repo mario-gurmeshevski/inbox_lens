@@ -1,7 +1,14 @@
 <table>
   <thead>
     <tr>
+      <th class="col-check">
+        <input type="checkbox"
+               class="select-all"
+               data-bulk-select-all
+               aria-label="Select all" />
+      </th>
       <th class="col-priority">Priority</th>
+      <th class="col-star">Star</th>
       <th>Subject</th>
       <th>From</th>
       <th>Date</th>
@@ -17,7 +24,14 @@
           {% set highest.val = k | int %}
         {% endif %}
       {% endfor %}
-      <tr>
+      <tr class="{% if not email.is_read %}is-unread{% endif %}">
+        <td data-label="Select" class="col-check">
+          <input type="checkbox"
+                 class="row-check"
+                 data-bulk-row
+                 value="{{ email.message_id_hash }}"
+                 aria-label="Select email" />
+        </td>
         <td data-label="Priority">
           {% if highest.val >= 9 %}
             <span class="priority-critical">{{ highest.val }}</span>
@@ -31,22 +45,24 @@
             <span class="priority-none">-</span>
           {% endif %}
         </td>
+        <td data-label="Star" class="col-star">
+          <button type="button"
+                  class="star-toggle {{ 'is-starred' if email.is_starred else '' }}"
+                  aria-label="{{ 'Unstar' if email.is_starred else 'Star' }}"
+                  title="{{ 'Unstar' if email.is_starred else 'Star' }}"
+                  hx-post="/emails/{{ email.message_id_hash }}/toggle-star">
+            <i data-lucide="star" class="icon-sm"></i>
+          </button>
+        </td>
         <td data-label="Subject">
           <a class="email-subject-link" href="/emails/{{ email.message_id_hash }}">{{ email.subject or "(no subject)" }}</a>
         </td>
         <td data-label="From">{{ (email.from or "") | format_sender }}</td>
         <td data-label="Date">{{ email.date | format_date }}</td>
         <td data-label="Tags">
+          {% from "partials/priority_badge.html" import priority_badge %}
           {% for cat, words in matches.items() %}
-            {% if cat | int >= 9 %}
-              <span class="badge badge-critical">{{ cat }}: {{ words | length }}</span>
-            {% elif cat | int >= 7 %}
-              <span class="badge badge-high">{{ cat }}: {{ words | length }}</span>
-            {% elif cat | int >= 5 %}
-              <span class="badge badge-medium">{{ cat }}: {{ words | length }}</span>
-            {% else %}
-              <span class="badge badge-low">{{ cat }}: {{ words | length }}</span>
-            {% endif %}
+            {{ priority_badge(cat, words) }}
           {% endfor %}
           {% if not matches %}
             <span class="badge badge-none">none</span>
@@ -56,7 +72,7 @@
     {% endfor %}
     {% if not emails %}
       <tr>
-        <td colspan="5" class="empty-state">No emails found</td>
+        <td colspan="7" class="empty-state">No emails found</td>
       </tr>
     {% endif %}
   </tbody>

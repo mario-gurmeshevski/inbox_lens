@@ -1,4 +1,3 @@
-import functools
 import hashlib
 import logging
 import sqlite3
@@ -11,6 +10,12 @@ from pathlib import Path
 from src.scripts.utils import _parse_keyword_matches
 
 logger = logging.getLogger(__name__)
+
+STATUS_HEADERS_ONLY = "headers_only"
+STATUS_FETCHED = "fetched"
+STATUS_CHECKED = "checked"
+STATUS_FETCHED_NO_BODY = "fetched_no_body"
+HEADER_FILTER_STATUSES = (STATUS_HEADERS_ONLY, STATUS_FETCHED_NO_BODY)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS emails (
@@ -26,6 +31,8 @@ CREATE TABLE IF NOT EXISTS emails (
     keyword_matches TEXT,
     thread_id TEXT,
     in_reply_to TEXT,
+    is_read INTEGER DEFAULT 0,
+    is_starred INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_status ON emails(status);
@@ -42,11 +49,10 @@ CREATE TABLE IF NOT EXISTS settings (
 
 _LIST_COLUMNS = (
     "message_id_hash, message_id, sender, subject, date, date_parsed, "
-    "status, category, keyword_matches, thread_id, in_reply_to"
+    "status, category, keyword_matches, thread_id, in_reply_to, is_read, is_starred"
 )
 
 
-@functools.lru_cache(maxsize=4096)
 def _hash_message_id(message_id: str) -> str:
     return hashlib.sha256(message_id.encode()).hexdigest()[:16]
 
@@ -120,25 +126,46 @@ def _connect(db_path: str):
         raise
 
 
+_SCHEMA_VERSION = 1
+
+
+def _migrate(db_path: str) -> None:
+    with _connect(db_path) as conn:
+        if conn.execute("PRAGMA user_version").fetchone()[0] >= _SCHEMA_VERSION:
+            return
+        required = {"is_read": "INTEGER DEFAULT 0", "is_starred": "INTEGER DEFAULT 0"}
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(emails)").fetchall()}
+        for column, decl in required.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE emails ADD COLUMN {column} {decl}")
+        conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+
+
 def init_db(db_path: str) -> None:
     Path(db_path).resolve().parent.mkdir(parents=True, exist_ok=True)
     with _connect(db_path) as conn:
         conn.executescript(SCHEMA)
+    _migrate(db_path)
 
 
 _BATCH_CHUNK = 500
 
 
-def _batch_existing_hashes(conn, hashes: list[str]) -> set[str]:
-    existing = set()
+def _run_in_batches(conn, sql_template: str, hashes: list[str], leading=()):
     for i in range(0, len(hashes), _BATCH_CHUNK):
         chunk = hashes[i : i + _BATCH_CHUNK]
         placeholders = ",".join("?" * len(chunk))
-        rows = conn.execute(
-            f"SELECT message_id_hash FROM emails WHERE message_id_hash IN ({placeholders})",
-            chunk,
-        ).fetchall()
-        existing.update(row["message_id_hash"] for row in rows)
+        yield conn.execute(sql_template.format(placeholders=placeholders), [*leading, *chunk])
+
+
+def _batch_existing_hashes(conn, hashes: list[str]) -> set[str]:
+    existing = set()
+    for cursor in _run_in_batches(
+        conn,
+        "SELECT message_id_hash FROM emails WHERE message_id_hash IN ({placeholders})",
+        hashes,
+    ):
+        existing.update(row["message_id_hash"] for row in cursor.fetchall())
     return existing
 
 
@@ -152,6 +179,63 @@ def delete_email(message_id: str, db_path: str) -> bool:
     return cursor.rowcount > 0
 
 
+def delete_emails_by_hashes(db_path: str, message_id_hashes: list[str]) -> int:
+    if not message_id_hashes:
+        return 0
+    removed = 0
+    with _connect(db_path) as conn:
+        for cursor in _run_in_batches(
+            conn,
+            "DELETE FROM emails WHERE message_id_hash IN ({placeholders})",
+            message_id_hashes,
+        ):
+            removed += cursor.rowcount
+    return removed
+
+
+_FLAG_COLUMNS = frozenset({"is_read", "is_starred"})
+
+
+def _set_flag_by_hashes(db_path: str, message_id_hashes: list[str], column: str, on: bool) -> int:
+    if column not in _FLAG_COLUMNS:
+        raise ValueError(f"invalid flag column: {column!r}")
+    if not message_id_hashes:
+        return 0
+    val = 1 if on else 0
+    updated = 0
+    with _connect(db_path) as conn:
+        for cursor in _run_in_batches(
+            conn,
+            f"UPDATE emails SET {column} = ? WHERE message_id_hash IN ({{placeholders}})",
+            message_id_hashes,
+            leading=[val],
+        ):
+            updated += cursor.rowcount
+    return updated
+
+
+def set_read_by_hashes(db_path: str, message_id_hashes: list[str], read: bool) -> int:
+    return _set_flag_by_hashes(db_path, message_id_hashes, "is_read", read)
+
+
+def set_starred_by_hashes(db_path: str, message_id_hashes: list[str], starred: bool) -> int:
+    return _set_flag_by_hashes(db_path, message_id_hashes, "is_starred", starred)
+
+
+def get_message_ids_by_hashes(db_path: str, message_id_hashes: list[str]) -> list[tuple[str, str]]:
+    if not message_id_hashes:
+        return []
+    pairs: list[tuple[str, str]] = []
+    with _connect(db_path) as conn:
+        for cursor in _run_in_batches(
+            conn,
+            "SELECT message_id_hash, message_id FROM emails WHERE message_id_hash IN ({placeholders})",
+            message_id_hashes,
+        ):
+            pairs.extend((row["message_id_hash"], row["message_id"]) for row in cursor.fetchall())
+    return pairs
+
+
 def clear_emails(db_path: str) -> None:
     with _connect(db_path) as conn:
         conn.execute("DELETE FROM emails")
@@ -160,7 +244,7 @@ def clear_emails(db_path: str) -> None:
 def read_emails(db_path: str) -> list[dict]:
     with _connect(db_path) as conn:
         rows = conn.execute("SELECT * FROM emails ORDER BY date_parsed DESC").fetchall()
-    return [_row_to_dict(row) for row in rows]
+        return [_row_to_dict(row) for row in rows]
 
 
 def save_headers_batch(emails: list[dict], db_path: str) -> int:
@@ -204,28 +288,63 @@ def save_headers_batch(emails: list[dict], db_path: str) -> int:
     return len(insert_rows)
 
 
-def update_bodies_batch(updates: list[tuple[str, str]], db_path: str) -> int:
+def update_bodies_batch(updates: list[tuple], db_path: str) -> int:
     if not updates:
         return 0
-    rows = [
-        (body, "fetched_no_body" if not (body or "").strip() else "fetched", _hash_message_id(mid))
-        for mid, body in updates
-    ]
+    simple_rows = []
+    flag_rows = []
+    for entry in updates:
+        if len(entry) == 4:
+            mid, body, is_read, is_starred = entry
+            flag_rows.append(
+                (
+                    body,
+                    STATUS_FETCHED_NO_BODY if not (body or "").strip() else STATUS_FETCHED,
+                    int(bool(is_read)),
+                    int(bool(is_starred)),
+                    _hash_message_id(mid),
+                )
+            )
+        else:
+            mid, body = entry[:2]
+            simple_rows.append(
+                (
+                    body,
+                    STATUS_FETCHED_NO_BODY if not (body or "").strip() else STATUS_FETCHED,
+                    _hash_message_id(mid),
+                )
+            )
+
+    affected = 0
     with _connect(db_path) as conn:
-        cursor = conn.executemany(
-            "UPDATE emails SET body = ?, status = ? WHERE message_id_hash = ?",
-            rows,
-        )
-    return cursor.rowcount
+        if simple_rows:
+            cursor = conn.executemany(
+                "UPDATE emails SET body = ?, status = ? WHERE message_id_hash = ?",
+                simple_rows,
+            )
+            affected += cursor.rowcount
+        if flag_rows:
+            cursor = conn.executemany(
+                "UPDATE emails SET body = ?, status = ?, is_read = ?, is_starred = ? WHERE message_id_hash = ?",
+                flag_rows,
+            )
+            affected += cursor.rowcount
+    return affected
 
 
 def get_headers_only_message_ids(db_path: str) -> list[str]:
     with _connect(db_path) as conn:
-        rows = conn.execute("SELECT message_id FROM emails WHERE status = 'headers_only'").fetchall()
+        rows = conn.execute(f"SELECT message_id FROM emails WHERE status = '{STATUS_HEADERS_ONLY}'").fetchall()
     return [row["message_id"] for row in rows]
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
+    def _col(name: str, default=0):
+        try:
+            return row[name]
+        except (IndexError, KeyError):
+            return default
+
     return {
         "message_id": row["message_id"],
         "from": row["sender"],
@@ -236,4 +355,6 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         "keyword_matches": _parse_keyword_matches(row["keyword_matches"]),
         "thread_id": row["thread_id"],
         "in_reply_to": row["in_reply_to"],
+        "is_read": int(_col("is_read", 0) or 0),
+        "is_starred": int(_col("is_starred", 0) or 0),
     }

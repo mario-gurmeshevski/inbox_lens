@@ -376,6 +376,49 @@ class TestUpdateBodiesBatch:
         assert int(row_b["is_starred"]) == 1
 
 
+class TestUpdateFlagsBatch:
+    def test_refreshes_flags_without_disturbing_body_or_status(self, tmp_db, sample_email):
+        _save_fetched(sample_email, tmp_db)
+        h = cache._hash_message_id(sample_email["message_id"])
+        updated = cache.update_flags_batch([(1, 1, h)], tmp_db)
+        assert updated == 1
+        with cache._connect(tmp_db) as conn:
+            row = conn.execute(
+                "SELECT body, status, is_read, is_starred FROM emails WHERE message_id_hash = ?",
+                (h,),
+            ).fetchone()
+        assert row["body"] == sample_email["body"]  # untouched
+        assert row["status"] == "fetched"  # untouched
+        assert int(row["is_read"]) == 1
+        assert int(row["is_starred"]) == 1
+
+    def test_clears_flags(self, tmp_db, sample_email):
+        _save_fetched(sample_email, tmp_db)
+        h = cache._hash_message_id(sample_email["message_id"])
+        cache.update_flags_batch([(1, 1, h)], tmp_db)
+        cache.update_flags_batch([(0, 0, h)], tmp_db)
+        with cache._connect(tmp_db) as conn:
+            row = conn.execute(
+                "SELECT is_read, is_starred FROM emails WHERE message_id_hash = ?", (h,)
+            ).fetchone()
+        assert int(row["is_read"]) == 0
+        assert int(row["is_starred"]) == 0
+
+    def test_empty_list_returns_zero(self, tmp_db):
+        assert cache.update_flags_batch([], tmp_db) == 0
+
+    def test_unknown_hash_updates_zero_rows(self, tmp_db):
+        updated = cache.update_flags_batch([(1, 1, "nonexistent")], tmp_db)
+        assert updated == 0
+
+    def test_idempotent_reapply_counts_matched_row(self, tmp_db, sample_email):
+        _save_fetched(sample_email, tmp_db)
+        h = cache._hash_message_id(sample_email["message_id"])
+        cache.update_flags_batch([(1, 1, h)], tmp_db)
+        updated = cache.update_flags_batch([(1, 1, h)], tmp_db)
+        assert updated == 1
+
+
 class TestGetHeadersOnlyMessageIds:
     def test_returns_message_ids_with_headers_only_status(self, tmp_db, sample_headers_batch):
         cache.save_headers_batch(sample_headers_batch, tmp_db)

@@ -187,7 +187,7 @@ def _fetch_headers_bulk(mail, email_ids):
     status, msg_data = mail.uid(
         "fetch",
         id_str,
-        "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM DATE MESSAGE-ID IN-REPLY-TO REFERENCES THREAD-INDEX)])",
+        "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM DATE MESSAGE-ID IN-REPLY-TO REFERENCES THREAD-INDEX)] FLAGS)",
     )
     if status != "OK":
         return []
@@ -197,6 +197,7 @@ def _fetch_headers_bulk(mail, email_ids):
             continue
         envelope = item[0].decode(errors="replace")
         uid = _extract_uid(envelope)
+        is_read, is_starred = _extract_flags(envelope)
         msg = email_lib.message_from_bytes(item[1])
         thread_info = extract_thread_info(msg)
         results.append(
@@ -208,6 +209,8 @@ def _fetch_headers_bulk(mail, email_ids):
                 "body": "",
                 "thread_id": thread_info["thread_id"],
                 "in_reply_to": thread_info["in_reply_to"],
+                "is_read": is_read,
+                "is_starred": is_starred,
                 "_uid": uid,
             }
         )
@@ -448,12 +451,20 @@ def fetch_headers_and_cache(db_path=None):
 
             new_headers = []
             new_ids = []
+            existing_flag_updates = []
             for header, eid, mid, h in header_entries:
                 if h not in existing_hashes:
                     new_headers.append(header)
                     new_ids.append((eid, mid))
+                else:
+                    existing_flag_updates.append(
+                        (header.get("is_read", False), header.get("is_starred", False), h)
+                    )
 
             existing = cache.get_total_count(db_path)
+
+            if existing_flag_updates:
+                cache.update_flags_batch(existing_flag_updates, db_path)
 
             cache.save_headers_batch(new_headers, db_path)
 

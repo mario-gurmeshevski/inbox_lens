@@ -108,6 +108,29 @@ class TestFetchHeadersBulk:
         assert h["_uid"] == b"1"
         assert h["body"] == ""
 
+    def test_parses_flags_from_envelope(self, fake_mail):
+        fake_mail.uid.return_value = (
+            "OK",
+            [
+                (
+                    b"UID 1 (FLAGS (\\Seen \\Flagged)) (BODY[HEADER.FIELDS (...)])",
+                    b"Subject: Starred\r\nFrom: a@b.com\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\n"
+                    b"Message-ID: <star@e.com>\r\n\r\n",
+                ),
+                (
+                    b"UID 2 (FLAGS (\\Seen)) (BODY[HEADER.FIELDS (...)])",
+                    b"Subject: Plain\r\nFrom: c@d.com\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\n"
+                    b"Message-ID: <plain@e.com>\r\n\r\n",
+                ),
+            ],
+        )
+        result = email_reader._fetch_headers_bulk(fake_mail, [b"1", b"2"])
+        assert len(result) == 2
+        assert result[0]["is_starred"] is True
+        assert result[0]["is_read"] is True
+        assert result[1]["is_starred"] is False
+        assert result[1]["is_read"] is True
+
     def test_returns_empty_on_non_ok_status(self, fake_mail):
         fake_mail.uid.return_value = ("BAD", [])
         assert email_reader._fetch_headers_bulk(fake_mail, [b"1"]) == []
@@ -408,6 +431,57 @@ class TestFetchHeadersAndCache:
         result = email_reader.fetch_headers_and_cache(db_path=tmp_db)
         assert "kaboom" in result["error"]
 
+    def test_existing_hash_flags_refreshed_new_email_inserted(self, monkeypatch, tmp_db):
+        cache.save_headers_batch(
+            [{"message_id": "<existing@e.com>", "subject": "Old", "date": "Mon, 01 Jan 2024 00:00:00 +0000"}],
+            tmp_db,
+        )
+
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
+        fake = MagicMock()
+        fake.uid.side_effect = [
+            ("OK", [b"1 2"]),
+            (
+                "OK",
+                [
+                    (
+                        b"UID 1 (FLAGS (\\Seen \\Flagged)) (BODY[HEADER.FIELDS (...)])",
+                        b"Subject: Existing\r\nFrom: a@b.com\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\n"
+                        b"Message-ID: <existing@e.com>\r\n\r\n",
+                    ),
+                    (
+                        b"UID 2 (FLAGS ()) (BODY[HEADER.FIELDS (...)])",
+                        b"Subject: Fresh\r\nFrom: c@d.com\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\n"
+                        b"Message-ID: <fresh@e.com>\r\n\r\n",
+                    ),
+                ],
+            ),
+        ]
+        fake.select.return_value = ("OK", [b""])
+
+        fake_imap_session(monkeypatch, imap_mod, fake)
+        result = email_reader.fetch_headers_and_cache(db_path=tmp_db)
+
+        assert result["new_count"] == 1
+        assert result["existing_count"] == 1
+
+        existing_hash = cache._hash_message_id("<existing@e.com>")
+        fresh_hash = cache._hash_message_id("<fresh@e.com>")
+        with cache._connect(tmp_db) as conn:
+            ex = conn.execute(
+                "SELECT status, is_read, is_starred FROM emails WHERE message_id_hash = ?",
+                (existing_hash,),
+            ).fetchone()
+            fr = conn.execute(
+                "SELECT is_read, is_starred FROM emails WHERE message_id_hash = ?",
+                (fresh_hash,),
+            ).fetchone()
+        assert ex["status"] == "headers_only"  # untouched by flag refresh
+        assert int(ex["is_read"]) == 1
+        assert int(ex["is_starred"]) == 1
+        assert int(fr["is_read"]) == 0
+        assert int(fr["is_starred"]) == 0
+
 
 class TestFetchBodiesByMessageIds:
     def test_empty_input_returns_zeros(self):
@@ -517,6 +591,9 @@ class TestExtractFlags:
 
     def test_seen_only(self):
         assert imap_mod._extract_flags("FLAGS (\\Seen)") == (True, False)
+
+    def test_flags_absent_returns_false_false(self):
+        assert imap_mod._extract_flags("UID 1 (BODY[HEADER.FIELDS (...)])") == (False, False)
 
 
 class TestFindArchiveFolder:

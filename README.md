@@ -103,7 +103,7 @@ Fetch emails from a Gmail inbox via IMAP, cache them in a local SQLite database,
 
 ## Testing
 
-The project includes 696 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
+The project includes 704 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
 
 ```bash
 
@@ -119,13 +119,13 @@ make test-cov   # For Mac/Linux
 
 | File                   | Tests | Coverage                                                                                       |
 | ---------------------- | ----- | ---------------------------------------------------------------------------------------------- |
-| `test_cache.py`        | 92    | DB ops, hashing, scanning, search, threads                                                     |
+| `test_cache.py`        | 97    | DB ops, hashing, scanning, search, threads                                                     |
 | `test_web.py`          | 177   | FastAPI endpoints, SSE, Tailscale, auth middleware, update banner/panel, rate-limit cooldown   |
 | `test_updater.py`      | 84    | Version parsing/checking, GitHub fetch cache + rate-limit, Docker self-update, swap-helper rollback |
 | `test_email_reader.py` | 72    | Parsing, body cleaning, thread extraction, keywords                                            |
 | `test_idle_monitor.py` | 63    | IDLE loop, ConnectionLost, run_initial_fetch                                                   |
 | `test_auth.py`         | 42    | Password hashing, API keys, sessions, rate limiting                                            |
-| `test_imap.py`         | 117   | IMAP helpers, connection, fetch, delete, archive/move, flag sync, bulk ops                     |
+| `test_imap.py`         | 120   | IMAP helpers, connection, fetch, delete, archive/move, flag sync, bulk ops                     |
 | `test_crypto.py`       | 22    | Encryption, settings, credentials                                                              |
 | `test_event_bus.py`    | 12    | Pub/sub dispatch                                                                               |
 | `test_utils.py`        | 8     | Keyword parsing, priority buckets                                                              |

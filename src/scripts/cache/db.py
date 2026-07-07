@@ -332,6 +332,23 @@ def update_bodies_batch(updates: list[tuple], db_path: str) -> int:
     return affected
 
 
+def update_flags_batch(updates: list[tuple], db_path: str) -> int:
+    if not updates:
+        return 0
+    rows = [
+        (int(bool(is_read)), int(bool(is_starred)), message_id_hash)
+        for is_read, is_starred, message_id_hash in updates
+    ]
+    affected = 0
+    with _connect(db_path) as conn:
+        cursor = conn.executemany(
+            "UPDATE emails SET is_read = ?, is_starred = ? WHERE message_id_hash = ?",
+            rows,
+        )
+        affected = cursor.rowcount
+    return affected
+
+
 def get_headers_only_message_ids(db_path: str) -> list[str]:
     with _connect(db_path) as conn:
         rows = conn.execute(f"SELECT message_id FROM emails WHERE status = '{STATUS_HEADERS_ONLY}'").fetchall()

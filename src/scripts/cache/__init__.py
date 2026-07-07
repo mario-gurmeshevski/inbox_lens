@@ -25,6 +25,7 @@ __all__ = [
     "read_emails",
     "save_headers_batch",
     "update_bodies_batch",
+    "update_flags_batch",
     "get_headers_only_message_ids",
     "check_hashes_exist",
     "get_total_count",
@@ -77,6 +78,7 @@ from src.scripts.cache.db import (
     read_emails,
     save_headers_batch,
     update_bodies_batch,
+    update_flags_batch,
     get_headers_only_message_ids,
 )
 from src.scripts.cache.queries import (

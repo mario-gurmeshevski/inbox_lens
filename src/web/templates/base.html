@@ -42,7 +42,7 @@
                 hx-get="/partials/account"
                 hx-target="#account-modal-body"
                 hx-swap="innerHTML"
-                onclick="openAccountModal()">
+                data-modal-open="account-modal">
           <i data-lucide="user" class="icon"></i>
           <span class="nav-label">Account</span>
         </button>
@@ -71,7 +71,7 @@
       {% endblock %}
     </div>
     <div id="account-modal" class="account-modal" hidden>
-      <div class="account-modal-backdrop" onclick="closeAccountModal()"></div>
+      <div class="account-modal-backdrop" data-modal-close="account-modal"></div>
       <div class="account-modal-card"
            role="dialog"
            aria-modal="true"
@@ -79,7 +79,7 @@
         <button type="button"
                 class="account-modal-close"
                 aria-label="Close"
-                onclick="closeAccountModal()">
+                data-modal-close="account-modal">
           <i data-lucide="x" class="icon-md"></i>
         </button>
         <div id="account-modal-body"></div>
@@ -103,6 +103,22 @@
           <button type="button" class="btn" data-confirm-cancel>Cancel</button>
           <button type="button" class="btn btn-danger" id="confirm-ok-btn">Confirm</button>
         </div>
+      </div>
+    </div>
+    <div id="folder-modal" class="account-modal" hidden>
+      <div class="account-modal-backdrop" data-modal-close="folder-modal"></div>
+      <div class="account-modal-card"
+           role="dialog"
+           aria-modal="true"
+           aria-labelledby="folder-modal-title">
+        <button type="button"
+                class="account-modal-close"
+                aria-label="Close"
+                data-modal-close="folder-modal">
+          <i data-lucide="x" class="icon-md"></i>
+        </button>
+        <h2 id="folder-modal-title" class="section-title">Move to folder</h2>
+        <div id="folder-modal-body" class="folder-modal-body"></div>
       </div>
     </div>
     {% block scripts %}{% endblock %}

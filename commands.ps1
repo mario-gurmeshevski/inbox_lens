@@ -20,6 +20,8 @@ if (-not $Task) {
     Write-Host "  test-cov         Run tests with coverage"
     Write-Host "  lint             Run linters (Ruff for Python, djlint for templates)"
     Write-Host "  format           Format Python (Ruff) and templates (djlint)"
+    Write-Host "  unused           Find unused code (Vulture)"
+    Write-Host "  pre-commit       Format, lint (incl. Vulture), and test"
     Write-Host "  clean            Remove caches and compiled files"
     Write-Host "  reset            Clean + remove DB and secret key"
     Write-Host "  up               Start Docker Compose (auto-detect host IP)"
@@ -40,6 +42,8 @@ $VENV = ".venv"
 $VENV_PYTHON = "$VENV\Scripts\python.exe"
 $VENV_PIP = "$VENV\Scripts\pip.exe"
 $DJLINT = "$VENV\Scripts\djlint.exe"
+$RUNTIME_STAMP = "$VENV\.runtime.stamp"
+$DEV_STAMP = "$VENV\.dev.stamp"
 $COMPOSE_FILES_TS = @("-f", "docker-compose.yaml", "-f", "docker-compose.tailscale.yaml")
 
 $WEB_HOST = if ($env:WEB_HOST) { $env:WEB_HOST } else { "0.0.0.0" }
@@ -77,28 +81,77 @@ function Invoke-Clean {
     Get-ChildItem -Recurse -Filter '*.pyc' | Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
+function Get-FileMtime {
+    param([string]$Path)
+    $abs = (Resolve-Path -LiteralPath $Path -ErrorAction SilentlyContinue)
+    if (-not $abs) { return $null }
+    $fi = [IO.FileInfo]::new($abs.ProviderPath)
+    if ($fi.Exists) { return $fi.LastWriteTime } else { return $null }
+}
+
+function Test-RuntimeStale {
+    if (-not (Test-Path $VENV_PYTHON)) { return $true }
+    $rt = Get-FileMtime $RUNTIME_STAMP
+    if (-not $rt) { return $true }
+    $pin = Get-FileMtime ".python-version"
+    if ($pin -and $pin -gt $rt) { return $true }
+    return $false
+}
+
+function Test-DevStale {
+    if (Test-RuntimeStale) { return $true }
+    $dv = Get-FileMtime $DEV_STAMP
+    if (-not $dv) { return $true }
+    if ((Get-FileMtime $RUNTIME_STAMP) -gt $dv) { return $true }
+    $pp = Get-FileMtime "pyproject.toml"
+    if ($pp -and $pp -gt $dv) { return $true }
+    return $false
+}
+
 switch ($Task) {
     "install" {
-        if (-not (Test-Path $VENV)) { & $PYTHON -m venv $VENV }
+        if (Test-RuntimeStale) {
+            & $PYTHON -m venv $VENV
+            Set-Content -Path $RUNTIME_STAMP -Value $null
+        }
         & $VENV_PIP install -e .
+        Set-Content -Path $DEV_STAMP -Value $null
     }
     "uninstall" {
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $VENV
     }
     "dev-install" {
-        if (-not (Test-Path $VENV)) { & $PYTHON -m venv $VENV }
-        & $VENV_PIP install -e ".[dev]"
+        if (Test-RuntimeStale) {
+            & $PYTHON -m venv $VENV
+            Set-Content -Path $RUNTIME_STAMP -Value $null
+        }
+        if (Test-DevStale) {
+            & $VENV_PIP install -e ".[dev]"
+            Set-Content -Path $DEV_STAMP -Value $null
+        }
     }
     "web" { & $VENV_PYTHON -m uvicorn src.scripts.web:app --host $WEB_HOST --port $WEB_PORT --reload }
     "test" { & $VENV_PYTHON -m pytest src/tests/ -v }
     "test-cov" { & $VENV_PYTHON -m pytest src/tests/ --cov=src/scripts --cov-report=term-missing }
     "lint" {
         & $VENV_PYTHON -m ruff check src/
+        & $VENV_PYTHON -m vulture src/scripts
         & $DJLINT --check src/web/templates
     }
     "format" {
         & $VENV_PYTHON -m ruff format src/
         & $DJLINT --reformat src/web/templates
+    }
+    "unused" {
+        & $VENV_PYTHON -m vulture src/scripts
+    }
+    "pre-commit" {
+        & $VENV_PYTHON -m ruff format src/
+        & $DJLINT --reformat src/web/templates
+        & $VENV_PYTHON -m ruff check src/
+        & $VENV_PYTHON -m vulture src/scripts
+        & $DJLINT --check src/web/templates
+        & $VENV_PYTHON -m pytest src/tests/ -v
     }
 
     "clean" {

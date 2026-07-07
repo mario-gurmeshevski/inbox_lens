@@ -5,6 +5,7 @@ import pytest
 
 from src.scripts import cache, email_reader
 from src.scripts.email_reader import imap as imap_mod
+from src.tests._helpers import _raise, fake_imap_session
 
 
 class TestSafeClose:
@@ -295,7 +296,7 @@ class TestMakeBodyFetchers:
         mail = MagicMock()
         mail.uid.side_effect = imaplib.IMAP4.abort("aborted")
         monkeypatch.setattr(imap_mod.time, "sleep", lambda s: None)
-        monkeypatch.setattr(imap_mod, "_reconnect", lambda c, db_path=None: (_ for _ in ()).throw(RuntimeError("nope")))
+        monkeypatch.setattr(imap_mod, "_reconnect", lambda c, db_path=None: _raise(RuntimeError("nope")))
         result, returned_mail = single(mail, (b"1", "<m@e.com>"))
         assert result == []
         assert returned_mail is mail
@@ -344,9 +345,7 @@ class TestBatchFetchLoop:
             raise imaplib.IMAP4.abort("aborted")
 
         monkeypatch.setattr(imap_mod.time, "sleep", lambda s: None)
-        monkeypatch.setattr(
-            imap_mod, "_reconnect", lambda c, db_path=None: (_ for _ in ()).throw(RuntimeError("reconnect failed"))
-        )
+        monkeypatch.setattr(imap_mod, "_reconnect", lambda c, db_path=None: _raise(RuntimeError("reconnect failed")))
         results, returned = email_reader._batch_fetch_loop(conn, items, 25, bulk_raises, single_fn, db_path="/db")
         assert results == [{"body": "single"}]
 
@@ -394,14 +393,7 @@ class TestFetchHeadersAndCache:
         fake = MagicMock()
         fake.uid.return_value = ("OK", [b""])
 
-        class FakeSession:
-            def __enter__(self):
-                return fake
-
-            def __exit__(self, *a):
-                return None
-
-        monkeypatch.setattr(imap_mod, "imap_session", lambda db_path=None: FakeSession())
+        fake_imap_session(monkeypatch, imap_mod, fake)
         result = email_reader.fetch_headers_and_cache(db_path=tmp_db)
         assert result["new_count"] == 0
         assert result["emails"] == []
@@ -447,6 +439,31 @@ class TestFetchBodiesByMessageIds:
         result = email_reader.fetch_bodies_by_message_ids(["<a@e.com>", "<b@e.com>"], db_path=tmp_db)
         assert result["failed"] == 2
 
+    def test_connection_failure_after_fetches_sums_to_total(self, monkeypatch, tmp_db):
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
+
+        class _Conn:
+            def uid(self, *a, **kw):
+                return ("OK", [b"1"])
+
+            def close(self):
+                pass
+
+            def logout(self):
+                pass
+
+        monkeypatch.setattr(email_reader, "_imap_connect", lambda db_path=None: _Conn())
+        monkeypatch.setattr(email_reader, "_resolve_uid", lambda mail, mid: b"1")
+        monkeypatch.setattr(
+            email_reader,
+            "_batch_fetch_loop",
+            lambda *a, **kw: _raise(OSError("connection lost mid-batch")),
+        )
+        result = email_reader.fetch_bodies_by_message_ids(["<a@e.com>", "<b@e.com>", "<c@e.com>"], db_path=tmp_db)
+        assert result["fetched"] + result["failed"] == 3
+        assert result["fetched"] == 0
+        assert result["failed"] == 3
+
 
 class TestDeleteEmail:
     def test_no_credentials_returns_error(self, monkeypatch):
@@ -459,14 +476,7 @@ class TestDeleteEmail:
         cache.save_headers_batch([{"message_id": "<m@e.com>", "subject": "s", "date": "d"}], tmp_db)
         fake = MagicMock()
 
-        class FakeSession:
-            def __enter__(self):
-                return fake
-
-            def __exit__(self, *a):
-                return None
-
-        monkeypatch.setattr(imap_mod, "imap_session", lambda db_path=None: FakeSession())
+        fake_imap_session(monkeypatch, imap_mod, fake)
         monkeypatch.setattr(imap_mod, "move_to_trash", lambda mail, mid: True)
         result = email_reader.delete_email("<m@e.com>", db_path=tmp_db)
         assert result == {"deleted": True, "message_id": "<m@e.com>"}
@@ -476,14 +486,7 @@ class TestDeleteEmail:
         monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
         fake = MagicMock()
 
-        class FakeSession:
-            def __enter__(self):
-                return fake
-
-            def __exit__(self, *a):
-                return None
-
-        monkeypatch.setattr(imap_mod, "imap_session", lambda db_path=None: FakeSession())
+        fake_imap_session(monkeypatch, imap_mod, fake)
         monkeypatch.setattr(imap_mod, "move_to_trash", lambda mail, mid: False)
         result = email_reader.delete_email("<m@e.com>", db_path=tmp_db)
         assert result["deleted"] is False
@@ -503,3 +506,340 @@ class TestDeleteEmail:
 class TestFetchBodiesForIds:
     def test_empty_input_returns_empty(self):
         assert email_reader.fetch_bodies_for_ids([], db_path="/db") == []
+
+
+class TestExtractFlags:
+    def test_seen_and_flagged(self):
+        assert imap_mod._extract_flags("FLAGS (\\Seen \\Flagged \\Recent)") == (True, True)
+
+    def test_neither(self):
+        assert imap_mod._extract_flags("FLAGS (\\Recent)") == (False, False)
+
+    def test_seen_only(self):
+        assert imap_mod._extract_flags("FLAGS (\\Seen)") == (True, False)
+
+
+class TestFindArchiveFolder:
+    def test_returns_default_when_list_fails(self, fake_mail):
+        fake_mail.list.return_value = ("BAD", [])
+        assert email_reader.find_archive_folder(fake_mail) == "[Gmail]/All Mail"
+
+    def test_detects_all_attribute(self, fake_mail):
+        fake_mail.list.return_value = ("OK", [b'(\\All \\HasNoChildren) "/" "All Mail"'])
+        assert email_reader.find_archive_folder(fake_mail) == "All Mail"
+
+    def test_falls_back_to_default(self, fake_mail):
+        fake_mail.list.return_value = ("OK", [b'(\\Inbox) "/" "INBOX"'])
+        assert email_reader.find_archive_folder(fake_mail) == "[Gmail]/All Mail"
+
+
+class TestFindFolderByAttr:
+    def test_matches_attribute(self, fake_mail):
+        fake_mail.list.return_value = ("OK", [b'(\\Trash) "/" "Trash"'])
+        assert email_reader.find_folder_by_attr(fake_mail, "\\Trash", "Fallback") == "Trash"
+
+    def test_returns_fallback_when_no_match(self, fake_mail):
+        fake_mail.list.return_value = ("OK", [b'(\\Inbox) "/" "INBOX"'])
+        assert email_reader.find_folder_by_attr(fake_mail, "\\Xyz", "Fallback") == "Fallback"
+
+
+class TestValidateFolderName:
+    def test_rejects_empty(self):
+        assert email_reader._validate_folder_name("") is False
+
+    def test_accepts_normal_name(self):
+        assert email_reader._validate_folder_name("Work") is True
+        assert email_reader._validate_folder_name("[Gmail]/All Mail") is True
+
+    @pytest.mark.parametrize("bad", ['a"b', "a\\b", "a\nb", "a\rb", "a\x00b", "a{b"])
+    def test_rejects_unsafe_chars(self, bad):
+        assert email_reader._validate_folder_name(bad) is False
+
+
+class TestMoveToFolder:
+    def test_returns_false_when_no_folder(self, fake_mail, monkeypatch):
+        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: b"1")
+        assert email_reader.move_to_folder(fake_mail, "<m@e.com>", "") is False
+
+    def test_returns_false_when_uid_not_found(self, fake_mail, monkeypatch):
+        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: None)
+        assert email_reader.move_to_folder(fake_mail, "<m@e.com>", "Work") is False
+
+    def test_copies_and_deletes(self, fake_mail, monkeypatch):
+        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: b"7")
+        fake_mail.uid.side_effect = [("OK", None), ("OK", None)]
+        assert email_reader.move_to_folder(fake_mail, "<m@e.com>", "Work") is True
+        fake_mail.expunge.assert_called_once()
+
+    def test_returns_false_when_copy_fails(self, fake_mail, monkeypatch):
+        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: b"7")
+        fake_mail.uid.return_value = ("BAD", None)
+        assert email_reader.move_to_folder(fake_mail, "<m@e.com>", "Work") is False
+
+    def test_rejects_injection_style_folder(self, fake_mail, monkeypatch):
+        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: b"7")
+        assert email_reader.move_to_folder(fake_mail, "<m@e.com>", 'INBOX" "') is False
+        fake_mail.uid.assert_not_called()
+
+
+class TestSetFlagsBulk:
+    def test_empty_returns_zero(self, fake_mail):
+        assert email_reader.set_flags_bulk(fake_mail, [], "\\Seen", True) == 0
+
+    def test_counts_updated(self, fake_mail, monkeypatch):
+        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: mid.encode())
+        fake_mail.uid.return_value = ("OK", None)
+        assert email_reader.set_flags_bulk(fake_mail, ["<a@e.com>", "<b@e.com>"], "\\Seen", True) == 2
+
+    def test_skips_missing_uids(self, fake_mail, monkeypatch):
+        monkeypatch.setattr(
+            imap_mod,
+            "_resolve_uid",
+            lambda mail, mid: mid.encode() if mid == "<a@e.com>" else None,
+        )
+        fake_mail.uid.return_value = ("OK", None)
+        assert email_reader.set_flags_bulk(fake_mail, ["<a@e.com>", "<b@e.com>"], "\\Seen", True) == 1
+
+
+class TestArchiveRemote:
+    def test_empty_returns_false(self, tmp_db, fake_credentials):
+        assert email_reader.archive_remote("", db_path=tmp_db) is False
+
+    def test_no_credentials_returns_false(self, monkeypatch, tmp_db):
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: False)
+        assert email_reader.archive_remote("<a@e.com>", db_path=tmp_db) is False
+
+    def test_resolves_folder_and_moves(self, monkeypatch, tmp_db, fake_credentials):
+        fake_imap_session(monkeypatch, imap_mod, MagicMock())
+        monkeypatch.setattr(imap_mod, "find_archive_folder", lambda mail: "Archive")
+        monkeypatch.setattr(imap_mod, "move_to_folder", lambda mail, mid, folder: folder == "Archive")
+        assert email_reader.archive_remote("<a@e.com>", db_path=tmp_db) is True
+
+    def test_reuses_cached_folder(self, monkeypatch, tmp_db, fake_credentials):
+        fake_imap_session(monkeypatch, imap_mod, MagicMock())
+        monkeypatch.setattr(imap_mod, "_archive_folder_cache", "[Gmail]/All Mail")
+        find = MagicMock()
+        monkeypatch.setattr(imap_mod, "find_archive_folder", find)
+        monkeypatch.setattr(imap_mod, "move_to_folder", lambda mail, mid, folder: True)
+        assert email_reader.archive_remote("<a@e.com>", db_path=tmp_db) is True
+        find.assert_not_called()
+
+    def test_swallows_imap_failure(self, monkeypatch, tmp_db, fake_credentials):
+        def boom(*a, **kw):
+            raise OSError("imap down")
+
+        monkeypatch.setattr(imap_mod, "imap_session", boom)
+        assert email_reader.archive_remote("<a@e.com>", db_path=tmp_db) is False
+
+
+class TestResolveArchiveFolder:
+    def test_uses_attribute_matcher(self, monkeypatch, tmp_db, fake_credentials):
+        fake_imap_session(monkeypatch, imap_mod, MagicMock())
+        monkeypatch.setattr(imap_mod, "find_archive_folder", lambda mail: "All Mail")
+        monkeypatch.setattr(imap_mod, "_archive_folder_cache", None)
+        assert email_reader.resolve_archive_folder(db_path=tmp_db) == "All Mail"
+
+    def test_caches_result(self, monkeypatch, tmp_db, fake_credentials):
+        fake_imap_session(monkeypatch, imap_mod, MagicMock())
+        find = MagicMock(side_effect=lambda mail: "Archive")
+        monkeypatch.setattr(imap_mod, "find_archive_folder", find)
+        monkeypatch.setattr(imap_mod, "_archive_folder_cache", None)
+        email_reader.resolve_archive_folder(db_path=tmp_db)
+        email_reader.resolve_archive_folder(db_path=tmp_db)
+        find.assert_called_once()
+
+    def test_falls_back_on_failure(self, monkeypatch, tmp_db, fake_credentials):
+        def boom(*a, **kw):
+            raise OSError("imap down")
+
+        monkeypatch.setattr(imap_mod, "imap_session", boom)
+        monkeypatch.setattr(imap_mod, "_archive_folder_cache", None)
+        assert email_reader.resolve_archive_folder(db_path=tmp_db) == imap_mod.GMAIL_DEFAULT_ARCHIVE
+
+    def test_single_and_bulk_resolve_to_same_folder(self, monkeypatch, tmp_db, fake_credentials):
+        fake_imap_session(monkeypatch, imap_mod, MagicMock())
+        monkeypatch.setattr(imap_mod, "find_archive_folder", lambda mail: "All Mail")
+        monkeypatch.setattr(imap_mod, "_archive_folder_cache", None)
+        single = imap_mod.resolve_archive_folder(db_path=tmp_db)
+        monkeypatch.setattr(imap_mod, "_archive_folder_cache", None)
+        bulk = imap_mod.resolve_archive_folder(db_path=tmp_db)
+        assert single == bulk == "All Mail"
+
+
+class TestMoveRemote:
+    def test_empty_returns_false(self, tmp_db, fake_credentials):
+        assert email_reader.move_remote("", "Work", db_path=tmp_db) is False
+
+    def test_no_folder_returns_false(self, tmp_db, fake_credentials):
+        assert email_reader.move_remote("<a@e.com>", "", db_path=tmp_db) is False
+
+    def test_moves_on_server(self, monkeypatch, tmp_db, fake_credentials):
+        fake_imap_session(monkeypatch, imap_mod, MagicMock())
+        monkeypatch.setattr(imap_mod, "move_to_folder", lambda mail, mid, folder: folder == "Work")
+        assert email_reader.move_remote("<a@e.com>", "Work", db_path=tmp_db) is True
+
+    def test_swallows_imap_failure(self, monkeypatch, tmp_db, fake_credentials):
+        def boom(*a, **kw):
+            raise OSError("imap down")
+
+        monkeypatch.setattr(imap_mod, "imap_session", boom)
+        assert email_reader.move_remote("<a@e.com>", "Work", db_path=tmp_db) is False
+
+
+class TestBulkArchiveRemote:
+    def test_empty_returns_zero(self, tmp_db, fake_credentials):
+        assert email_reader.bulk_archive_remote([], db_path=tmp_db) == 0
+
+    def test_no_credentials_returns_zero(self, monkeypatch, tmp_db):
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: False)
+        assert email_reader.bulk_archive_remote(["<a@e.com>"], db_path=tmp_db) == 0
+
+    def test_delegates_to_resolve_and_bulk_move(self, monkeypatch, tmp_db, fake_credentials):
+        monkeypatch.setattr(imap_mod, "resolve_archive_folder", lambda db_path=None: "All Mail")
+        called = {}
+
+        def fake_bulk_move_remote(mids, folder, db_path=None):
+            called["mids"] = list(mids)
+            called["folder"] = folder
+            return len(mids)
+
+        monkeypatch.setattr(imap_mod, "bulk_move_remote", fake_bulk_move_remote)
+        assert email_reader.bulk_archive_remote(["<a@e.com>", "<b@e.com>"], db_path=tmp_db) == 2
+        assert called["folder"] == "All Mail"
+        assert called["mids"] == ["<a@e.com>", "<b@e.com>"]
+
+
+class TestBulkSetFlagRemote:
+    def test_empty_returns_zero(self, tmp_db, fake_credentials):
+        assert email_reader.bulk_set_flag_remote([], "\\Seen", True, db_path=tmp_db) == 0
+
+    def test_no_credentials_returns_zero(self, monkeypatch, tmp_db):
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: False)
+        assert email_reader.bulk_set_flag_remote(["<a@e.com>"], "\\Seen", True, db_path=tmp_db) == 0
+
+    def test_runs_imap_store(self, monkeypatch, tmp_db, fake_credentials):
+        fake = MagicMock()
+
+        fake_imap_session(monkeypatch, imap_mod, fake)
+        monkeypatch.setattr(imap_mod, "set_flags_bulk", lambda mail, mids, flag, on: len(mids))
+        assert email_reader.bulk_set_flag_remote(["<a@e.com>", "<b@e.com>"], "\\Seen", True, db_path=tmp_db) == 2
+
+    def test_swallows_imap_failure(self, monkeypatch, tmp_db, fake_credentials):
+        def boom(*a, **kw):
+            raise OSError("imap down")
+
+        monkeypatch.setattr(imap_mod, "imap_session", boom)
+        assert email_reader.bulk_set_flag_remote(["<a@e.com>"], "\\Seen", True, db_path=tmp_db) == 0
+
+
+class TestBulkMoveUidS:
+    def test_empty_returns_zero(self, fake_mail):
+        assert email_reader._bulk_move_uids(fake_mail, [], "Work") == 0
+        fake_mail.expunge.assert_not_called()
+
+    def test_rejects_unsafe_folder(self, fake_mail, monkeypatch):
+        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: b"1")
+        assert email_reader._bulk_move_uids(fake_mail, ["<a@e.com>"], 'a"b') == 0
+        fake_mail.uid.assert_not_called()
+        fake_mail.expunge.assert_not_called()
+
+    def test_single_expunge_for_many_messages(self, fake_mail, monkeypatch):
+        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: mid.encode())
+        fake_mail.uid.return_value = ("OK", None)
+        moved = email_reader._bulk_move_uids(fake_mail, ["<a@e.com>", "<b@e.com>", "<c@e.com>"], "Work")
+        assert moved == 3
+        # uid calls: three COPYs + one STORE = four total.
+        assert fake_mail.uid.call_count == 4
+        store_args = fake_mail.uid.call_args_list[3].args
+        assert store_args[0] == "store"
+        assert store_args[1] == b"<a@e.com>,<b@e.com>,<c@e.com>"
+        assert store_args[2] == "+FLAGS"
+        fake_mail.expunge.assert_called_once()
+
+    def test_partial_failure_still_single_expunge(self, fake_mail, monkeypatch):
+        monkeypatch.setattr(
+            imap_mod,
+            "_resolve_uid",
+            lambda mail, mid: None if mid == "<b@e.com>" else mid.encode(),
+        )
+        fake_mail.uid.return_value = ("OK", None)
+        moved = email_reader._bulk_move_uids(fake_mail, ["<a@e.com>", "<b@e.com>", "<c@e.com>"], "Work")
+        assert moved == 2
+        # two COPYs (b was skipped) + one STORE = three total.
+        assert fake_mail.uid.call_count == 3
+        fake_mail.expunge.assert_called_once()
+
+    def test_no_successful_copies_skips_expunge(self, fake_mail, monkeypatch):
+        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: mid.encode())
+        fake_mail.uid.return_value = ("BAD", None)
+        assert email_reader._bulk_move_uids(fake_mail, ["<a@e.com>"], "Work") == 0
+        fake_mail.expunge.assert_not_called()
+
+
+class TestBulkMoveRemote:
+    def test_empty_returns_zero(self, tmp_db, fake_credentials):
+        assert email_reader.bulk_move_remote([], "Work", db_path=tmp_db) == 0
+
+    def test_no_folder_returns_zero(self, tmp_db, fake_credentials):
+        assert email_reader.bulk_move_remote(["<a@e.com>"], "", db_path=tmp_db) == 0
+
+    def test_moves_on_server(self, monkeypatch, tmp_db, fake_credentials):
+        fake = MagicMock()
+
+        fake_imap_session(monkeypatch, imap_mod, fake)
+        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: mid.encode())
+        fake.uid.return_value = ("OK", None)
+        assert email_reader.bulk_move_remote(["<a@e.com>", "<b@e.com>"], "Work", db_path=tmp_db) == 2
+        fake.expunge.assert_called_once()
+
+    def test_swallows_imap_failure(self, monkeypatch, tmp_db, fake_credentials):
+        def boom(*a, **kw):
+            raise OSError("imap down")
+
+        monkeypatch.setattr(imap_mod, "imap_session", boom)
+        assert email_reader.bulk_move_remote(["<a@e.com>"], "Work", db_path=tmp_db) == 0
+
+
+class TestBulkDeleteRemote:
+    def test_empty_returns_zero(self, tmp_db, fake_credentials):
+        assert email_reader.bulk_delete_remote([], db_path=tmp_db) == 0
+
+    def test_trashes_on_server(self, monkeypatch, tmp_db, fake_credentials):
+        fake = MagicMock()
+
+        fake_imap_session(monkeypatch, imap_mod, fake)
+        monkeypatch.setattr(imap_mod, "find_trash_folder", lambda mail: "Trash")
+        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: mid.encode())
+        fake.uid.return_value = ("OK", None)
+        assert email_reader.bulk_delete_remote(["<a@e.com>", "<b@e.com>"], db_path=tmp_db) == 2
+        fake.expunge.assert_called_once()
+
+    def test_swallows_imap_failure(self, monkeypatch, tmp_db, fake_credentials):
+        def boom(*a, **kw):
+            raise OSError("imap down")
+
+        monkeypatch.setattr(imap_mod, "imap_session", boom)
+        assert email_reader.bulk_delete_remote(["<a@e.com>"], db_path=tmp_db) == 0
+
+
+class TestListFolders:
+    def test_no_credentials_returns_empty(self, monkeypatch, tmp_db):
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: False)
+        assert email_reader.list_folders(db_path=tmp_db) == []
+
+    def test_parses_folders(self, monkeypatch, tmp_db, fake_credentials):
+        fake = MagicMock()
+        fake.list.return_value = (
+            "OK",
+            [
+                b'(\\HasNoChildren) "/" "INBOX"',
+                b'(\\Noselect) "/" "root"',
+                b'(\\HasChildren) "/" "Work"',
+            ],
+        )
+
+        fake_imap_session(monkeypatch, imap_mod, fake)
+        folders = email_reader.list_folders(db_path=tmp_db)
+        assert "INBOX" in folders
+        assert "Work" in folders
+        assert "root" not in folders  # \\Noselect excluded

@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 REPO_OWNER = "mario-gurmeshevski"
 REPO_NAME = "inbox_lens"
 TAGS_URL = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/tags"
-REPO_URL = f"https://github.com/{REPO_OWNER}/{REPO_NAME}"
 
 DOCKER_SOCKET = "/var/run/docker.sock"
 DOCKER_API = "/v1.41"

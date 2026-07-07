@@ -1,4 +1,14 @@
-from src.scripts.cache.db import _connect, _batch_existing_hashes, _LIST_COLUMNS
+from src.scripts.cache.db import (
+    _connect,
+    _batch_existing_hashes,
+    _LIST_COLUMNS,
+    _row_to_dict,
+    STATUS_HEADERS_ONLY,
+    STATUS_FETCHED,
+    STATUS_CHECKED,
+    STATUS_FETCHED_NO_BODY,
+    HEADER_FILTER_STATUSES,
+)
 from src.scripts.utils import _parse_keyword_matches
 
 
@@ -15,8 +25,6 @@ def get_total_count(db_path: str) -> int:
 
 
 def get_email_by_hash(db_path: str, message_id_hash: str) -> dict | None:
-    from src.scripts.cache.db import _row_to_dict
-
     with _connect(db_path) as conn:
         row = conn.execute(
             "SELECT * FROM emails WHERE message_id_hash = ?",
@@ -43,7 +51,7 @@ def get_priority_counts(db_path: str) -> dict[str, int]:
 def get_counts(db_path: str) -> dict:
     with _connect(db_path) as conn:
         rows = conn.execute("SELECT status, COUNT(*) as cnt FROM emails GROUP BY status").fetchall()
-    counts = {"headers_only": 0, "fetched": 0, "checked": 0, "fetched_no_body": 0}
+    counts = dict.fromkeys((STATUS_HEADERS_ONLY, STATUS_FETCHED, STATUS_CHECKED, STATUS_FETCHED_NO_BODY), 0)
     for row in rows:
         if row["status"] in counts:
             counts[row["status"]] = row["cnt"]
@@ -82,12 +90,14 @@ def search_emails(
     conditions = []
     params: list = []
 
-    if status == "fetched":
+    if status == STATUS_FETCHED:
         conditions.append("status = 'fetched'")
-    elif status == "checked":
+    elif status == STATUS_CHECKED:
         conditions.append("status = 'checked'")
-    elif status == "headers_only":
-        conditions.append("status IN ('headers_only', 'fetched_no_body')")
+    elif status == STATUS_HEADERS_ONLY:
+        placeholders = ",".join("?" * len(HEADER_FILTER_STATUSES))
+        conditions.append(f"status IN ({placeholders})")
+        params.extend(HEADER_FILTER_STATUSES)
 
     if priority:
         conditions.append("category = ?")
@@ -117,6 +127,8 @@ def search_emails(
             "date": row["date"],
             "status": row["status"],
             "category": row["category"] or "unclassified",
+            "is_read": int(row["is_read"] or 0),
+            "is_starred": int(row["is_starred"] or 0),
         }
         d["keyword_matches"] = _parse_keyword_matches(row["keyword_matches"])
         emails.append(d)

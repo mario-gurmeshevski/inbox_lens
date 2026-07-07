@@ -1,13 +1,16 @@
 import asyncio
+import contextvars
 import json
 import os
 import socket
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from urllib.parse import urlencode
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, Query
+from fastapi import FastAPI, Request, Query, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -44,26 +47,31 @@ def _on_update_available(result: dict) -> None:
         pass
 
 
+def _start_monitor() -> None:
+    global _monitor
+    _monitor = idle_monitor.IdleMonitor(
+        db_path=DB_PATH,
+        on_refresh=lambda: event_bus.bus.publish("refresh"),
+    )
+    t = threading.Thread(
+        target=idle_monitor.run_initial_fetch,
+        kwargs={"db_path": DB_PATH, "on_refresh": lambda: event_bus.bus.publish("refresh")},
+        daemon=True,
+    )
+    t.start()
+    _monitor.start()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _monitor, _update_checker
+    global _update_checker
     cache._ensure_secret_key()
     cache._ensure_session_key()
     cache.init_db(DB_PATH)
     email_reader.load_keywords(DB_PATH)
 
     if cache.has_email_credentials(DB_PATH):
-        _monitor = idle_monitor.IdleMonitor(
-            db_path=DB_PATH,
-            on_refresh=lambda: event_bus.bus.publish("refresh"),
-        )
-        t = threading.Thread(
-            target=idle_monitor.run_initial_fetch,
-            kwargs={"db_path": DB_PATH, "on_refresh": lambda: event_bus.bus.publish("refresh")},
-            daemon=True,
-        )
-        t.start()
-        _monitor.start()
+        _start_monitor()
 
     if updater.is_docker_environment():
         if updater.cleanup_stale_containers():
@@ -77,6 +85,7 @@ async def lifespan(app: FastAPI):
         _update_checker.stop()
     if _monitor:
         _monitor.stop()
+    _imap_executor.shutdown(wait=False, cancel_futures=True)
 
 
 app = FastAPI(title="Email Reader Dashboard", lifespan=lifespan)
@@ -90,17 +99,36 @@ templates.env.filters["format_sender"] = lambda raw: _format_sender(raw)
 templates.env.filters["priority_bucket"] = lambda lvl: _priority_bucket(lvl) or "none"
 templates.env.filters["markdown"] = lambda t: _render_markdown(t)
 templates.env.globals["current_theme"] = lambda: _current_theme()
+templates.env.globals["urlencode"] = urlencode
 app.mount("/static/js", StaticFiles(directory=str(_WEB_DIR / "js")), name="js")
 app.mount("/static", StaticFiles(directory=str(_WEB_DIR / "static")), name="static")
+_request_settings: contextvars.ContextVar[dict | None] = contextvars.ContextVar("_request_settings", default=None)
+
+
+def _get_request_setting(key: str, default: str | None = None) -> str | None:
+    bag = _request_settings.get()
+    if bag is None:
+        bag = {}
+        _request_settings.set(bag)
+    if key not in bag:
+        bag[key] = cache.get_setting(key, DB_PATH) or default
+    return bag[key]
+
+
+def _path_is_public(path: str, exact: set[str], prefixes=()) -> bool:
+    if path in exact:
+        return True
+    return any(path.startswith(p) for p in prefixes)
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    _PUBLIC_PATHS = ("/login", "/static", "/health")
+    _PUBLIC_EXACT = {"/login", "/health"}
+    _PUBLIC_PREFIXES = ("/static",)
     _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if any(path.startswith(p) for p in self._PUBLIC_PATHS):
+        if _path_is_public(path, self._PUBLIC_EXACT, self._PUBLIC_PREFIXES):
             return await call_next(request)
 
         if not auth.is_auth_configured(DB_PATH):
@@ -125,24 +153,33 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 
 class SetupGuardMiddleware(BaseHTTPMiddleware):
-    _EXEMPT_PATHS = {
+    _EXEMPT_EXACT = {
         "/setup",
         "/setup-dashboard",
         "/login",
-        "/static",
         "/health",
         "/api/events",
         "/partials/tailscale-status",
     }
+    _EXEMPT_PREFIXES = ("/static",)
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if any(path.startswith(p) for p in self._EXEMPT_PATHS):
+        if _path_is_public(path, self._EXEMPT_EXACT, self._EXEMPT_PREFIXES):
             return await call_next(request)
         if not cache.has_email_credentials(DB_PATH):
             target = "/setup-dashboard" if not auth.is_auth_configured(DB_PATH) else "/setup"
             return RedirectResponse(target, status_code=303)
         return await call_next(request)
+
+
+class SettingsCacheMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        token = _request_settings.set(None)
+        try:
+            return await call_next(request)
+        finally:
+            _request_settings.reset(token)
 
 
 app.add_middleware(SetupGuardMiddleware)
@@ -155,6 +192,7 @@ app.add_middleware(
     https_only=SESSION_COOKIE_SECURE,
     max_age=SESSION_COOKIE_MAX_AGE,
 )
+app.add_middleware(SettingsCacheMiddleware)
 
 
 _GEOGRAPHIC_AREAS = frozenset(
@@ -222,6 +260,9 @@ def _flat_timezone_ids():
             yield tz_id
 
 
+_VALID_TZ_IDS = frozenset(_flat_timezone_ids())
+
+
 def _detect_local_timezone() -> str:
     candidates: list[str] = []
     try:
@@ -274,7 +315,7 @@ _THEMES = {"system", "light", "dark"}
 
 
 def _current_theme() -> str:
-    theme = cache.get_setting("theme", DB_PATH)
+    theme = _get_request_setting("theme")
     return theme if theme in _THEMES else "system"
 
 
@@ -283,9 +324,9 @@ def _format_date(date_str):
         return ""
     try:
         dt = parsedate_to_datetime(date_str)
-        tz_name = cache.get_setting("timezone", DB_PATH) or _LOCAL_TIMEZONE
+        tz_name = _get_request_setting("timezone") or _LOCAL_TIMEZONE
         dt = dt.astimezone(ZoneInfo(tz_name))
-        fmt_key = cache.get_setting("date_format", DB_PATH) or "default"
+        fmt_key = _get_request_setting("date_format") or "default"
         fmt = _DATE_FORMATS.get(fmt_key, _DATE_FORMATS["default"])
         return dt.strftime(fmt)
     except Exception:
@@ -294,7 +335,7 @@ def _format_date(date_str):
 
 def _format_sender(raw, mode=None):
     if mode is None:
-        mode = cache.get_setting("sender_display", DB_PATH) or "both"
+        mode = _get_request_setting("sender_display") or "both"
     if mode not in _SENDER_MODES:
         mode = "both"
     if not raw:
@@ -401,8 +442,6 @@ def _get_local_ips() -> list[str]:
             sock.close()
     except OSError:
         pass
-
-    # Secondary source: hostname resolution surfaces additional interfaces
     try:
         _, _, resolved = socket.gethostbyname_ex(socket.gethostname())
         ips.update(resolved)
@@ -476,7 +515,7 @@ def _tailscale_state(tailscale_ip: str, tailscale_login_url: str) -> str:
 
 
 @app.get("/health")
-async def health():
+def health():
     return {"status": "ok"}
 
 
@@ -533,19 +572,9 @@ async def setup_submit(request: Request):
     cache.init_db(DB_PATH)
     cache.save_setting("imap_server", imap_server, DB_PATH)
     cache.save_email_credentials(email_user, email_pass, DB_PATH)
+    email_reader.reset_folder_caches()
 
-    t = threading.Thread(
-        target=idle_monitor.run_initial_fetch,
-        kwargs={"db_path": DB_PATH, "on_refresh": lambda: event_bus.bus.publish("refresh")},
-        daemon=True,
-    )
-    t.start()
-
-    _monitor = idle_monitor.IdleMonitor(
-        db_path=DB_PATH,
-        on_refresh=lambda: event_bus.bus.publish("refresh"),
-    )
-    _monitor.start()
+    _start_monitor()
 
     return RedirectResponse("/", status_code=303)
 
@@ -681,14 +710,14 @@ def _account_context(db_path: str) -> dict:
 
 
 @app.get("/account", response_class=HTMLResponse)
-async def account_page(request: Request):
+def account_page(request: Request):
     if not cache.has_email_credentials(DB_PATH):
         return RedirectResponse("/setup-dashboard", status_code=303)
     return RedirectResponse("/", status_code=303)
 
 
 @app.get("/partials/account", response_class=HTMLResponse)
-async def partial_account(request: Request):
+def partial_account(request: Request):
     if not cache.has_email_credentials(DB_PATH):
         return RedirectResponse("/setup-dashboard", status_code=303)
     return templates.TemplateResponse(request, "partials/account.html", _account_context(DB_PATH))
@@ -748,7 +777,7 @@ def _settings_context(
     tailscale_ip = _get_tailscale_ip()
     tailscale_login_url = _get_tailscale_login_url()
     ts_state = _tailscale_state(tailscale_ip, tailscale_login_url)
-    port = int(os.getenv("WEB_PORT", "8000"))
+    port = WEB_PORT
     return {
         "network_access": network_on,
         "local_ips": local_ips,
@@ -780,7 +809,7 @@ def _settings_context(
 
 
 @app.get("/settings", response_class=HTMLResponse)
-async def settings_page(request: Request):
+def settings_page(request: Request):
     return templates.TemplateResponse(request, "settings.html", _settings_context(DB_PATH))
 
 
@@ -836,15 +865,22 @@ async def settings_api_key_revoke(request: Request):
     )
 
 
+def _save_validated_setting(key: str, value: str, allowed, default: str) -> None:
+    if value not in allowed:
+        value = default
+    cache.save_setting(key, value, DB_PATH)
+
+
+def _updated_response() -> Response:
+    return Response(status_code=204, headers={"X-Toast": "Updated", "X-Toast-Tone": "success"})
+
+
 @app.post("/settings/timezone", response_class=HTMLResponse)
 async def settings_timezone(request: Request):
     form = await request.form()
     tz = str(form.get("timezone", "UTC")).strip()
-    valid_tzs = {tz_id for tz_id in _flat_timezone_ids()}
-    if tz not in valid_tzs:
-        tz = _LOCAL_TIMEZONE
-    cache.save_setting("timezone", tz, DB_PATH)
-    return Response(status_code=204, headers={"X-Toast": "Updated"})
+    _save_validated_setting("timezone", tz, _VALID_TZ_IDS, _LOCAL_TIMEZONE)
+    return _updated_response()
 
 
 @app.post("/settings/preferences", response_class=HTMLResponse)
@@ -852,13 +888,9 @@ async def settings_preferences(request: Request):
     form = await request.form()
     date_format = str(form.get("date_format", "default")).strip()
     sender_display = str(form.get("sender_display", "both")).strip()
-    if date_format not in _DATE_FORMATS:
-        date_format = "default"
-    if sender_display not in _SENDER_MODES:
-        sender_display = "both"
-    cache.save_setting("date_format", date_format, DB_PATH)
-    cache.save_setting("sender_display", sender_display, DB_PATH)
-    return Response(status_code=204, headers={"X-Toast": "Updated"})
+    _save_validated_setting("date_format", date_format, _DATE_FORMATS, "default")
+    _save_validated_setting("sender_display", sender_display, _SENDER_MODES, "both")
+    return _updated_response()
 
 
 @app.post("/settings/page-size", response_class=HTMLResponse)
@@ -872,17 +904,15 @@ async def settings_page_size(request: Request):
     if val not in _PAGE_SIZE_VALUES:
         val = _DEFAULT_PAGE_SIZE
     cache.save_setting("page_size", str(val), DB_PATH)
-    return Response(status_code=204, headers={"X-Toast": "Updated"})
+    return _updated_response()
 
 
 @app.post("/settings/theme", response_class=HTMLResponse)
 async def settings_theme(request: Request):
     form = await request.form()
     theme = str(form.get("theme", "system")).strip()
-    if theme not in _THEMES:
-        theme = "system"
-    cache.save_setting("theme", theme, DB_PATH)
-    return Response(status_code=204, headers={"X-Toast": "Updated"})
+    _save_validated_setting("theme", theme, _THEMES, "system")
+    return _updated_response()
 
 
 def _level_sort_key(level):
@@ -910,7 +940,7 @@ def _keywords_partial(request: Request, db_path: str, msg: str | None = None, ms
 
 
 @app.get("/keywords", response_class=HTMLResponse)
-async def keywords_page(request: Request):
+def keywords_page(request: Request):
     import_status = request.query_params.get("import")
     msg: str | None = None
     msg_ok = False
@@ -1074,7 +1104,7 @@ async def keywords_rescan(request: Request):
 
 
 @app.get("/partials/update-banner", response_class=HTMLResponse)
-async def partial_update_banner(request: Request):
+def partial_update_banner(request: Request):
     return templates.TemplateResponse(
         request, "partials/update_banner.html", {"is_docker": _is_docker(), "update": _update_info(DB_PATH)}
     )
@@ -1161,14 +1191,14 @@ def _email_list_context(db_path, status, priority, search, page, page_size=None)
 
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request):
+def dashboard(request: Request):
     ctx = _dashboard_context(DB_PATH)
     ctx["monitor_active"] = _monitor is not None and _monitor.running
     return templates.TemplateResponse(request, "dashboard.html", ctx)
 
 
 @app.get("/emails", response_class=HTMLResponse)
-async def email_list(
+def email_list(
     request: Request,
     status: str = Query("", alias="status"),
     priority: str = Query("", alias="priority"),
@@ -1181,7 +1211,7 @@ async def email_list(
 
 
 @app.get("/emails/{email_hash}", response_class=HTMLResponse)
-async def email_detail(request: Request, email_hash: str):
+def email_detail(request: Request, email_hash: str):
     email_data = cache.get_email_by_hash(DB_PATH, email_hash)
     if not email_data:
         return HTMLResponse("<h1>Email not found</h1>", status_code=404)
@@ -1209,6 +1239,163 @@ async def delete_email(request: Request, email_hash: str):
     return RedirectResponse("/emails", status_code=303)
 
 
+def _notify_refresh():
+    event_bus.bus.publish("refresh")
+
+
+def _toast(message: str, tone: str = "success") -> Response:
+    return Response(status_code=204, headers={"X-Toast": message, "X-Toast-Tone": tone})
+
+
+_imap_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="imap-sync")
+
+
+def _defer(func, *args, **kwargs):
+    _imap_executor.submit(func, *args, **kwargs)
+
+
+def _apply_flag(
+    hashes: list[str],
+    message_ids: list[str],
+    field: str,
+    flag: str,
+    value: bool,
+    message: str,
+) -> Response:
+    if field == "read":
+        cache.set_read_by_hashes(DB_PATH, hashes, value)
+    else:
+        cache.set_starred_by_hashes(DB_PATH, hashes, value)
+    if message_ids:
+        _defer(email_reader.bulk_set_flag_remote, message_ids, flag, value)
+    _notify_refresh()
+    return _toast(message)
+
+
+def _toggle_email_flag(
+    email_hash: str,
+    flag_field: str,
+    imap_flag: str,
+    on_label: str,
+    off_label: str,
+) -> Response:
+    email_data = cache.get_email_by_hash(DB_PATH, email_hash)
+    if not email_data:
+        return _toast("Email not found", "error")
+    on = not bool(email_data.get(flag_field))
+    message_id = email_data.get("message_id", "") or ""
+    return _apply_flag(
+        [email_hash],
+        [message_id] if message_id else [],
+        "read" if flag_field == "is_read" else "starred",
+        imap_flag,
+        on,
+        on_label if on else off_label,
+    )
+
+
+@app.post("/emails/{email_hash}/toggle-read")
+async def toggle_read(request: Request, email_hash: str):
+    return _toggle_email_flag(email_hash, "is_read", "\\Seen", "Marked as read", "Marked as unread")
+
+
+@app.post("/emails/{email_hash}/toggle-star")
+async def toggle_star(request: Request, email_hash: str):
+    return _toggle_email_flag(email_hash, "is_starred", "\\Flagged", "Starred", "Unstarred")
+
+
+@app.post("/emails/{email_hash}/archive")
+def archive_email(request: Request, email_hash: str):
+    email_data = cache.get_email_by_hash(DB_PATH, email_hash)
+    if not email_data:
+        return RedirectResponse("/emails", status_code=303)
+    message_id = email_data.get("message_id", "")
+    if message_id:
+        cache.delete_email(message_id, DB_PATH)
+        _defer(email_reader.archive_remote, message_id, DB_PATH)
+    _notify_refresh()
+    return RedirectResponse("/emails", status_code=303)
+
+
+@app.post("/emails/{email_hash}/move")
+def move_email(request: Request, email_hash: str, folder: str = Form(...)):
+    email_data = cache.get_email_by_hash(DB_PATH, email_hash)
+    if not email_data:
+        return RedirectResponse("/emails", status_code=303)
+    message_id = email_data.get("message_id", "")
+    if message_id and email_reader._validate_folder_name(folder):
+        cache.delete_email(message_id, DB_PATH)
+        _defer(email_reader.move_remote, message_id, folder, DB_PATH)
+    _notify_refresh()
+    return RedirectResponse("/emails", status_code=303)
+
+
+@app.get("/folders")
+def list_folders(request: Request):
+    return JSONResponse({"folders": email_reader.list_folders(db_path=DB_PATH)})
+
+
+@app.post("/emails/bulk")
+async def bulk_email_action(request: Request):
+    form = await request.form()
+    action = (form.get("action") or "").strip()
+    folder = (form.get("folder") or "").strip()
+    hashes = form.getlist("hashes")
+    hashes = [h for h in hashes if h]
+
+    if not hashes:
+        return _toast("No emails selected", "warning")
+
+    pairs = cache.get_message_ids_by_hashes(DB_PATH, hashes)
+    message_ids = [mid for _, mid in pairs]
+    count = len(message_ids)
+
+    def _bulk_remote_delete(_ids):
+        cache.delete_emails_by_hashes(DB_PATH, hashes)
+        _defer(email_reader.bulk_delete_remote, _ids)
+        _notify_refresh()
+        return _toast(f"Removed {count}")
+
+    def _bulk_remote_archive(_ids):
+        cache.delete_emails_by_hashes(DB_PATH, hashes)
+        _defer(email_reader.bulk_archive_remote, _ids, DB_PATH)
+        _notify_refresh()
+        return _toast(f"Removed {count} from inbox")
+
+    def _bulk_remote_move(_ids):
+        if not email_reader._validate_folder_name(folder):
+            return _toast("No destination folder provided", "warning")
+        cache.delete_emails_by_hashes(DB_PATH, hashes)
+        _defer(email_reader.bulk_move_remote, _ids, folder)
+        _notify_refresh()
+        return _toast(f"Moved {count} to {folder}")
+
+    flag_actions = {
+        "read": ("read", "\\Seen", True),
+        "unread": ("read", "\\Seen", False),
+        "star": ("starred", "\\Flagged", True),
+        "unstar": ("starred", "\\Flagged", False),
+    }
+    if action in flag_actions:
+        field, flag, on = flag_actions[action]
+        if field == "read":
+            msg = f"Marked {count} as {action}"
+        else:
+            msg = f"{'Starred' if on else 'Unstarred'} {count}"
+        return _apply_flag(hashes, message_ids, field, flag, on, msg)
+
+    remote_actions = {
+        "archive": _bulk_remote_archive,
+        "delete": _bulk_remote_delete,
+        "move": _bulk_remote_move,
+    }
+    handler = remote_actions.get(action)
+    if handler is not None:
+        return handler(message_ids)
+
+    return _toast("Unknown action", "error")
+
+
 @app.get("/api/events")
 async def sse_events(request: Request):
     q = event_bus.bus.subscribe()
@@ -1230,12 +1417,12 @@ async def sse_events(request: Request):
 
 
 @app.get("/partials/dashboard", response_class=HTMLResponse)
-async def partial_dashboard(request: Request):
+def partial_dashboard(request: Request):
     return templates.TemplateResponse(request, "partials/dashboard_content.html", _dashboard_context(DB_PATH))
 
 
 @app.get("/partials/emails", response_class=HTMLResponse)
-async def partial_emails(
+def partial_emails(
     request: Request,
     status: str = Query("", alias="status"),
     priority: str = Query("", alias="priority"),
@@ -1248,7 +1435,7 @@ async def partial_emails(
 
 
 @app.get("/partials/email-detail/{email_hash}", response_class=HTMLResponse)
-async def partial_email_detail(request: Request, email_hash: str):
+def partial_email_detail(request: Request, email_hash: str):
     email_data = cache.get_email_by_hash(DB_PATH, email_hash)
     if not email_data:
         return HTMLResponse("<p>Email not found</p>", status_code=404)
@@ -1268,7 +1455,7 @@ async def partial_tailscale_status(request: Request):
     tailscale_ip = _get_tailscale_ip()
     tailscale_login_url = _get_tailscale_login_url()
     ts_state = _tailscale_state(tailscale_ip, tailscale_login_url)
-    port = int(os.getenv("WEB_PORT", "8000"))
+    port = WEB_PORT
     return templates.TemplateResponse(
         request,
         "partials/tailscale_status.html",

@@ -30,7 +30,6 @@
   }
 
   // Remove a toast, cancelling any pending timers so neither auto-dismiss
-  // nor stack-limit eviction can fire on an element that's already gone.
   function dismiss(el) {
     if (!el) return;
     if (el._leaveTimer) { window.clearTimeout(el._leaveTimer); el._leaveTimer = null; }
@@ -90,7 +89,9 @@
     if (!xhr || !xhr.getResponseHeader) return;
     const msg = xhr.getResponseHeader("X-Toast");
     if (!msg) return;
+    const toneHeader = xhr.getResponseHeader("X-Toast-Tone");
     const failed = e.detail.failed;
-    showToast(msg, failed ? "error" : "success");
+    const tone = toneHeader || (failed ? "error" : "success");
+    showToast(msg, tone);
   });
 })();

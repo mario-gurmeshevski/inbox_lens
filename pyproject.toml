@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "inbox-lens"
-version = "1.8.1"
+version = "1.9.0"
 description = "Fetch, cache, and scan emails via IMAP with keyword-based priority tagging and a web dashboard"
 requires-python = ">=3.12"
 dependencies = [
@@ -29,6 +29,7 @@ dev = [
     "ruff==0.15.18",
     "httpx2==2.4.0",
     "djlint==1.39.4",
+    "vulture==2.16",
 ]
 
 [tool.pytest.ini_options]
@@ -51,6 +52,21 @@ exclude_lines = [
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+
+[tool.vulture]
+paths = ["src/scripts"]
+ignore_decorators = ["@app.get", "@app.post"]
+ignore_names = [
+    "dispatch",
+    "ignore_links",
+    "ignore_images",
+    "body_width",
+    "close_all_connections",
+    "reset_rate_limit",
+    "update_in_progress",
+    "check_now",
+    "row_factory",
+]
 
 [tool.djlint]
 profile = "jinja"

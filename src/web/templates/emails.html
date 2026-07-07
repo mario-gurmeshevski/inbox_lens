@@ -4,12 +4,15 @@
   %}
   <link rel="stylesheet" href="/static/emails.css" />
 {% endblock %}
+{% block scripts %}
+  <script src="/static/js/emails.js" defer></script>
+{% endblock %}
 {% block content %}
   <h1>
     Emails
     <span class="total-count">({{ total_rows }} total)</span>
   </h1>
-  <form class="filter-bar" method="get" action="/emails">
+  <form class="toolbar filter-bar" method="get" action="/emails">
     <select name="status" id="filter-status">
       <option value="" {% if status == "" %}selected{% endif %}>All Status</option>
       <option value="fetched" {% if status == "fetched" %}selected{% endif %}>Fetched</option>
@@ -37,18 +40,74 @@
       Clear
     </a>
   </form>
+  <div class="toolbar bulk-toolbar" data-bulk-toolbar hidden>
+    <span class="bulk-count" data-bulk-count>0 selected</span>
+    <div class="bulk-actions">
+      <button type="button" class="btn btn-sm" data-bulk-action="read">
+        <i data-lucide="mail-open" class="icon-sm"></i>
+        Mark read
+      </button>
+      <button type="button" class="btn btn-sm" data-bulk-action="unread">
+        <i data-lucide="mail" class="icon-sm"></i>
+        Mark unread
+      </button>
+      <button type="button" class="btn btn-sm" data-bulk-action="star">
+        <i data-lucide="star" class="icon-sm"></i>
+        Star
+      </button>
+      <button type="button" class="btn btn-sm" data-bulk-action="unstar">
+        <i data-lucide="star-off" class="icon-sm"></i>
+        Unstar
+      </button>
+      <button type="button"
+              class="btn btn-sm"
+              data-bulk-action="move"
+              data-confirm="Move selected emails to a folder?"
+              data-confirm-title="Move emails"
+              data-confirm-tone="warning"
+              data-confirm-label="Choose folder">
+        <i data-lucide="folder-input" class="icon-sm"></i>
+        Move
+      </button>
+      <button type="button"
+              class="btn btn-sm btn-danger"
+              data-bulk-action="archive"
+              data-confirm="Archive the selected emails? They will be moved out of your INBOX."
+              data-confirm-title="Archive emails?"
+              data-confirm-tone="danger"
+              data-confirm-label="Archive">
+        <i data-lucide="archive" class="icon-sm"></i>
+        Archive
+      </button>
+      <button type="button"
+              class="btn btn-sm btn-danger"
+              data-bulk-action="delete"
+              data-confirm="Delete the selected emails? This moves them to your trash folder."
+              data-confirm-title="Delete emails?"
+              data-confirm-tone="danger"
+              data-confirm-label="Delete">
+        <i data-lucide="trash-2" class="icon-sm"></i>
+        Delete
+      </button>
+    </div>
+  </div>
+  {# Build the query string once, URL-encoded, so search terms containing
+     &, =, #, +, etc. don't break the hx-get / pagination hrefs below. #}
+  {% set q = urlencode({"status": status, "priority": priority, "search": search, "page": page}) %}
+  {% set q_prev = urlencode({"status": status, "priority": priority, "search": search, "page": page - 1}) %}
+  {% set q_next = urlencode({"status": status, "priority": priority, "search": search, "page": page + 1}) %}
   <div id="email-table"
-       hx-get="/partials/emails?status={{ status }}&priority={{ priority }}&search={{ search }}&page={{ page }}"
+       hx-get="/partials/emails?{{ q }}"
        hx-trigger="sse:refresh"
        hx-swap="innerHTML">{% include "partials/email_table.html" %}</div>
   {% if total_pages > 1 %}
     <div class="pagination">
       {% if page > 1 %}
-        <a href="{{ url_for('email_list') }}?status={{ status }}&priority={{ priority }}&search={{ search }}&page={{ page - 1 }}">&laquo; Prev</a>
+        <a href="{{ url_for('email_list') }}?{{ q_prev }}">&laquo; Prev</a>
       {% endif %}
       <span class="current">Page {{ page }} of {{ total_pages }}</span>
       {% if page < total_pages %}
-        <a href="{{ url_for('email_list') }}?status={{ status }}&priority={{ priority }}&search={{ search }}&page={{ page + 1 }}">Next &raquo;</a>
+        <a href="{{ url_for('email_list') }}?{{ q_next }}">Next &raquo;</a>
       {% endif %}
     </div>
   {% endif %}

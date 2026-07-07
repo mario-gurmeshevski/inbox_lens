@@ -4,24 +4,7 @@ import sqlite3
 import pytest
 
 from src.scripts import cache
-
-
-def _save_fetched(email, db):
-    cache.save_headers_batch([email], db)
-    cache.update_bodies_batch([(email["message_id"], email.get("body", ""))], db)
-    h = cache._hash_message_id(email["message_id"])
-    keyword_matches = email.get("keyword_matches")
-    keyword_json = json.dumps(keyword_matches, ensure_ascii=False) if keyword_matches else None
-    with cache._connect(db) as conn:
-        conn.execute(
-            "UPDATE emails SET category = ?, keyword_matches = ? WHERE message_id_hash = ?",
-            (email.get("_category"), keyword_json, h),
-        )
-
-
-def _save_fetched_batch(emails, db):
-    for e in emails:
-        _save_fetched(e, db)
+from src.tests._helpers import save_fetched as _save_fetched, save_fetched_batch as _save_fetched_batch
 
 
 class TestHashMessageId:
@@ -369,6 +352,29 @@ class TestUpdateBodiesBatch:
     def test_empty_list_returns_zero(self, tmp_db):
         assert cache.update_bodies_batch([], tmp_db) == 0
 
+    def test_mixed_simple_and_flag_rows_counts_both(self, tmp_db, sample_headers_batch):
+        cache.save_headers_batch(sample_headers_batch, tmp_db)
+        mid_a = sample_headers_batch[0]["message_id"]
+        mid_b = sample_headers_batch[1]["message_id"]
+        updates = [
+            (mid_a, "simple body"),  # 2-tuple
+            (mid_b, "flag body", 1, 1),  # 4-tuple
+        ]
+        updated = cache.update_bodies_batch(updates, tmp_db)
+        assert updated == 2
+        ha = cache._hash_message_id(mid_a)
+        hb = cache._hash_message_id(mid_b)
+        with cache._connect(tmp_db) as conn:
+            row_a = conn.execute("SELECT body, is_read FROM emails WHERE message_id_hash = ?", (ha,)).fetchone()
+            row_b = conn.execute(
+                "SELECT body, is_read, is_starred FROM emails WHERE message_id_hash = ?", (hb,)
+            ).fetchone()
+        assert row_a["body"] == "simple body"
+        assert int(row_a["is_read"] or 0) == 0  # simple row leaves flags untouched
+        assert row_b["body"] == "flag body"
+        assert int(row_b["is_read"]) == 1
+        assert int(row_b["is_starred"]) == 1
+
 
 class TestGetHeadersOnlyMessageIds:
     def test_returns_message_ids_with_headers_only_status(self, tmp_db, sample_headers_batch):
@@ -680,3 +686,160 @@ class TestScanKeywordsEdgeCases:
         text = "important important important"
         result = cache._scan_keywords(text, compiled_patterns)
         assert result["10"] == ["important"]
+
+
+class TestReadStarredColumns:
+    def _seed(self, db, n=2):
+        for i in range(n):
+            cache.save_headers_batch(
+                [
+                    {
+                        "message_id": f"<rs{i}@e.com>",
+                        "from": f"s{i}@e.com",
+                        "subject": f"Subject {i}",
+                        "date": f"Mon, 0{i + 1} Jan 2024 10:00:00 +0000",
+                        "thread_id": None,
+                        "in_reply_to": None,
+                    }
+                ],
+                db,
+            )
+            cache.update_bodies_batch([(f"<rs{i}@e.com>", f"body{i}")], db)
+
+    def test_defaults_are_zero(self, tmp_db):
+        self._seed(tmp_db)
+        emails, _, _ = cache.search_emails(tmp_db)
+        assert all(e["is_read"] == 0 for e in emails)
+        assert all(e["is_starred"] == 0 for e in emails)
+
+    def test_set_read_by_hashes_bulk(self, tmp_db):
+        self._seed(tmp_db, 3)
+        hashes = [cache._hash_message_id(f"<rs{i}@e.com>") for i in range(3)]
+        updated = cache.set_read_by_hashes(tmp_db, hashes, True)
+        assert updated == 3
+        for h in hashes:
+            assert cache.get_email_by_hash(tmp_db, h)["is_read"] == 1
+
+    def test_set_starred_by_hashes_bulk(self, tmp_db):
+        self._seed(tmp_db, 3)
+        hashes = [cache._hash_message_id(f"<rs{i}@e.com>") for i in range(3)]
+        assert cache.set_starred_by_hashes(tmp_db, hashes, True) == 3
+        # Toggle off
+        assert cache.set_starred_by_hashes(tmp_db, hashes, False) == 3
+        for h in hashes:
+            assert cache.get_email_by_hash(tmp_db, h)["is_starred"] == 0
+
+    def test_set_read_by_hashes_empty(self, tmp_db):
+        assert cache.set_read_by_hashes(tmp_db, [], True) == 0
+
+    def test_set_flag_by_hashes_rejects_unknown_column(self, tmp_db):
+        with pytest.raises(ValueError):
+            cache._set_flag_by_hashes(tmp_db, ["h"], "body", True)
+        with pytest.raises(ValueError):
+            cache._set_flag_by_hashes(tmp_db, ["h"], "is_read; DROP TABLE emails", True)
+
+    def test_get_message_ids_by_hashes(self, tmp_db):
+        self._seed(tmp_db, 2)
+        h0 = cache._hash_message_id("<rs0@e.com>")
+        h1 = cache._hash_message_id("<rs1@e.com>")
+        pairs = cache.get_message_ids_by_hashes(tmp_db, [h0, h1, "nonexistent"])
+        mids = {p[1] for p in pairs}
+        assert "<rs0@e.com>" in mids
+        assert "<rs1@e.com>" in mids
+        assert len(pairs) == 2
+
+    def test_delete_emails_by_hashes(self, tmp_db):
+        self._seed(tmp_db, 3)
+        hashes = [cache._hash_message_id(f"<rs{i}@e.com>") for i in range(3)]
+        removed = cache.delete_emails_by_hashes(tmp_db, hashes)
+        assert removed == 3
+        assert cache.get_total_count(tmp_db) == 0
+
+    def test_delete_emails_by_hashes_empty(self, tmp_db):
+        assert cache.delete_emails_by_hashes(tmp_db, []) == 0
+
+    def test_update_bodies_batch_with_flags(self, tmp_db):
+        cache.save_headers_batch(
+            [
+                {
+                    "message_id": "<flag@e.com>",
+                    "from": "s@e.com",
+                    "subject": "S",
+                    "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                    "thread_id": None,
+                    "in_reply_to": None,
+                }
+            ],
+            tmp_db,
+        )
+        cache.update_bodies_batch([("<flag@e.com>", "body", True, True)], tmp_db)
+        h = cache._hash_message_id("<flag@e.com>")
+        email = cache.get_email_by_hash(tmp_db, h)
+        assert email["is_read"] == 1
+        assert email["is_starred"] == 1
+        assert email["body"] == "body"
+
+
+class TestSchemaMigration:
+    def test_migrates_existing_database_without_losing_data(self, tmp_path):
+        import sqlite3
+
+        db_path = str(tmp_path / "old.db")
+        old_schema = """
+        CREATE TABLE emails (
+            message_id_hash TEXT PRIMARY KEY,
+            message_id TEXT NOT NULL,
+            sender TEXT,
+            subject TEXT,
+            date TEXT,
+            date_parsed TEXT,
+            body TEXT,
+            status TEXT DEFAULT 'fetched',
+            category TEXT,
+            keyword_matches TEXT,
+            thread_id TEXT,
+            in_reply_to TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        """
+        with sqlite3.connect(db_path) as conn:
+            conn.executescript(old_schema)
+            conn.execute(
+                "INSERT INTO emails (message_id_hash, message_id, sender, subject) "
+                "VALUES ('h1', '<m@e.com>', 's@e.com', 'preserved')"
+            )
+
+        cache.init_db(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM emails WHERE message_id_hash = 'h1'").fetchone()
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(emails)").fetchall()}
+
+        assert "is_read" in cols
+        assert "is_starred" in cols
+        assert row["subject"] == "preserved"
+        assert int(row["is_read"] or 0) == 0
+        assert int(row["is_starred"] or 0) == 0
+
+    def test_migrate_is_idempotent(self, tmp_db):
+        cache.init_db(tmp_db)
+        cache.init_db(tmp_db)
+        cache.save_headers_batch(
+            [
+                {
+                    "message_id": "<idem@e.com>",
+                    "from": "s@e.com",
+                    "subject": "S",
+                    "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                    "thread_id": None,
+                    "in_reply_to": None,
+                }
+            ],
+            tmp_db,
+        )
+        assert cache.get_total_count(tmp_db) == 1

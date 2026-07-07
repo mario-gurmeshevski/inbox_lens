@@ -1,27 +1,34 @@
-.PHONY: install uninstall dev-install web test test-cov lint format clean reset up up-ts down stop start tailscale-up tailscale-status tailscale-ip tailscale-logout purge
+.PHONY: install uninstall dev-install web test test-cov lint format unused pre-commit clean reset up up-ts down stop start tailscale-up tailscale-status tailscale-ip tailscale-logout purge
 
 PYTHON ?= python3
 VENV := .venv
 VENV_PIP := $(VENV)/bin/pip
 VENV_PYTHON := $(VENV)/bin/python
 DJLINT := $(VENV)/bin/djlint
+RUNTIME_STAMP := $(VENV)/.runtime.stamp
+DEV_STAMP := $(VENV)/.dev.stamp
 -include .env
 WEB_HOST ?= 0.0.0.0
 WEB_PORT ?= 8000
 
 COMPOSE_FILES_TS = -f docker-compose.yaml -f docker-compose.tailscale.yaml
 
-$(VENV):
+$(RUNTIME_STAMP): .python-version
 	$(PYTHON) -m venv $(VENV)
+	@touch $(RUNTIME_STAMP)
 
-install: $(VENV)
+install: $(RUNTIME_STAMP)
 	$(VENV_PIP) install -e .
+	@touch $(DEV_STAMP)
 
 uninstall:
 	rm -rf $(VENV)
 
-dev-install: install
+dev-install: $(DEV_STAMP)
+
+$(DEV_STAMP): $(RUNTIME_STAMP) pyproject.toml
 	$(VENV_PIP) install -e ".[dev]"
+	@touch $(DEV_STAMP)
 
 web:
 	$(VENV_PYTHON) -m uvicorn src.scripts.web:app --host $(WEB_HOST) --port $(WEB_PORT) --reload
@@ -34,11 +41,17 @@ test-cov: dev-install
 
 lint: dev-install
 	$(VENV_PYTHON) -m ruff check src/
+	$(VENV_PYTHON) -m vulture src/scripts
 	$(DJLINT) --check src/web/templates
 
 format: dev-install
 	$(VENV_PYTHON) -m ruff format src/
 	$(DJLINT) --reformat src/web/templates
+
+unused: dev-install
+	$(VENV_PYTHON) -m vulture src/scripts
+
+pre-commit: format lint test
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +

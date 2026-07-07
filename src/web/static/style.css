@@ -88,6 +88,15 @@ body {
   margin-left: 0.5rem;
 }
 
+.focus-ring:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.focus-ring:focus:not(:focus-visible) {
+  outline: none;
+}
+
 .col-priority {
   width: 80px;
 }
@@ -445,6 +454,11 @@ td a:hover {
 .badge-checked {
   background: var(--success-tint-bg);
   color: var(--success);
+}
+
+.star-on {
+  color: var(--warning);
+  fill: var(--warning);
 }
 
 .detail-card {

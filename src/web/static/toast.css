@@ -64,7 +64,6 @@
   color: var(--warning);
 }
 
-/* Dark mode: lift the shadow so elevated toasts read clearly on dark surfaces */
 [data-theme="dark"] .toast {
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
 }

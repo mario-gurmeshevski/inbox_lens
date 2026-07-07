@@ -1,0 +1,17 @@
+{# Shared priority-badge helpers.
+
+The 4-tier threshold ladder (cat >= 9 -> critical, >= 7 -> high, >= 5 -> medium,
+else low) was duplicated between email_table.html and email_detail_content.html.
+These macros give a single source of truth for the level -> class mapping.
+#}
+{%- macro priority_badge_class(cat) -%}
+  {%- if cat | int >= 9 -%}badge-critical
+  {%- elif cat | int >= 7 -%}badge-high
+  {%- elif cat | int >= 5 -%}badge-medium
+  {%- else -%}badge-low
+  {%- endif -%}
+{%- endmacro -%}
+{# Render a single category badge: "<cat>: <count>" (used by the emails list). #}
+{%- macro priority_badge(cat, words) -%}
+  <span class="badge {{ priority_badge_class(cat) }}">{{ cat }}: {{ words | length }}</span>
+{%- endmacro -%}

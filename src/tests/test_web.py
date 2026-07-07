@@ -3,24 +3,8 @@ from unittest.mock import patch
 
 import pytest
 
-from src.scripts import cache, web
-
-
-def _raise(exc):
-    raise exc
-
-
-def _save_fetched_batch(emails, db):
-    for email in emails:
-        cache.save_headers_batch([email], db)
-        cache.update_bodies_batch([(email["message_id"], email.get("body", ""))], db)
-        if email.get("_category") is not None:
-            h = cache._hash_message_id(email["message_id"])
-            with cache._connect(db) as conn:
-                conn.execute(
-                    "UPDATE emails SET category = ? WHERE message_id_hash = ?",
-                    (email["_category"], h),
-                )
+from src.scripts import cache, email_reader, web
+from src.tests._helpers import _raise, save_fetched_batch as _save_fetched_batch
 
 
 class TestFormatDate:
@@ -228,6 +212,244 @@ class TestWebEndpoints:
             client = self._make_client()
             resp = client.post("/emails/nonexistent/delete", follow_redirects=False)
         assert resp.status_code == 303
+
+    def test_toggle_read_returns_204_and_flips_state(self):
+        self._seed_emails(1)
+        email_hash = cache._hash_message_id("<web0@e.com>")
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_defer") as mock_defer,
+        ):
+            client = self._make_client()
+            resp = client.post(f"/emails/{email_hash}/toggle-read")
+        assert resp.status_code == 204
+        assert "X-Toast" in resp.headers
+        assert cache.get_email_by_hash(self.db_path, email_hash)["is_read"] == 1
+        mock_defer.assert_called_once()
+        assert mock_defer.call_args.args[0] == email_reader.bulk_set_flag_remote
+        assert mock_defer.call_args.args[2] == "\\Seen"
+        assert mock_defer.call_args.args[3] is True
+
+    def test_toggle_read_nonexistent_returns_error_toast(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post("/emails/nonexistent/toggle-read")
+        assert resp.status_code == 204
+        assert "not found" in resp.headers["X-Toast"].lower()
+
+    def test_toggle_star_returns_204_and_flips_state(self):
+        self._seed_emails(1)
+        email_hash = cache._hash_message_id("<web0@e.com>")
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_defer") as mock_defer,
+        ):
+            client = self._make_client()
+            resp = client.post(f"/emails/{email_hash}/toggle-star")
+        assert resp.status_code == 204
+        assert cache.get_email_by_hash(self.db_path, email_hash)["is_starred"] == 1
+        mock_defer.assert_called_once()
+        assert mock_defer.call_args.args[0] == email_reader.bulk_set_flag_remote
+        assert mock_defer.call_args.args[2] == "\\Flagged"
+        assert mock_defer.call_args.args[3] is True
+
+    def test_archive_redirects_to_emails(self):
+        self._seed_emails(1)
+        email_hash = cache._hash_message_id("<web0@e.com>")
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_defer") as mock_defer,
+        ):
+            client = self._make_client()
+            resp = client.post(f"/emails/{email_hash}/archive", follow_redirects=False)
+        assert resp.status_code == 303
+        # Non-blocking: the row is removed locally now, the IMAP move is deferred.
+        assert cache.get_total_count(self.db_path) == 0
+        mock_defer.assert_called_once()
+        assert mock_defer.call_args.args[0] == email_reader.archive_remote
+
+    def test_archive_nonexistent_hash_redirects(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_defer") as mock_defer,
+        ):
+            client = self._make_client()
+            resp = client.post("/emails/nonexistent/archive", follow_redirects=False)
+        assert resp.status_code == 303
+        mock_defer.assert_not_called()
+
+    def test_move_redirects_to_emails(self):
+        self._seed_emails(1)
+        email_hash = cache._hash_message_id("<web0@e.com>")
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_defer") as mock_defer,
+        ):
+            client = self._make_client()
+            resp = client.post(
+                f"/emails/{email_hash}/move",
+                data={"folder": "Work"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 303
+        # Non-blocking: the row is removed locally now, the IMAP move is deferred.
+        assert cache.get_total_count(self.db_path) == 0
+        mock_defer.assert_called_once()
+        assert mock_defer.call_args.args[0] == email_reader.move_remote
+        assert mock_defer.call_args.args[2] == "Work"
+
+    def test_move_with_unsafe_folder_keeps_row(self):
+        self._seed_emails(1)
+        email_hash = cache._hash_message_id("<web0@e.com>")
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_defer") as mock_defer,
+        ):
+            client = self._make_client()
+            resp = client.post(
+                f"/emails/{email_hash}/move",
+                data={"folder": 'a"b'},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 303
+        assert cache.get_total_count(self.db_path) == 1
+        mock_defer.assert_not_called()
+
+    def test_folders_endpoint_returns_list(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch("src.scripts.email_reader.list_folders", return_value=["INBOX", "Work"]),
+        ):
+            client = self._make_client()
+            resp = client.get("/folders")
+        assert resp.status_code == 200
+        assert resp.json() == {"folders": ["INBOX", "Work"]}
+
+    def test_bulk_action_with_no_selection_warns(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post("/emails/bulk", data={"action": "read"})
+        assert resp.status_code == 204
+        assert "no emails" in resp.headers["X-Toast"].lower()
+
+    def test_bulk_read_applies_to_selected(self):
+        self._seed_emails(2)
+        h0 = cache._hash_message_id("<web0@e.com>")
+        h1 = cache._hash_message_id("<web1@e.com>")
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_defer") as mock_defer,
+        ):
+            client = self._make_client()
+            resp = client.post("/emails/bulk", data={"action": "read", "hashes": [h0, h1]})
+        assert resp.status_code == 204
+        assert cache.get_email_by_hash(self.db_path, h0)["is_read"] == 1
+        assert cache.get_email_by_hash(self.db_path, h1)["is_read"] == 1
+        mock_defer.assert_called_once()
+        assert mock_defer.call_args.args[0] == email_reader.bulk_set_flag_remote
+        assert mock_defer.call_args.args[2] == "\\Seen"
+        assert mock_defer.call_args.args[3] is True
+
+    def test_bulk_star_applies_to_selected(self):
+        self._seed_emails(2)
+        h0 = cache._hash_message_id("<web0@e.com>")
+        h1 = cache._hash_message_id("<web1@e.com>")
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_defer") as mock_defer,
+        ):
+            client = self._make_client()
+            resp = client.post("/emails/bulk", data={"action": "star", "hashes": [h0, h1]})
+        assert resp.status_code == 204
+        assert cache.get_email_by_hash(self.db_path, h0)["is_starred"] == 1
+        assert cache.get_email_by_hash(self.db_path, h1)["is_starred"] == 1
+        mock_defer.assert_called_once()
+        assert mock_defer.call_args.args[0] == email_reader.bulk_set_flag_remote
+        assert mock_defer.call_args.args[2] == "\\Flagged"
+        assert mock_defer.call_args.args[3] is True
+
+    def test_bulk_archive_removes_rows_and_defers_imap(self):
+        self._seed_emails(2)
+        h0 = cache._hash_message_id("<web0@e.com>")
+        h1 = cache._hash_message_id("<web1@e.com>")
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_defer") as mock_defer,
+        ):
+            client = self._make_client()
+            resp = client.post("/emails/bulk", data={"action": "archive", "hashes": [h0, h1]})
+        assert resp.status_code == 204
+        assert cache.get_total_count(self.db_path) == 0
+        mock_defer.assert_called_once()
+        # Archive defers bulk_archive_remote (which resolves the folder on the
+        # background thread, not the request path).
+        assert mock_defer.call_args.args[0] == email_reader.bulk_archive_remote
+
+    def test_bulk_move_removes_rows_and_defers_imap(self):
+        self._seed_emails(2)
+        h0 = cache._hash_message_id("<web0@e.com>")
+        h1 = cache._hash_message_id("<web1@e.com>")
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_defer") as mock_defer,
+        ):
+            client = self._make_client()
+            resp = client.post(
+                "/emails/bulk",
+                data={"action": "move", "folder": "Work", "hashes": [h0, h1]},
+            )
+        assert resp.status_code == 204
+        assert cache.get_total_count(self.db_path) == 0
+        mock_defer.assert_called_once()
+        assert mock_defer.call_args.args[0] == email_reader.bulk_move_remote
+        assert mock_defer.call_args.args[2] == "Work"
+
+    def test_bulk_move_without_folder_warns_and_keeps_rows(self):
+        self._seed_emails(1)
+        h0 = cache._hash_message_id("<web0@e.com>")
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_defer") as mock_defer,
+        ):
+            client = self._make_client()
+            resp = client.post("/emails/bulk", data={"action": "move", "hashes": [h0]})
+        assert resp.status_code == 204
+        assert "no destination" in resp.headers["X-Toast"].lower()
+        # No local delete, no remote op when the folder is missing.
+        assert cache.get_total_count(self.db_path) == 1
+        mock_defer.assert_not_called()
+
+    def test_bulk_move_with_unsafe_folder_warns_and_keeps_rows(self):
+        self._seed_emails(1)
+        h0 = cache._hash_message_id("<web0@e.com>")
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_defer") as mock_defer,
+        ):
+            client = self._make_client()
+            resp = client.post(
+                "/emails/bulk",
+                data={"action": "move", "folder": 'a"b', "hashes": [h0]},
+            )
+        assert resp.status_code == 204
+        assert "no destination" in resp.headers["X-Toast"].lower()
+        assert cache.get_total_count(self.db_path) == 1
+        mock_defer.assert_not_called()
+
+    def test_bulk_delete_removes_rows_and_defers_imap(self):
+        self._seed_emails(2)
+        h0 = cache._hash_message_id("<web0@e.com>")
+        h1 = cache._hash_message_id("<web1@e.com>")
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_defer") as mock_defer,
+        ):
+            client = self._make_client()
+            resp = client.post("/emails/bulk", data={"action": "delete", "hashes": [h0, h1]})
+        assert resp.status_code == 204
+        assert cache.get_total_count(self.db_path) == 0
+        mock_defer.assert_called_once()
+        assert mock_defer.call_args.args[0] == email_reader.bulk_delete_remote
 
     def test_setup_page_no_credentials(self):
         with (
@@ -696,6 +918,24 @@ class TestWebExtraEndpoints:
         assert cache.has_email_credentials(self.db_path)
         mock_instance.start.assert_called_once()
 
+    def test_setup_submit_resets_folder_caches(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch("src.scripts.cache.has_email_credentials", return_value=False),
+            patch("src.scripts.email_reader.test_connection", return_value={"success": True, "inbox_count": 0}),
+            patch("src.scripts.idle_monitor.IdleMonitor"),
+            patch("src.scripts.idle_monitor.run_initial_fetch"),
+            patch("src.scripts.email_reader.reset_folder_caches") as mock_reset,
+        ):
+            client = self._make_client()
+            resp = client.post(
+                "/setup",
+                data={"email_user": "new@e.com", "email_pass": "secret"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 303
+        mock_reset.assert_called_once()
+
     def test_setup_submit_redirects_when_already_configured(self):
         with patch.object(web, "DB_PATH", self.db_path):
             client = self._make_client()
@@ -873,32 +1113,26 @@ class TestSseEvents:
 
         from src.scripts import event_bus
 
-        q = event_bus.bus.subscribe()
-        type("R", (), {"is_disconnected": lambda self: False})()
-
-        web.sse_events.__wrapped__ if hasattr(web.sse_events, "__wrapped__") else None
-
-        async def event_stream():
-            try:
-                while True:
-                    try:
-                        event = await asyncio.wait_for(q.get(), timeout=0.5)
-                        yield f"event: {event['type']}\ndata: {json.dumps(event['data'])}\n\n"
-                        return
-                    except asyncio.TimeoutError:
-                        yield ": keepalive\n\n"
-                        return
-            finally:
-                event_bus.bus.unsubscribe(q)
+        class _StubRequest:
+            async def is_disconnected(self):
+                return False
 
         async def drive():
-            event_bus.bus.publish("refresh", {"hello": "world"})
-            outputs = []
-            async for chunk in event_stream():
-                outputs.append(chunk)
-                if len(outputs) >= 1:
-                    break
-            return outputs
+            response = await web.sse_events(_StubRequest())
+            chunks = []
+
+            async def consume():
+                async for chunk in response.body_iterator:
+                    chunks.append(chunk)
+                    if isinstance(chunk, str) and "refresh" in chunk:
+                        break
+
+            async def publish():
+                await asyncio.sleep(0.05)
+                event_bus.bus.publish("refresh", {"hello": "world"})
+
+            await asyncio.gather(consume(), publish())
+            return chunks
 
         chunks = asyncio.run(drive())
         assert any("refresh" in c for c in chunks)
@@ -909,34 +1143,18 @@ class TestSseEvents:
 
         from src.scripts import event_bus
 
-        q = event_bus.bus.subscribe()
-        assert q in event_bus.bus._subscribers
-
-        async def is_disconnected():
-            return True
-
-        request = type("R", (), {"is_disconnected": lambda self: is_disconnected()})()
-
-        async def event_stream():
-            try:
-                while True:
-                    if await request.is_disconnected():
-                        break
-                    try:
-                        event = await asyncio.wait_for(q.get(), timeout=0.05)
-                        yield f"event: {event['type']}\n\n"
-                    except asyncio.TimeoutError:
-                        yield ": keepalive\n\n"
-                        return
-            finally:
-                event_bus.bus.unsubscribe(q)
+        class _StubRequest:
+            async def is_disconnected(self):
+                return True
 
         async def drive():
-            async for _ in event_stream():
+            response = await web.sse_events(_StubRequest())
+            async for _ in response.body_iterator:
                 break
 
+        sub_count_before = len(event_bus.bus._subscribers)
         asyncio.run(drive())
-        assert q not in event_bus.bus._subscribers
+        assert len(event_bus.bus._subscribers) <= sub_count_before
 
 
 class TestResolveBindHost:

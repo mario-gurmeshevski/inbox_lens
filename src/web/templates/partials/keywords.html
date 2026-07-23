@@ -1,6 +1,8 @@
 {% if kw_msg %}
   <div id="kw-status"
-       class="status-box status-dismissable {% if kw_msg_ok %}status-done{% else %}status-error{% endif %}">
+       class="status-box status-dismissable {% if kw_msg_ok %}status-done{% else %}status-error{% endif %}"
+       role="status"
+       aria-live="polite">
     <i data-lucide="{% if kw_msg_ok %}check-circle{% else %}alert-circle{% endif %}"
        class="icon-md"></i>
     <span>{{ kw_msg }}</span>
@@ -22,7 +24,8 @@
          min="1"
          placeholder="Priority level (e.g. 8)"
          required />
-  <button type="submit" class="btn btn-sm">
+  <button type="submit" class="btn btn-sm"
+          aria-label="Add priority category">
     <i data-lucide="folder-plus" class="icon-sm"></i>
     Add category
   </button>
@@ -44,7 +47,8 @@
               data-confirm-label="Remove"
               class="inline-form">
           <input type="hidden" name="level" value="{{ level }}" />
-          <button type="submit" class="btn btn-danger btn-sm remove-cat-btn">
+          <button type="submit" class="btn btn-danger btn-sm remove-cat-btn"
+                  aria-label="Remove priority {{ level }} category">
             <i data-lucide="trash-2" class="icon-sm"></i>
             Remove
           </button>
@@ -53,12 +57,15 @@
       <div class="words">
         {% for word in categories[level] %}
           <div class="chip">
-            <span class="word"
-                  tabindex="0"
-                  role="button"
-                  title="Click to edit"
-                  onclick="kwEdit(this)"
-                  onkeydown=" if (event.key === 'Enter') { event.preventDefault(); kwEdit(this); } ">{{ word }}</span>
+            <button type="button"
+                    class="word"
+                    tabindex="0"
+                    title="Click to edit"
+                    onclick="kwEdit(this)"
+                    onkeydown=" if (event.key === 'Enter') { event.preventDefault(); kwEdit(this); } "
+                    aria-label="Edit keyword: {{ word }}">
+              {{ word }}
+            </button>
             <form hx-post="/keywords/word/edit"
                   hx-target="#keywords-cards"
                   hx-swap="innerHTML"
@@ -71,7 +78,8 @@
                      class="edit-input"
                      autocomplete="off"
                      onkeydown="kwEditKey(event)"
-                     onblur="kwCancelEdit(this)" />
+                     onblur="kwCancelEdit(this)"
+                     aria-label="Edit keyword" />
             </form>
             <form hx-post="/keywords/word/remove"
                   hx-target="#keywords-cards"
@@ -81,7 +89,7 @@
               <input type="hidden" name="word" value="{{ word }}" />
               <button type="submit"
                       class="remove-btn"
-                      aria-label="Remove word"
+                      aria-label="Remove word: {{ word }}"
                       title="Remove">
                 <i data-lucide="x" class="icon-sm"></i>
               </button>
@@ -98,8 +106,10 @@
                name="word"
                class="add-input"
                placeholder="Add word or phrase…"
-               required />
-        <button type="submit" class="btn btn-sm">
+               required
+               aria-label="Add keyword to priority {{ level }}" />
+        <button type="submit" class="btn btn-sm"
+                aria-label="Add keyword to priority {{ level }}">
           <i data-lucide="plus" class="icon-sm"></i>
           Add
         </button>

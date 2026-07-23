@@ -33,7 +33,9 @@
     </div>
   </div>
   {% if phase in ["pulling", "recreating"] %}
-    <div class="status-box status-info is-spaced">
+    <div class="status-box status-info is-spaced"
+         role="status"
+         aria-live="polite">
       <i data-lucide="loader" class="icon-md spin"></i>
       <span>{{ update.update_state.message or "Update in progress..." }}</span>
     </div>
@@ -41,18 +43,22 @@
     <div id="restart-status"
          class="status-box status-info is-spaced"
          data-version="{{ update.current_version }}"
-         data-message="{{ update.update_state.message or 'The app is restarting with the new version. The page will reload automatically.' }}">
+         data-message="{{ update.update_state.message or 'The app is restarting with the new version. The page will reload automatically.' }}"
+         role="status"
+         aria-live="polite">
       <i data-lucide="loader" class="icon-md spin"></i>
       <span>{{ update.update_state.message or "The app is restarting with the new version. The page will reload automatically." }}</span>
     </div>
   {% elif phase == "failed" %}
-    <div class="status-box status-error is-spaced">
+    <div class="status-box status-error is-spaced"
+         role="alert"
+         aria-live="assertive">
       <i data-lucide="alert-circle" class="icon-md"></i>
       <span>{{ update.update_state.message or "Update failed." }}</span>
     </div>
     {% if update.update_state.error_detail %}
       <details class="settings-hint is-spaced update-error-details">
-        <summary>Show details</summary>
+        <summary aria-expanded="false">Show details</summary>
         <pre>{{ update.update_state.error_detail }}</pre>
       </details>
     {% endif %}
@@ -68,7 +74,8 @@
             hx-target="#update-panel"
             hx-swap="outerHTML"
             class="inline-form">
-        <button type="submit" class="btn btn-sm">
+        <button type="submit" class="btn btn-sm"
+                aria-label="Retry update">
           <i data-lucide="rotate-cw" class="icon-sm"></i>
           Retry Update
         </button>
@@ -77,20 +84,24 @@
             hx-target="#update-panel"
             hx-swap="outerHTML"
             class="inline-form">
-        <button type="submit" class="btn btn-sm">
+        <button type="submit" class="btn btn-sm"
+                aria-label="Check for updates again">
           <i data-lucide="search-check" class="icon-sm"></i>
           Check Again
         </button>
       </form>
       <button type="button"
               class="btn btn-sm"
-              data-copy-error="{{ update.update_state.error_detail or update.update_state.message }}">
+              data-copy-error="{{ update.update_state.error_detail or update.update_state.message }}"
+              aria-label="Copy error details to clipboard">
         <i data-lucide="copy" class="icon-sm"></i>
         Copy Error
       </button>
     </div>
   {% elif update.update_rolled_back %}
-    <div class="status-box status-warning is-spaced">
+    <div class="status-box status-warning is-spaced"
+         role="alert"
+         aria-live="assertive">
       <i data-lucide="alert-triangle" class="icon-md"></i>
       <span>
         The last update failed and was rolled back — this container is still
@@ -107,7 +118,8 @@
               data-confirm-tone="warning"
               data-confirm-label="Update"
               class="inline-form">
-          <button type="submit" class="btn btn-sm">
+          <button type="submit" class="btn btn-sm"
+                  aria-label="Retry update">
             <i data-lucide="download" class="icon-sm"></i>
             Retry Update
           </button>
@@ -117,14 +129,17 @@
             hx-target="#update-panel"
             hx-swap="outerHTML"
             class="inline-form">
-        <button type="submit" class="btn btn-sm">
+        <button type="submit" class="btn btn-sm"
+                aria-label="Check for updates again">
           <i data-lucide="search-check" class="icon-sm"></i>
           Check Again
         </button>
       </form>
     </div>
   {% elif update.update_available %}
-    <div class="status-box status-warning is-spaced">
+    <div class="status-box status-warning is-spaced"
+         role="status"
+         aria-live="polite">
       <i data-lucide="arrow-up-circle" class="icon-md"></i>
       <span>A new version is available.</span>
     </div>
@@ -138,7 +153,8 @@
               data-confirm-tone="warning"
               data-confirm-label="Update"
               class="inline-form">
-          <button type="submit" class="btn btn-sm">
+          <button type="submit" class="btn btn-sm"
+                  aria-label="Update now">
             <i data-lucide="download" class="icon-sm"></i>
             Update Now
           </button>
@@ -147,7 +163,8 @@
               hx-target="#update-panel"
               hx-swap="outerHTML"
               class="inline-form">
-          <button type="submit" class="btn btn-sm">
+          <button type="submit" class="btn btn-sm"
+                  aria-label="Check for updates again">
             <i data-lucide="search-check" class="icon-sm"></i>
             Check for Updates
           </button>
@@ -167,7 +184,8 @@
               hx-target="#update-panel"
               hx-swap="outerHTML"
               class="inline-form">
-          <button type="submit" class="btn btn-sm">
+          <button type="submit" class="btn btn-sm"
+                  aria-label="Check for updates again">
             <i data-lucide="search-check" class="icon-sm"></i>
             Check for Updates
           </button>
@@ -175,7 +193,9 @@
       </div>
     {% endif %}
   {% elif update.update_error %}
-    <div class="status-box status-error is-spaced">
+    <div class="status-box status-error is-spaced"
+         role="alert"
+         aria-live="assertive">
       <i data-lucide="wifi-off" class="icon-md"></i>
       <span>{{ update.update_message or "Couldn't reach the version source. Check your connection." }}</span>
     </div>
@@ -184,14 +204,17 @@
             hx-target="#update-panel"
             hx-swap="outerHTML"
             class="inline-form">
-        <button type="submit" class="btn btn-sm">
+        <button type="submit" class="btn btn-sm"
+                aria-label="Check for updates again">
           <i data-lucide="search-check" class="icon-sm"></i>
           Check for Updates
         </button>
       </form>
     </div>
   {% else %}
-    <div class="status-box status-done is-spaced">
+    <div class="status-box status-done is-spaced"
+         role="status"
+         aria-live="polite">
       <i data-lucide="check-circle" class="icon-md"></i>
       <span>You're up to date.</span>
     </div>
@@ -200,7 +223,8 @@
             hx-target="#update-panel"
             hx-swap="outerHTML"
             class="inline-form">
-        <button type="submit" class="btn btn-sm">
+        <button type="submit" class="btn btn-sm"
+                aria-label="Check for updates again">
           <i data-lucide="search-check" class="icon-sm"></i>
           Check for Updates
         </button>

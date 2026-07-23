@@ -13,7 +13,6 @@ from src.scripts.constants import DB_PATH
 from src.scripts.email_reader.parser import (
     decode_str,
     get_text_body,
-    extract_thread_info,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,13 +24,16 @@ FETCH_BATCH_SIZE = 25
 RECONNECT_DELAY = 2
 _trash_folder_cache: str | None = None
 _archive_folder_cache: str | None = None
+_sent_folder_cache: str | None = None
 GMAIL_DEFAULT_ARCHIVE = "[Gmail]/All Mail"
+GMAIL_DEFAULT_SENT = "[Gmail]/Sent Mail"
 
 
 def reset_folder_caches() -> None:
-    global _trash_folder_cache, _archive_folder_cache
+    global _trash_folder_cache, _archive_folder_cache, _sent_folder_cache
     _trash_folder_cache = None
     _archive_folder_cache = None
+    _sent_folder_cache = None
 
 
 def _imap_connect(db_path=None):
@@ -72,13 +74,19 @@ def _chunk_list(lst, n):
     return [lst[i::n] for i in range(n)]
 
 
-def _reconnect(conn, db_path=None):
+def _reconnect(conn, db_path=None, mailbox=None):
     _safe_close(conn)
     time.sleep(RECONNECT_DELAY)
-    return _imap_connect(db_path)
+    new_conn = _imap_connect(db_path)
+    if mailbox:
+        try:
+            new_conn.select(mailbox)
+        except Exception:
+            logger.warning("Could not re-select %s after reconnect", mailbox, exc_info=True)
+    return new_conn
 
 
-def _batch_fetch_loop(conn, items, batch_size, bulk_fn, single_fn, db_path=None):
+def _batch_fetch_loop(conn, items, batch_size, bulk_fn, single_fn, db_path=None, mailbox=None):
     results = []
     batch_start = 0
     while batch_start < len(items):
@@ -99,7 +107,7 @@ def _batch_fetch_loop(conn, items, batch_size, bulk_fn, single_fn, db_path=None)
             if attempt == 0:
                 logger.warning("Bulk fetch failed at batch %d, reconnecting...", batch_start)
                 try:
-                    conn = _reconnect(conn, db_path)
+                    conn = _reconnect(conn, db_path, mailbox=mailbox)
                 except Exception:
                     logger.warning("Reconnect failed at batch %d", batch_start, exc_info=True)
                     break
@@ -114,7 +122,7 @@ def _batch_fetch_loop(conn, items, batch_size, bulk_fn, single_fn, db_path=None)
     return results, conn
 
 
-def _make_body_fetchers(db_path):
+def _make_body_fetchers(db_path, mailbox=None):
     def bulk(conn, batch):
         id_str = b",".join(eid for eid, _ in batch)
         try:
@@ -149,7 +157,7 @@ def _make_body_fetchers(db_path):
                 if attempt == 0:
                     logger.warning("Connection lost fetching body %s, reconnecting...", eid)
                     try:
-                        conn = _reconnect(conn, db_path)
+                        conn = _reconnect(conn, db_path, mailbox=mailbox)
                     except Exception:
                         logger.warning("Reconnect failed for body %s", eid, exc_info=True)
                         return [], conn
@@ -166,6 +174,13 @@ def _extract_uid(envelope):
     return match.group(1).encode() if match else None
 
 
+def _extract_gm_thrid(envelope):
+    match = re.search(r"X-GM-THRID\s+(\d+)", envelope)
+    if not match:
+        return None
+    return cache._hash_message_id(match.group(1))
+
+
 def _extract_flags(envelope: str) -> tuple[bool, bool]:
     is_read = "\\Seen" in envelope
     is_starred = "\\Flagged" in envelope
@@ -180,17 +195,12 @@ def _get_email_ids(mail):
     return data[0].split()
 
 
-def _fetch_headers_bulk(mail, email_ids):
-    if not email_ids:
-        return []
-    id_str = b",".join(email_ids)
-    status, msg_data = mail.uid(
-        "fetch",
-        id_str,
-        "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM DATE MESSAGE-ID IN-REPLY-TO REFERENCES THREAD-INDEX)] FLAGS)",
-    )
-    if status != "OK":
-        return []
+_HEADER_FETCH_FIELDS = (
+    "(X-GM-THRID BODY.PEEK[HEADER.FIELDS (SUBJECT FROM DATE MESSAGE-ID IN-REPLY-TO REFERENCES THREAD-INDEX)] FLAGS)"
+)
+
+
+def _parse_header_items(msg_data):
     results = []
     for item in msg_data:
         if not isinstance(item, tuple):
@@ -198,23 +208,69 @@ def _fetch_headers_bulk(mail, email_ids):
         envelope = item[0].decode(errors="replace")
         uid = _extract_uid(envelope)
         is_read, is_starred = _extract_flags(envelope)
+        gm_thrid = _extract_gm_thrid(envelope)
         msg = email_lib.message_from_bytes(item[1])
-        thread_info = extract_thread_info(msg)
+        mid = msg.get("Message-ID", "")
+        thread_id = gm_thrid or cache._hash_message_id(mid)
+        in_reply_to = (msg.get("In-Reply-To", "") or "").strip()
         results.append(
             {
-                "message_id": msg.get("Message-ID", ""),
+                "message_id": mid,
                 "from": decode_str(msg.get("From", "")),
                 "subject": decode_str(msg.get("Subject", "")),
                 "date": msg.get("Date", ""),
                 "body": "",
-                "thread_id": thread_info["thread_id"],
-                "in_reply_to": thread_info["in_reply_to"],
+                "thread_id": thread_id,
+                "gm_thrid": gm_thrid,
+                "in_reply_to": in_reply_to,
                 "is_read": is_read,
                 "is_starred": is_starred,
                 "_uid": uid,
             }
         )
     return results
+
+
+def _fetch_headers_bulk(mail, email_ids):
+    if not email_ids:
+        return []
+    results = []
+    for start in range(0, len(email_ids), FETCH_BATCH_SIZE):
+        chunk = email_ids[start : start + FETCH_BATCH_SIZE]
+        id_str = b",".join(chunk)
+        status, msg_data = mail.uid("fetch", id_str, _HEADER_FETCH_FIELDS)
+        if status != "OK":
+            status, msg_data = mail.uid("fetch", id_str, _HEADER_FETCH_FIELDS)
+        if status != "OK":
+            uid_range = f"{chunk[0].decode()}-{chunk[-1].decode()}"
+            logger.warning("Header fetch failed for UID batch %s after retry", uid_range)
+            continue
+        results.extend(_parse_header_items(msg_data))
+    return results
+
+
+def _fetch_bodies_in_folder(db_path, mailbox, message_ids):
+    bodies = []
+    if not message_ids:
+        return bodies
+    with imap_session(db_path) as mail:
+        mail.select(_quote_mailbox(mailbox))
+        for mid in message_ids:
+            uid = _resolve_uid(mail, mid)
+            if not uid:
+                continue
+            status, body_data = mail.uid("fetch", uid, "(BODY.PEEK[])")
+            if status != "OK":
+                continue
+            for piece in body_data:
+                if not isinstance(piece, tuple):
+                    continue
+                m = email_lib.message_from_bytes(piece[1])
+                if (m.get("Message-ID", "") or "").strip() == mid.strip():
+                    bodies.append((mid, get_text_body(m) or ""))
+                    break
+        mail.select("INBOX")
+    return bodies
 
 
 def _parse_fetched_email(msg_data_list):
@@ -231,7 +287,6 @@ def _parse_fetched_email(msg_data_list):
         date = msg.get("Date", "")
         message_id = msg.get("Message-ID", "")
         body = get_text_body(msg)
-        thread_info = extract_thread_info(msg)
 
         if body:
             body = body.strip()
@@ -245,8 +300,8 @@ def _parse_fetched_email(msg_data_list):
                 "subject": subject,
                 "date": date,
                 "body": body,
-                "thread_id": thread_info["thread_id"],
-                "in_reply_to": thread_info["in_reply_to"],
+                "thread_id": None,
+                "in_reply_to": (msg.get("In-Reply-To", "") or "").strip(),
                 "is_read": is_read,
                 "is_starred": is_starred,
             }
@@ -259,6 +314,16 @@ def _sanitize_imap_search(value):
 
 
 _UNSAFE_FOLDER_CHARS = frozenset('"\\\n\r\x00{')
+
+_QUOTE_CHARS = frozenset(' (){%*"\\') | {chr(c) for c in range(0, 0x21)} | {chr(0x7F)}
+
+
+def _quote_mailbox(name: str) -> str:
+    if not name:
+        return name
+    if any(ch in _QUOTE_CHARS for ch in name):
+        return '"' + name.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return name
 
 
 def _validate_folder_name(folder: str) -> bool:
@@ -305,7 +370,7 @@ def move_to_trash(mail, message_id):
         _trash_folder_cache = find_trash_folder(mail)
     trash_folder = _trash_folder_cache
 
-    status, _ = mail.uid("copy", email_id, trash_folder)
+    status, _ = mail.uid("copy", email_id, _quote_mailbox(trash_folder))
     if status != "OK":
         return False
 
@@ -345,6 +410,163 @@ def resolve_archive_folder(db_path=None) -> str:
     return _archive_folder_cache
 
 
+def find_sent_folder(mail) -> str:
+    return find_folder_by_attr(mail, "\\Sent", GMAIL_DEFAULT_SENT)
+
+
+def resolve_sent_folder(db_path=None) -> str:
+    global _sent_folder_cache
+    if _sent_folder_cache is not None:
+        return _sent_folder_cache
+    if db_path is None:
+        db_path = DB_PATH
+    try:
+        with imap_session(db_path) as mail:
+            _sent_folder_cache = find_sent_folder(mail)
+    except Exception:
+        logger.warning("Failed to resolve Sent folder", exc_info=True)
+        _sent_folder_cache = GMAIL_DEFAULT_SENT
+    return _sent_folder_cache
+
+
+def sync_sent_replies(db_path=None) -> dict:
+    if db_path is None:
+        db_path = DB_PATH
+    if not cache.has_email_credentials(db_path):
+        return {"synced": 0, "skipped": 0}
+
+    cache.init_db(db_path)
+    synced = 0
+    skipped = 0
+    try:
+        with imap_session(db_path) as mail:
+            sent_folder = resolve_sent_folder(db_path)
+            status, _ = mail.select(_quote_mailbox(sent_folder))
+            if status != "OK":
+                logger.warning("Could not select Sent folder: %s", sent_folder)
+                return {"synced": 0, "skipped": 0}
+
+            status, data = mail.uid("search", None, "ALL")
+            uids = data[0].split() if (status == "OK" and data and data[0]) else []
+            if not uids:
+                mail.select("INBOX")
+                return {"synced": 0, "skipped": 0}
+
+            parsed_headers = _fetch_headers_bulk(mail, uids)
+            mail.select("INBOX")  # restore INBOX selection for other callers
+
+            new_headers = []
+            new_message_ids = []
+            all_sent_hashes = []
+            thread_id_refreshes: list[tuple[str | None, str | None, str]] = []
+            for header in parsed_headers:
+                header.pop("_uid", None)
+                header.pop("is_read", None)
+                header.pop("is_starred", None)
+                mid = header.get("message_id", "")
+                if not mid:
+                    continue
+                h = cache._hash_message_id(mid)
+                all_sent_hashes.append(h)
+                if cache.check_hashes_exist(db_path, [h]):
+                    skipped += 1
+                    thread_id = header.get("thread_id") or h
+                    if thread_id:
+                        thread_id_refreshes.append((thread_id, header.get("gm_thrid"), h))
+                    continue
+                new_headers.append(header)
+                new_message_ids.append(mid)
+
+            if not new_headers:
+                if all_sent_hashes:
+                    cache.mark_sent(all_sent_hashes, db_path)
+                if thread_id_refreshes:
+                    cache.refresh_thread_ids(thread_id_refreshes, db_path)
+                return {"synced": 0, "skipped": skipped}
+
+            cache.save_headers_batch(new_headers, db_path)
+
+            if all_sent_hashes:
+                cache.mark_sent(all_sent_hashes, db_path)
+            if thread_id_refreshes:
+                cache.refresh_thread_ids(thread_id_refreshes, db_path)
+
+            bodies = _fetch_bodies_in_folder(db_path, sent_folder, new_message_ids)
+            if bodies:
+                cache.update_bodies_batch(bodies, db_path)
+                synced = len(bodies)
+    except Exception:
+        logger.warning("Sent folder sync failed", exc_info=True)
+        return {"synced": synced, "skipped": skipped}
+
+    return {"synced": synced, "skipped": skipped}
+
+
+def sync_all_mail(db_path=None) -> dict:
+    if db_path is None:
+        db_path = DB_PATH
+    if not cache.has_email_credentials(db_path):
+        return {"synced": 0, "skipped": 0, "hashes": set()}
+
+    cache.init_db(db_path)
+    synced = 0
+    skipped = 0
+    all_hashes: set[str] = set()
+    try:
+        with imap_session(db_path) as mail:
+            archive_folder = resolve_archive_folder(db_path)
+            status, _ = mail.select(_quote_mailbox(archive_folder))
+            if status != "OK":
+                logger.warning("Could not select All Mail folder: %s", archive_folder)
+                return {"synced": 0, "skipped": 0, "hashes": set()}
+
+            status, data = mail.uid("search", None, "ALL")
+            uids = data[0].split() if (status == "OK" and data and data[0]) else []
+            if not uids:
+                mail.select("INBOX")
+                return {"synced": 0, "skipped": 0, "hashes": set()}
+
+            parsed_headers = _fetch_headers_bulk(mail, uids)
+            mail.select("INBOX")  # restore INBOX selection for other callers
+
+            new_headers = []
+            new_message_ids = []
+            thread_id_refreshes: list[tuple[str | None, str | None, str]] = []
+            for header in parsed_headers:
+                header.pop("_uid", None)
+                header.pop("is_read", None)
+                header.pop("is_starred", None)
+                mid = header.get("message_id", "")
+                if not mid:
+                    continue
+                h = cache._hash_message_id(mid)
+                all_hashes.add(h)
+                gm_thrid = header.get("gm_thrid")
+                thread_id = header.get("thread_id") or h
+                if cache.check_hashes_exist(db_path, [h]):
+                    skipped += 1
+                    if thread_id:
+                        thread_id_refreshes.append((thread_id, gm_thrid, h))
+                    continue
+                new_headers.append(header)
+                new_message_ids.append(mid)
+
+            if new_headers:
+                cache.save_headers_batch(new_headers, db_path)
+            if thread_id_refreshes:
+                cache.refresh_thread_ids(thread_id_refreshes, db_path)
+
+            bodies = _fetch_bodies_in_folder(db_path, archive_folder, new_message_ids)
+            if bodies:
+                cache.update_bodies_batch(bodies, db_path)
+                synced = len(bodies)
+    except Exception:
+        logger.warning("All Mail folder sync failed", exc_info=True)
+        return {"synced": synced, "skipped": skipped, "hashes": all_hashes}
+
+    return {"synced": synced, "skipped": skipped, "hashes": all_hashes}
+
+
 def list_folders(db_path=None) -> list[str]:
     # Return all selectable mailbox names for the configured account.
     if db_path is None:
@@ -378,7 +600,7 @@ def move_to_folder(mail, message_id, folder: str) -> bool:
     if not email_id:
         return False
 
-    status, _ = mail.uid("copy", email_id, folder)
+    status, _ = mail.uid("copy", email_id, _quote_mailbox(folder))
     if status != "OK":
         return False
 
@@ -412,7 +634,7 @@ def _bulk_move_uids(mail, message_ids: list[str], folder: str) -> int:
         uid = _resolve_uid(mail, mid)
         if not uid:
             continue
-        status, _ = mail.uid("copy", uid, folder)
+        status, _ = mail.uid("copy", uid, _quote_mailbox(folder))
         if status == "OK":
             moved_uids.append(uid)
     if moved_uids:
@@ -421,7 +643,7 @@ def _bulk_move_uids(mail, message_ids: list[str], folder: str) -> int:
     return len(moved_uids)
 
 
-def fetch_headers_and_cache(db_path=None):
+def fetch_headers_and_cache(db_path=None, protected_hashes=None):
     if db_path is None:
         db_path = DB_PATH
 
@@ -434,37 +656,68 @@ def fetch_headers_and_cache(db_path=None):
         with imap_session(db_path) as mail:
             email_ids = _get_email_ids(mail)
             if not email_ids:
+                cache.reconcile_inbox(db_path, set(), force=True)
                 return {"new_count": 0, "existing_count": 0, "emails": [], "imap_id_pairs": []}
 
             headers = _fetch_headers_bulk(mail, email_ids)
 
             header_entries = []
+            server_hashes: set[str] = set()
             for header in headers:
                 uid = header.pop("_uid", None)
-                if not uid:
-                    continue
                 mid = header.get("message_id", "")
                 h = cache._hash_message_id(mid)
+                server_hashes.add(h)
+                if not uid:
+                    continue
                 header_entries.append((header, uid, mid, h))
+
+            searched_count = len(email_ids)
+            parsed_count = len(headers)
+            if parsed_count > 0:
+                deleted = cache.reconcile_inbox(
+                    db_path,
+                    server_hashes,
+                    protected_hashes=protected_hashes,
+                    searched_count=searched_count,
+                )
+                logger.info(
+                    "Inbox reconcile: searched=%d fetched=%d ghosts_deleted=%d",
+                    searched_count,
+                    parsed_count,
+                    deleted,
+                )
+            else:
+                logger.warning("Header fetch returned nothing for %d UIDs; skipping reconcile", searched_count)
+                return {
+                    "new_count": 0,
+                    "existing_count": cache.get_total_count(db_path),
+                    "emails": [],
+                    "imap_id_pairs": [],
+                }
 
             existing_hashes = cache.check_hashes_exist(db_path, [h for _, _, _, h in header_entries])
 
             new_headers = []
             new_ids = []
             existing_flag_updates = []
+            thread_id_refreshes: list[tuple[str | None, str | None, str]] = []
             for header, eid, mid, h in header_entries:
                 if h not in existing_hashes:
                     new_headers.append(header)
                     new_ids.append((eid, mid))
                 else:
-                    existing_flag_updates.append(
-                        (header.get("is_read", False), header.get("is_starred", False), h)
-                    )
+                    existing_flag_updates.append((header.get("is_read", False), header.get("is_starred", False), h))
+                    tid = header.get("thread_id")
+                    if tid:
+                        thread_id_refreshes.append((tid, header.get("gm_thrid"), h))
 
             existing = cache.get_total_count(db_path)
 
             if existing_flag_updates:
                 cache.update_flags_batch(existing_flag_updates, db_path)
+            if thread_id_refreshes:
+                cache.refresh_thread_ids(thread_id_refreshes, db_path)
 
             cache.save_headers_batch(new_headers, db_path)
 
@@ -541,6 +794,13 @@ def fetch_bodies_by_message_ids(message_ids, db_path=None):
     conn = None
     try:
         conn = _imap_connect(db_path)
+        archive_mailbox = None
+        try:
+            archive_folder = resolve_archive_folder(db_path)
+            archive_mailbox = _quote_mailbox(archive_folder)
+            conn.select(archive_mailbox)
+        except Exception:
+            logger.warning("Could not select All Mail for body fetch; falling back to INBOX", exc_info=True)
 
         target_pairs = []
         for mid in message_ids:
@@ -553,8 +813,10 @@ def fetch_bodies_by_message_ids(message_ids, db_path=None):
         if failed > 0:
             logger.warning("UIDs not found for %d message-id(s)", failed)
 
-        bulk_fn, single_fn = _make_body_fetchers(db_path)
-        raw_results, conn = _batch_fetch_loop(conn, target_pairs, FETCH_BATCH_SIZE, bulk_fn, single_fn, db_path)
+        bulk_fn, single_fn = _make_body_fetchers(db_path, mailbox=archive_mailbox)
+        raw_results, conn = _batch_fetch_loop(
+            conn, target_pairs, FETCH_BATCH_SIZE, bulk_fn, single_fn, db_path, mailbox=archive_mailbox
+        )
 
         db_updates = [
             (

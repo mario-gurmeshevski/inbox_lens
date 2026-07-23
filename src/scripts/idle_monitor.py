@@ -44,8 +44,9 @@ class IdleMonitor:
             logger.info("IdleMonitor started")
 
     def stop(self):
+        with self._lock:
+            self._running = False
         self._stop.set()
-        self._running = False
         if self._thread:
             self._thread.join(timeout=10)
         logger.info("IdleMonitor stopped")
@@ -220,7 +221,16 @@ class IdleMonitor:
 def run_initial_fetch(db_path=None, on_refresh=None):
     db_path = db_path or DB_PATH
     try:
-        result = email_reader.fetch_headers_and_cache(db_path=db_path)
+        protected_hashes: set[str] = set()
+        try:
+            all_result = email_reader.sync_all_mail(db_path=db_path)
+            protected_hashes = all_result.get("hashes", set())
+            if all_result.get("synced"):
+                logger.info("Synced %d message(s) from All Mail", all_result["synced"])
+        except Exception:
+            logger.warning("All Mail sync failed during initial fetch", exc_info=True)
+
+        result = email_reader.fetch_headers_and_cache(db_path=db_path, protected_hashes=protected_hashes)
         if "error" in result:
             logger.error("Initial fetch error: %s", result["error"])
             return result
@@ -238,6 +248,13 @@ def run_initial_fetch(db_path=None, on_refresh=None):
         headers_only_ids = cache.get_headers_only_message_ids(db_path)
         if headers_only_ids:
             email_reader.fetch_bodies_by_message_ids(headers_only_ids, db_path=db_path)
+
+        try:
+            sent_result = email_reader.sync_sent_replies(db_path=db_path)
+            if sent_result.get("synced"):
+                logger.info("Synced %d sent reply/replies from Sent folder", sent_result["synced"])
+        except Exception:
+            logger.warning("Sent folder sync failed during initial fetch", exc_info=True)
 
         if on_refresh:
             try:

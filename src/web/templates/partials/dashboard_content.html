@@ -34,23 +34,28 @@
       <i data-lucide="bar-chart-3" class="icon"></i>
       Priority Distribution
     </div>
-    <div class="priority-bar">
+    <div class="priority-bar" role="group" aria-label="Priority distribution">
       {% for tier, count in priority_dist.items() %}
         {% if count > 0 %}
           {% set pct = (count / total * 100) | round(1) %}
-          <div class="priority-bar-segment {{ tier }}" style="--w: {{ pct }}%">{% if pct >= 5 %}{{ count }}{% endif %}</div>
+          <div class="priority-bar-segment {{ tier }}"
+               style="--w: {{ pct }}%"
+               role="progressbar"
+               aria-valuenow="{{ count }}"
+               aria-valuemin="0"
+               aria-valuemax="{{ total }}"
+               aria-label="{{ tier | title }}: {{ count }} emails ({{ pct }}%)">{% if pct >= 5 %}{{ count }}{% endif %}</div>
         {% endif %}
       {% endfor %}
     </div>
-    <div class="priority-bar-legend">
+    <div class="priority-bar-legend" role="group" aria-label="Priority legend">
       {% for tier, count in priority_dist.items() %}
         {% if count > 0 %}
-          <span><span class="legend-dot {{ tier }}"></span> {{ tier | title }}: {{ count
-        }}</span>
-      {% endif %}
-    {% endfor %}
+          <span role="img" aria-label="{{ tier | title }}: {{ count }} emails"><span class="legend-dot {{ tier }}"></span> {{ tier | title }}: {{ count }}</span>
+        {% endif %}
+      {% endfor %}
+    </div>
   </div>
-</div>
 {% endif %}
 <div class="section-title">
   <i data-lucide="clock" class="icon"></i>

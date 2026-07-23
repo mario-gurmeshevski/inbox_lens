@@ -12,15 +12,16 @@
   %}
   >
   {% if ts_state == "starting" %}
-    <div class="settings-hint">
+    <div class="settings-hint" role="status" aria-live="polite">
       <i data-lucide="loader" class="icon-sm spin"></i>
       <span>Connecting to Tailscale...</span>
     </div>
   {% elif ts_state == "needs_login" and tailscale_login_url %}
-    <div class="settings-hint">
+    <div class="settings-hint" role="status" aria-live="polite">
       <i data-lucide="link" class="icon-sm"></i>
       <span>Authorize on Tailscale:
-        <a href="{{ tailscale_login_url }}" target="_blank" rel="noopener">{{ tailscale_login_url }}</a></span>
+        <a href="{{ tailscale_login_url }}" target="_blank" rel="noopener"
+           aria-label="Authorize on Tailscale (opens in new tab)">{{ tailscale_login_url }}</a></span>
     </div>
   {% elif ts_state == "running" %}
     {% if tailscale_serve_url %}
@@ -28,13 +29,14 @@
         <code>{{ tailscale_serve_url }}</code>
         <button type="button"
                 class="btn btn-sm"
-                onclick="navigator.clipboard.writeText('{{ tailscale_serve_url }}')">
+                onclick="navigator.clipboard.writeText('{{ tailscale_serve_url }}')"
+                aria-label="Copy Tailscale URL to clipboard">
           <i data-lucide="copy" class="icon-sm"></i>
           Copy
         </button>
       </div>
     {% else %}
-      <div class="settings-hint">
+      <div class="settings-hint" role="status" aria-live="polite">
         <i data-lucide="loader" class="icon-sm spin"></i>
         <span>Enabling HTTPS access...</span>
       </div>

@@ -13,5 +13,5 @@ These macros give a single source of truth for the level -> class mapping.
 {%- endmacro -%}
 {# Render a single category badge: "<cat>: <count>" (used by the emails list). #}
 {%- macro priority_badge(cat, words) -%}
-  <span class="badge {{ priority_badge_class(cat) }}">{{ cat }}: {{ words | length }}</span>
+  <span class="badge {{ priority_badge_class(cat) }}" aria-label="{{ cat }}: {{ words | length }} keywords">{{ cat }}: {{ words | length }}</span>
 {%- endmacro -%}

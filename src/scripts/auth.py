@@ -112,39 +112,42 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else ""
 
 
-class LoginRateLimiter:
+class RateLimiter:
     def __init__(self, max_attempts: int = 5, window_seconds: int = 60):
         self.max_attempts = max_attempts
         self.window_seconds = window_seconds
         self._attempts: dict[str, list[float]] = {}
 
-    def _prune(self, ip: str, now: float) -> list[float]:
-        recent = self._attempts.get(ip, [])
+    def _prune(self, key: str, now: float) -> list[float]:
+        recent = self._attempts.get(key, [])
         recent = [t for t in recent if now - t < self.window_seconds]
         if recent:
-            self._attempts[ip] = recent
+            self._attempts[key] = recent
         else:
-            self._attempts.pop(ip, None)
+            self._attempts.pop(key, None)
         return recent
 
-    def is_limited(self, ip: str) -> bool:
-        if not ip:
+    def is_limited(self, key: str) -> bool:
+        if not key:
             return False
-        return len(self._prune(ip, time.monotonic())) >= self.max_attempts
+        return len(self._prune(key, time.monotonic())) >= self.max_attempts
 
-    def record_failure(self, ip: str) -> None:
-        if not ip:
+    def record_failure(self, key: str) -> None:
+        if not key:
             return
         now = time.monotonic()
-        recent = self._prune(ip, now)
+        recent = self._prune(key, now)
         recent.append(now)
-        self._attempts[ip] = recent
+        self._attempts[key] = recent
 
-    def reset(self, ip: str) -> None:
-        self._attempts.pop(ip, None)
+    def reset(self, key: str) -> None:
+        self._attempts.pop(key, None)
 
+
+LoginRateLimiter = RateLimiter
 
 login_rate_limiter = LoginRateLimiter()
+send_rate_limiter = RateLimiter(max_attempts=10, window_seconds=60)
 
 
 def origin_ok(request: Request) -> bool:

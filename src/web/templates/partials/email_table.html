@@ -34,15 +34,15 @@
         </td>
         <td data-label="Priority">
           {% if highest.val >= 9 %}
-            <span class="priority-critical">{{ highest.val }}</span>
+            <span class="priority-critical" aria-label="Priority: {{ highest.val }} (Critical)">{{ highest.val }}</span>
           {% elif highest.val >= 7 %}
-            <span class="priority-high">{{ highest.val }}</span>
+            <span class="priority-high" aria-label="Priority: {{ highest.val }} (High)">{{ highest.val }}</span>
           {% elif highest.val >= 5 %}
-            <span class="priority-medium">{{ highest.val }}</span>
+            <span class="priority-medium" aria-label="Priority: {{ highest.val }} (Medium)">{{ highest.val }}</span>
           {% elif highest.val >= 1 %}
-            <span class="priority-low">{{ highest.val }}</span>
+            <span class="priority-low" aria-label="Priority: {{ highest.val }} (Low)">{{ highest.val }}</span>
           {% else %}
-            <span class="priority-none">-</span>
+            <span class="priority-none" aria-label="No priority">-</span>
           {% endif %}
         </td>
         <td data-label="Star" class="col-star">
@@ -56,6 +56,10 @@
         </td>
         <td data-label="Subject">
           <a class="email-subject-link" href="/emails/{{ email.message_id_hash }}">{{ email.subject or "(no subject)" }}</a>
+          {% if email.reply_count and email.reply_count > 1 %}
+            <span class="reply-count-badge"
+                  title="{{ email.reply_count }} messages in this conversation">({{ email.reply_count }})</span>
+          {% endif %}
         </td>
         <td data-label="From">{{ (email.from or "") | format_sender }}</td>
         <td data-label="Date">{{ email.date | format_date }}</td>

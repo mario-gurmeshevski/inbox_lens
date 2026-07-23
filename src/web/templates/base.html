@@ -21,19 +21,27 @@
         Email Reader
       </a>
       <div class="nav-links">
-        <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">
+        <a href="/" class="{% if request.url.path == '/' %}active{% endif %}"
+           {% if request.url.path == '/' %}aria-current="page"{% endif %}>
           <i data-lucide="layout-dashboard" class="icon"></i>
           <span class="nav-label">Dashboard</span>
         </a>
         <a href="/emails"
-           class="{% if '/emails' in request.url.path %}active{% endif %}">
+           class="{% if '/emails' in request.url.path %}active{% endif %}"
+           {% if '/emails' in request.url.path %}aria-current="page"{% endif %}>
           <i data-lucide="inbox" class="icon"></i>
           <span class="nav-label">Emails</span>
         </a>
         <a href="/keywords"
-           class="{% if '/keywords' in request.url.path %}active{% endif %}">
+           class="{% if '/keywords' in request.url.path %}active{% endif %}"
+           {% if '/keywords' in request.url.path %}aria-current="page"{% endif %}>
           <i data-lucide="tags" class="icon"></i>
           <span class="nav-label">Keywords</span>
+        </a>
+        <a href="/settings"
+           class="nav-spacer {% if request.url.path == '/settings' %}active{% endif %}"
+           {% if request.url.path == '/settings' %}aria-current="page"{% endif %}>
+          <i data-lucide="settings" class="icon"></i>
         </a>
         <button type="button"
                 class="nav-link-btn account-nav-btn"
@@ -44,12 +52,7 @@
                 hx-swap="innerHTML"
                 data-modal-open="account-modal">
           <i data-lucide="user" class="icon"></i>
-          <span class="nav-label">Account</span>
         </button>
-        <a href="/settings"
-           class="nav-spacer {% if request.url.path == '/settings' %}active{% endif %}">
-          <i data-lucide="settings" class="icon"></i>
-        </a>
         {% if request.session.get("authed") %}
           <form method="post" action="/logout" class="inline-form">
             <button type="submit"
@@ -119,6 +122,21 @@
         </button>
         <h2 id="folder-modal-title" class="section-title">Move to folder</h2>
         <div id="folder-modal-body" class="folder-modal-body"></div>
+      </div>
+    </div>
+    <div id="compose-modal" class="account-modal compose-modal" hidden>
+      <div class="account-modal-backdrop" data-modal-close="compose-modal"></div>
+      <div class="account-modal-card compose-card"
+           role="dialog"
+           aria-modal="true"
+           aria-labelledby="compose-modal-title">
+        <button type="button"
+                class="account-modal-close"
+                aria-label="Close"
+                data-modal-close="compose-modal">
+          <i data-lucide="x" class="icon-md"></i>
+        </button>
+        <div id="compose-modal-body"></div>
       </div>
     </div>
     {% block scripts %}{% endblock %}

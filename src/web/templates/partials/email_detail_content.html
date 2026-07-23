@@ -1,74 +1,91 @@
-<div class="detail-card">
-  <h1 class="email-subject-title">{{ email.subject or "(no subject)" }}</h1>
-  <dl>
-    <dt><i data-lucide="user" class="icon-sm"></i> From</dt>
-    <dd>
-      {{ (email.from or "") | format_sender }}
-    </dd>
-    <dt><i data-lucide="calendar" class="icon-sm"></i> Date</dt>
-    <dd>
-      {{ email.date | format_date }}
-    </dd>
-    <dt><i data-lucide="hash" class="icon-sm"></i> Message-ID</dt>
-    <dd class="message-id">
-      {{ email.message_id or "" }}
-    </dd>
-    <dt><i data-lucide="activity" class="icon-sm"></i> Status</dt>
-    <dd>
-      {% if email.get("status") == "checked" %}
-        <span class="badge badge-checked">Checked</span>
-      {% elif email.get("status") == "fetched" %}
-        <span class="badge badge-fetched">Fetched</span>
-      {% elif email.get("status") == "headers_only" %}
-        <span class="badge badge-headers-only">Headers Only</span>
-      {% elif email.get("status") == "fetched_no_body" %}
-        <span class="badge badge-headers-only">No Body</span>
+<h1 class="email-subject-title">{{ email.subject or "(no subject)" }}</h1>
+{% if thread_total > 1 %}
+  <div class="thread-meta">
+    <i data-lucide="messages-square" class="icon-sm"></i>
+    {{ thread_total }} messages in this conversation
+  </div>
+{% endif %}
+<div class="conversation-flow">
+  {% set visible = conversation[:thread_limit] if thread_limit else conversation %}
+  {% for msg in visible %}
+    <article class="detail-card conversation-message"
+             id="msg-{{ msg._file_hash }}">
+      <div class="conversation-message-header">
+        <span class="conversation-message-sender">{{ (msg.from or "") | format_sender }}</span>
+        <span class="conversation-message-date">{{ msg.date | format_date }}</span>
+        {% if msg.is_sent %}<span class="thread-reply-sent">Sent</span>{% endif %}
+      </div>
+      {% if msg.body %}
+        <div class="body-block markdown-body">{{ msg.body | stripped_body | markdown }}</div>
       {% else %}
-        <span class="badge badge-none">{{ email.get('status', 'Unknown') }}</span>
+        <p class="empty-body">No body content available.</p>
       {% endif %}
-    </dd>
-    <dt><i data-lucide="tag" class="icon-sm"></i> Category</dt>
-    <dd>
-      {{ email.get('_category', 'unclassified') }}
-    </dd>
-  </dl>
+    </article>
+  {% endfor %}
+  {% if thread_limit and thread_total > thread_limit %}
+    {% set overflow = conversation[thread_limit:] %}
+    <div id="thread-overflow" hidden>
+      {% for msg in overflow %}
+        <article class="detail-card conversation-message"
+                 id="msg-{{ msg._file_hash }}">
+          <div class="conversation-message-header">
+            <span class="conversation-message-sender">{{ (msg.from or "") | format_sender }}</span>
+            <span class="conversation-message-date">{{ msg.date | format_date }}</span>
+            {% if msg.is_sent %}<span class="thread-reply-sent">Sent</span>{% endif %}
+          </div>
+          {% if msg.body %}
+            <div class="body-block markdown-body">{{ msg.body | stripped_body | markdown }}</div>
+          {% else %}
+            <p class="empty-body">No body content available.</p>
+          {% endif %}
+        </article>
+      {% endfor %}
+    </div>
+    <button type="button"
+            class="btn btn-sm thread-show-more"
+            onclick="var ov=document.getElementById('thread-overflow'); if(ov){ov.hidden=false;} this.hidden=true;">
+      Show {{ thread_total - (visible | length) }} more in conversation
+    </button>
+  {% endif %}
 </div>
 {% set matches = email.get("keyword_matches", {}) %}
 {% if matches %}
   <div class="detail-card">
     <div class="section-title is-flush">
       <i data-lucide="tags" class="icon"></i>
-      Tags
+      Tags (viewing message)
     </div>
     <div class="tags-section">
       {% from "partials/priority_badge.html" import priority_badge_class %}
       {% for cat, words in matches.items() %}
         {% set badge_class = priority_badge_class(cat) %}
-        {% for word in words %}
-          <span class="badge {{ badge_class }}">L{{ cat }}: {{ word }}</span>
-        {% endfor %}
+        {% for word in words %}<span class="badge {{ badge_class }}">L{{ cat }}: {{ word }}</span>{% endfor %}
       {% endfor %}
     </div>
-  </div>
-{% endif %}
-{% if email.body %}
-  <div class="detail-card">
-    <div class="section-title is-flush">
-      <i data-lucide="file-text" class="icon"></i>
-      Body
-    </div>
-    <div class="body-block markdown-body">{{ email.body | markdown }}</div>
-  </div>
-{% else %}
-  <div class="detail-card">
-    <p class="empty-body">No body content available. The email may not have been fully fetched yet.</p>
   </div>
 {% endif %}
 <div class="actions">
   {# The toggle endpoints return 204 (no content); the button label/icon is
      refreshed by the sse:refresh handler on #email-detail-content re-swapping
      this whole partial. No hx-target is needed on a 204. #}
-  <button class="btn btn-sm" hx-post="/emails/{{ email_hash }}/toggle-read">
+  <button class="btn btn-sm"
+          type="button"
+          data-compose-open="reply"
+          data-compose-hash="{{ email_hash }}"
+          aria-label="Reply to this email">
+    <i data-lucide="reply" class="icon"></i>
+    Reply
+  </button>
+  <button class="btn btn-sm"
+          type="button"
+          data-compose-open="forward"
+          data-compose-hash="{{ email_hash }}"
+          aria-label="Forward this email">
+    <i data-lucide="forward" class="icon"></i>
+    Forward
+  </button>
+  <button class="btn btn-sm" hx-post="/emails/{{ email_hash }}/toggle-read"
+          aria-label="{% if email.is_read %}Mark as unread{% else %}Mark as read{% endif %}">
     {% if email.is_read %}
       <i data-lucide="mail" class="icon"></i>
       Mark unread
@@ -77,7 +94,8 @@
       Mark read
     {% endif %}
   </button>
-  <button class="btn btn-sm" hx-post="/emails/{{ email_hash }}/toggle-star">
+  <button class="btn btn-sm" hx-post="/emails/{{ email_hash }}/toggle-star"
+          aria-label="{% if email.is_starred %}Unstar this email{% else %}Star this email{% endif %}">
     {% if email.is_starred %}
       <i data-lucide="star" class="icon star-on"></i>
       Unstar
@@ -92,11 +110,13 @@
           data-confirm-title="Archive this email?"
           data-confirm-tone="warning"
           data-confirm-label="Archive"
-          hx-target="body">
+          hx-target="body"
+          aria-label="Archive this email">
     <i data-lucide="archive" class="icon"></i>
     Archive
   </button>
-  <button class="btn btn-sm" type="button" data-move-email="{{ email_hash }}">
+  <button class="btn btn-sm" type="button" data-move-email="{{ email_hash }}"
+          aria-label="Move this email to a folder">
     <i data-lucide="folder-input" class="icon"></i>
     Move
   </button>
@@ -106,7 +126,8 @@
           data-confirm-title="Delete this email?"
           data-confirm-tone="danger"
           data-confirm-label="Delete"
-          hx-target="body">
+          hx-target="body"
+          aria-label="Delete this email">
     <i data-lucide="trash-2" class="icon"></i>
     Delete
   </button>

@@ -69,7 +69,7 @@ class TestParseFetchedEmail:
         raw = b"From: a@b.com\r\nSubject: Re: Topic\r\nMessage-ID: <m@e.com>\r\nReferences: <ref@e.com>\r\n\r\nbody\r\n"
         result = email_reader._parse_fetched_email([(b"env", raw)])
         assert result[0]["in_reply_to"] == ""
-        assert result[0]["thread_id"] is not None
+        assert result[0]["thread_id"] is None
 
 
 class TestGetEmailIds:
@@ -140,6 +140,49 @@ class TestFetchHeadersBulk:
         result = email_reader._fetch_headers_bulk(fake_mail, [b"1"])
         assert len(result) == 1
 
+    def test_retries_failed_batch_then_succeeds(self, fake_mail):
+        fake_mail.uid.side_effect = [
+            ("BAD", []),
+            (
+                "OK",
+                [
+                    (b"UID 1 (BODY[HEADER.FIELDS (...)])", b"Subject: Hello\r\nMessage-ID: <m@e.com>\r\n\r\n"),
+                ],
+            ),
+        ]
+        result = email_reader._fetch_headers_bulk(fake_mail, [b"1"])
+        assert len(result) == 1
+        assert result[0]["message_id"] == "<m@e.com>"
+
+    def test_gives_up_after_retry_failure(self, fake_mail):
+        fake_mail.uid.side_effect = [("BAD", []), ("BAD", [])]
+        result = email_reader._fetch_headers_bulk(fake_mail, [b"1"])
+        assert result == []
+
+    def test_paginates_large_uid_set(self, fake_mail):
+        batch_size = email_reader.FETCH_BATCH_SIZE
+        num_uids = batch_size * 3 + 2
+        uids = [str(i).encode() for i in range(1, num_uids + 1)]
+
+        def fake_uid_fetch(*args):
+            id_bytes = args[1]
+            uid_count = id_bytes.count(b",") + 1 if b"," in id_bytes else 1
+            assert uid_count <= batch_size, f"fetch batch exceeded FETCH_BATCH_SIZE: {uid_count} > {batch_size}"
+            items = []
+            for uid in id_bytes.split(b","):
+                items.append(
+                    (
+                        f"UID {uid.decode()} (BODY[HEADER.FIELDS (...)])".encode(),
+                        f"Message-ID: <m{uid.decode()}@e.com>\r\n\r\n".encode(),
+                    )
+                )
+            return ("OK", items)
+
+        fake_mail.uid.side_effect = fake_uid_fetch
+        result = email_reader._fetch_headers_bulk(fake_mail, uids)
+        assert len(result) == num_uids
+        assert fake_mail.uid.call_count >= 4
+
 
 class TestResolveUid:
     def test_returns_uid_when_found(self, fake_mail):
@@ -206,6 +249,41 @@ class TestMoveToTrash:
         assert imap_mod._trash_folder_cache == "MyTrash"
 
 
+class TestFolderQuoting:
+    def test_move_to_trash_quotes_spaced_folder(self, fake_mail, monkeypatch):
+        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: b"42")
+        monkeypatch.setattr(imap_mod, "_trash_folder_cache", "My Sent Trash")
+        fake_mail.uid.side_effect = [("OK", None), ("OK", None)]
+        email_reader.move_to_trash(fake_mail, "<m@e.com>")
+        copy_args = fake_mail.uid.call_args_list[0].args
+        assert copy_args[0] == "copy"
+        assert copy_args[2] == '"My Sent Trash"'
+
+    def test_move_to_folder_quotes_spaced_name(self, fake_mail, monkeypatch):
+        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: b"7")
+        fake_mail.uid.side_effect = [("OK", None), ("OK", None)]
+        result = email_reader.move_to_folder(fake_mail, "<m@e.com>", "Project X")
+        assert result is True
+        copy_args = fake_mail.uid.call_args_list[0].args
+        assert copy_args[0] == "copy"
+        assert copy_args[2] == '"Project X"'
+
+    def test_move_to_folder_passthrough_unquoted_simple_name(self, fake_mail, monkeypatch):
+        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: b"7")
+        fake_mail.uid.side_effect = [("OK", None), ("OK", None)]
+        email_reader.move_to_folder(fake_mail, "<m@e.com>", "INBOX")
+        copy_args = fake_mail.uid.call_args_list[0].args
+        assert copy_args[2] == "INBOX"
+
+    def test_bulk_move_uids_quotes_spaced_folder(self, fake_mail, monkeypatch):
+        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: b"3")
+        fake_mail.uid.side_effect = [("OK", None), ("OK", None)]
+        email_reader._bulk_move_uids(fake_mail, ["<m@e.com>"], "Archive Box")
+        copy_args = fake_mail.uid.call_args_list[0].args
+        assert copy_args[0] == "copy"
+        assert copy_args[2] == '"Archive Box"'
+
+
 class TestImapConnect:
     def test_uses_credentials_and_selects_inbox(self, monkeypatch, fake_mail):
         monkeypatch.setattr(cache, "get_email_credentials", lambda db_path=None: ("u", "p"))
@@ -251,6 +329,26 @@ class TestReconnect:
         result = imap_mod._reconnect(fake_mail, "/db")
         assert result is new_mail
         assert sleeps == [imap_mod.RECONNECT_DELAY]
+
+    def test_reconnect_reselects_mailbox(self, monkeypatch, fake_mail):
+        monkeypatch.setattr(imap_mod.time, "sleep", lambda s: None)
+        monkeypatch.setattr(imap_mod, "_safe_close", lambda c: None)
+        new_mail = MagicMock(name="new")
+        monkeypatch.setattr(imap_mod, "_imap_connect", lambda db_path=None: new_mail)
+        result = imap_mod._reconnect(fake_mail, "/db", mailbox="[Gmail]/Sent Mail")
+        assert result is new_mail
+        new_mail.select.assert_called_once_with("[Gmail]/Sent Mail")
+
+    def test_reconnect_returns_conn_even_if_reselect_fails(self, monkeypatch, fake_mail, caplog):
+        monkeypatch.setattr(imap_mod.time, "sleep", lambda s: None)
+        monkeypatch.setattr(imap_mod, "_safe_close", lambda c: None)
+        new_mail = MagicMock(name="new")
+        new_mail.select.side_effect = Exception("boom")
+        monkeypatch.setattr(imap_mod, "_imap_connect", lambda db_path=None: new_mail)
+        with caplog.at_level("WARNING"):
+            result = imap_mod._reconnect(fake_mail, "/db", mailbox="[Gmail]/Sent Mail")
+        assert result is new_mail
+        assert "Could not re-select" in caplog.text
 
 
 class TestMakeBodyFetchers:
@@ -309,7 +407,7 @@ class TestMakeBodyFetchers:
         new_mail = MagicMock()
         new_mail.uid.return_value = ("OK", [])
         monkeypatch.setattr(imap_mod.time, "sleep", lambda s: None)
-        monkeypatch.setattr(imap_mod, "_reconnect", lambda c, db_path=None: new_mail)
+        monkeypatch.setattr(imap_mod, "_reconnect", lambda c, db_path=None, **kw: new_mail)
         monkeypatch.setattr(imap_mod, "_parse_fetched_email", lambda data: [])
         result, returned_mail = single(mail, (b"1", "<m@e.com>"))
         assert returned_mail is new_mail
@@ -319,7 +417,7 @@ class TestMakeBodyFetchers:
         mail = MagicMock()
         mail.uid.side_effect = imaplib.IMAP4.abort("aborted")
         monkeypatch.setattr(imap_mod.time, "sleep", lambda s: None)
-        monkeypatch.setattr(imap_mod, "_reconnect", lambda c, db_path=None: _raise(RuntimeError("nope")))
+        monkeypatch.setattr(imap_mod, "_reconnect", lambda c, db_path=None, **kw: _raise(RuntimeError("nope")))
         result, returned_mail = single(mail, (b"1", "<m@e.com>"))
         assert result == []
         assert returned_mail is mail
@@ -347,7 +445,7 @@ class TestBatchFetchLoop:
             return [{"body": "single"}], new_conn
 
         monkeypatch.setattr(imap_mod.time, "sleep", lambda s: None)
-        monkeypatch.setattr(imap_mod, "_reconnect", lambda c, db_path=None: new_conn)
+        monkeypatch.setattr(imap_mod, "_reconnect", lambda c, db_path=None, **kw: new_conn)
 
         def bulk_raises(conn, batch):
             raise imaplib.IMAP4.abort("aborted")
@@ -368,7 +466,9 @@ class TestBatchFetchLoop:
             raise imaplib.IMAP4.abort("aborted")
 
         monkeypatch.setattr(imap_mod.time, "sleep", lambda s: None)
-        monkeypatch.setattr(imap_mod, "_reconnect", lambda c, db_path=None: _raise(RuntimeError("reconnect failed")))
+        monkeypatch.setattr(
+            imap_mod, "_reconnect", lambda c, db_path=None, **kw: _raise(RuntimeError("reconnect failed"))
+        )
         results, returned = email_reader._batch_fetch_loop(conn, items, 25, bulk_raises, single_fn, db_path="/db")
         assert results == [{"body": "single"}]
 
@@ -481,6 +581,234 @@ class TestFetchHeadersAndCache:
         assert int(ex["is_starred"]) == 1
         assert int(fr["is_read"]) == 0
         assert int(fr["is_starred"]) == 0
+
+    def test_reconcile_skipped_on_partial_search(self, monkeypatch, tmp_db):
+        cache.save_headers_batch(
+            [
+                {"message_id": f"<real{i}@e.com>", "subject": f"S{i}", "date": "Mon, 01 Jan 2024 00:00:00 +0000"}
+                for i in range(10)
+            ],
+            tmp_db,
+        )
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
+        fake = MagicMock()
+        fake.uid.side_effect = [
+            ("OK", [b" ".join(str(i).encode() for i in range(1, 11))]),  # search: 10 UIDs
+            (
+                "OK",
+                [
+                    (
+                        b"UID 1 (FLAGS ()) (BODY[HEADER.FIELDS (...)])",
+                        b"Subject: S1\r\nMessage-ID: <real1@e.com>\r\n\r\n",
+                    ),
+                    (
+                        b"UID 2 (FLAGS ()) (BODY[HEADER.FIELDS (...)])",
+                        b"Subject: S2\r\nMessage-ID: <real2@e.com>\r\n\r\n",
+                    ),
+                ],
+            ),
+        ]
+        fake.select.return_value = ("OK", [b""])
+        fake_imap_session(monkeypatch, imap_mod, fake)
+
+        email_reader.fetch_headers_and_cache(db_path=tmp_db, protected_hashes=set())
+        assert cache.get_email_by_hash(tmp_db, cache._hash_message_id("<real1@e.com>")) is not None
+        assert cache.get_email_by_hash(tmp_db, cache._hash_message_id("<real3@e.com>")) is not None
+
+    def test_reconcile_not_called_on_fetch_failure(self, monkeypatch, tmp_db):
+        cache.save_headers_batch(
+            [{"message_id": "<keep@e.com>", "subject": "Keep", "date": "Mon, 01 Jan 2024 00:00:00 +0000"}],
+            tmp_db,
+        )
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
+        fake = MagicMock()
+        fake.uid.side_effect = [
+            ("OK", [b"1 2 3"]),
+            ("OK", []),
+        ]
+        fake.select.return_value = ("OK", [b""])
+        fake_imap_session(monkeypatch, imap_mod, fake)
+
+        calls = []
+        monkeypatch.setattr(cache, "reconcile_inbox", lambda *a, **kw: calls.append(a) or 0)
+
+        email_reader.fetch_headers_and_cache(db_path=tmp_db)
+        assert calls == [], "reconcile must NOT run on a failed fetch"
+        assert cache.get_email_by_hash(tmp_db, cache._hash_message_id("<keep@e.com>")) is not None
+
+    def test_reconcile_runs_on_complete_fetch(self, monkeypatch, tmp_db):
+        cache.save_headers_batch(
+            [{"message_id": "<ghost@e.com>", "subject": "Ghost", "date": "Mon, 01 Jan 2024 00:00:00 +0000"}],
+            tmp_db,
+        )
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
+        fake = MagicMock()
+        fake.uid.side_effect = [
+            ("OK", [b"1"]),
+            (
+                "OK",
+                [
+                    (
+                        b"UID 1 (FLAGS ()) (BODY[HEADER.FIELDS (...)])",
+                        b"Subject: Real\r\nMessage-ID: <real@e.com>\r\n\r\n",
+                    ),
+                ],
+            ),
+        ]
+        fake.select.return_value = ("OK", [b""])
+        fake_imap_session(monkeypatch, imap_mod, fake)
+        email_reader.fetch_headers_and_cache(db_path=tmp_db, protected_hashes=set())
+        assert cache.get_email_by_hash(tmp_db, cache._hash_message_id("<ghost@e.com>")) is None
+        assert cache.get_email_by_hash(tmp_db, cache._hash_message_id("<real@e.com>")) is not None
+
+    def test_server_hashes_includes_no_uid_entries(self, monkeypatch, tmp_db):
+        cache.save_headers_batch(
+            [{"message_id": "<nouid@e.com>", "subject": "NoUid", "date": "Mon, 01 Jan 2024 00:00:00 +0000"}],
+            tmp_db,
+        )
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
+        fake = MagicMock()
+        fake.uid.side_effect = [
+            ("OK", [b"1"]),
+            (
+                "OK",
+                [
+                    (b"(FLAGS ()) (BODY[HEADER.FIELDS (...)])", b"Subject: NoUid\r\nMessage-ID: <nouid@e.com>\r\n\r\n"),
+                ],
+            ),
+        ]
+        fake.select.return_value = ("OK", [b""])
+        fake_imap_session(monkeypatch, imap_mod, fake)
+
+        email_reader.fetch_headers_and_cache(db_path=tmp_db)
+        assert cache.get_email_by_hash(tmp_db, cache._hash_message_id("<nouid@e.com>")) is not None
+
+    def test_reconcile_runs_after_complete_batched_fetch(self, monkeypatch, tmp_db):
+        batch_size = email_reader.FETCH_BATCH_SIZE
+        num_uids = batch_size + 5  # spans 2 batches
+        cache.save_headers_batch(
+            [{"message_id": "<ghost@e.com>", "subject": "Ghost", "date": "Mon, 01 Jan 2024 00:00:00 +0000"}],
+            tmp_db,
+        )
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
+
+        def fake_uid(*args):
+            cmd = args[0]
+            if cmd == "search":
+                uids_list = b" ".join(str(i).encode() for i in range(1, num_uids + 1))
+                return ("OK", [uids_list])
+            id_bytes = args[1]
+            items = []
+            for uid in id_bytes.split(b","):
+                items.append(
+                    (
+                        f"UID {uid.decode()} (BODY[HEADER.FIELDS (...)])".encode(),
+                        f"Message-ID: <real{uid.decode()}@e.com>\r\n\r\n".encode(),
+                    )
+                )
+            return ("OK", items)
+
+        fake = MagicMock()
+        fake.uid.side_effect = fake_uid
+        fake.select.return_value = ("OK", [b""])
+        fake_imap_session(monkeypatch, imap_mod, fake)
+
+        email_reader.fetch_headers_and_cache(db_path=tmp_db, protected_hashes=set())
+        assert cache.get_email_by_hash(tmp_db, cache._hash_message_id("<ghost@e.com>")) is None
+        assert cache.get_email_by_hash(tmp_db, cache._hash_message_id("<real1@e.com>")) is not None
+
+    def test_sync_sent_replies_batches_large_sent_folder(self, monkeypatch, tmp_db):
+        from src.tests._helpers import fake_imap_session
+
+        cache.save_email_credentials("me@e.com", "secret", tmp_db)
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
+        batch_size = email_reader.FETCH_BATCH_SIZE
+        num_uids = batch_size * 2 + 3  # spans 3 batches
+
+        def fake_uid(*args):
+            cmd = args[0]
+            if cmd == "search":
+                uids_list = b" ".join(str(i).encode() for i in range(1, num_uids + 1))
+                return ("OK", [uids_list])
+            if cmd == "fetch":
+                id_bytes = args[1]
+                items = []
+                for uid in id_bytes.split(b","):
+                    items.append(
+                        (
+                            f"UID {uid.decode()} X-GM-THRID 1809095669921875987".encode(),
+                            f"Message-ID: <sent{uid.decode()}@e.com>\r\n\r\n".encode(),
+                        )
+                    )
+                return ("OK", items)
+            return ("OK", [b""])
+
+        fake = MagicMock()
+        fake.uid.side_effect = fake_uid
+        fake.select.return_value = ("OK", [b""])
+        fake.list.return_value = ("OK", [b'(\\Sent) "/" "[Gmail]/Sent Mail"'])
+        fake_imap_session(monkeypatch, imap_mod, fake)
+        imap_mod.reset_folder_caches()
+        email_reader.sync_sent_replies(db_path=tmp_db)
+
+        header_fetch_calls = [
+            c
+            for c in fake.uid.call_args_list
+            if c.args and c.args[0] == "fetch" and "HEADER.FIELDS" in (c.args[2] if len(c.args) > 2 else "")
+        ]
+        assert len(header_fetch_calls) >= 3  # batched into >=3 calls
+        for call in header_fetch_calls:
+            id_bytes = call.args[1]
+            uid_count = len(id_bytes.split(b","))
+            assert uid_count <= batch_size
+
+
+class TestFetchBodiesInFolder:
+    def test_empty_message_ids_returns_empty(self, monkeypatch, tmp_db):
+        cache.save_email_credentials("me@e.com", "secret", tmp_db)
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
+        fake = MagicMock()
+        fake.select.return_value = ("OK", [b""])
+        from src.tests._helpers import fake_imap_session
+
+        fake_imap_session(monkeypatch, imap_mod, fake)
+        result = imap_mod._fetch_bodies_in_folder(tmp_db, "Sent", [])
+        assert result == []
+        fake.uid.assert_not_called()
+
+    def test_fetches_and_matches_bodies(self, monkeypatch, tmp_db):
+        from src.tests._helpers import fake_imap_session
+
+        cache.save_email_credentials("me@e.com", "secret", tmp_db)
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
+        raw = b"From: me@e.com\r\nMessage-ID: <m1@e.com>\r\n\r\nHello body\r\n"
+        fake = MagicMock()
+        fake.select.return_value = ("OK", [b""])
+        fake.uid.side_effect = [
+            ("OK", [b"1"]),  # search for UID by message-id
+            ("OK", [(b"UID 1", raw)]),  # body fetch
+            ("OK", [b""]),  # INBOX restore select (via _resolve_uid path)
+        ]
+        fake_imap_session(monkeypatch, imap_mod, fake)
+        result = imap_mod._fetch_bodies_in_folder(tmp_db, "Sent", ["<m1@e.com>"])
+        assert result == [("<m1@e.com>", "Hello body")]
+
+    def test_partial_failure_skips_missing_uid(self, monkeypatch, tmp_db):
+        from src.tests._helpers import fake_imap_session
+
+        cache.save_email_credentials("me@e.com", "secret", tmp_db)
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
+        raw2 = b"From: me@e.com\r\nMessage-ID: <m2@e.com>\r\n\r\nSecond body\r\n"
+        fake = MagicMock()
+        fake.select.return_value = ("OK", [b""])
+        fake.uid.side_effect = [
+            ("OK", [b""]),  # search for missing → no UID
+            ("OK", [b"2"]),  # search for m2 → UID 2
+            ("OK", [(b"UID 2", raw2)]),  # body fetch for m2
+        ]
+        fake_imap_session(monkeypatch, imap_mod, fake)
+        result = imap_mod._fetch_bodies_in_folder(tmp_db, "Sent", ["<missing@e.com>", "<m2@e.com>"])
+        assert result == [("<m2@e.com>", "Second body")]
 
 
 class TestFetchBodiesByMessageIds:
@@ -596,6 +924,37 @@ class TestExtractFlags:
         assert imap_mod._extract_flags("UID 1 (BODY[HEADER.FIELDS (...)])") == (False, False)
 
 
+class TestExtractGmThrid:
+    def test_extracts_thrid_hash(self):
+        env = b"1 (X-GM-THRID 1809095669921875987 UID 16 FLAGS (\\Seen))".decode()
+        result = imap_mod._extract_gm_thrid(env)
+        assert result == cache._hash_message_id("1809095669921875987")
+
+    def test_returns_none_when_absent(self):
+        env = b"1 (UID 16 FLAGS (\\Seen))".decode()
+        assert imap_mod._extract_gm_thrid(env) is None
+
+
+class TestParseHeaderItemsGmThrid:
+    def _msg_data(self, envelope_extra=b""):
+        return [
+            (b"UID 16 FLAGS (\\Seen)" + envelope_extra, b"Subject: Hi\r\nMessage-ID: <m@e.com>\r\n\r\n"),
+        ]
+
+    def test_dict_carries_gm_thrid_when_present(self):
+        msg_data = self._msg_data(b" X-GM-THRID 1809095669921875987")
+        result = imap_mod._parse_header_items(msg_data)
+        assert len(result) == 1
+        gm_hash = cache._hash_message_id("1809095669921875987")
+        assert result[0]["gm_thrid"] == gm_hash
+        assert result[0]["thread_id"] == gm_hash
+
+    def test_dict_gm_thrid_none_when_absent(self):
+        result = imap_mod._parse_header_items(self._msg_data())
+        assert len(result) == 1
+        assert result[0]["gm_thrid"] is None
+
+
 class TestFindArchiveFolder:
     def test_returns_default_when_list_fails(self, fake_mail):
         fake_mail.list.return_value = ("BAD", [])
@@ -631,6 +990,30 @@ class TestValidateFolderName:
     @pytest.mark.parametrize("bad", ['a"b', "a\\b", "a\nb", "a\rb", "a\x00b", "a{b"])
     def test_rejects_unsafe_chars(self, bad):
         assert email_reader._validate_folder_name(bad) is False
+
+
+class TestQuoteMailbox:
+    def test_leaves_simple_name_unchanged(self):
+        assert email_reader._quote_mailbox("INBOX") == "INBOX"
+        assert email_reader._quote_mailbox("Work") == "Work"
+
+    def test_quotes_name_with_space(self):
+        assert email_reader._quote_mailbox("[Gmail]/Sent Mail") == '"[Gmail]/Sent Mail"'
+        assert email_reader._quote_mailbox("[Gmail]/All Mail") == '"[Gmail]/All Mail"'
+
+    def test_quotes_name_with_parens(self):
+        assert email_reader._quote_mailbox("a(b)") == '"a(b)"'
+
+    def test_quotes_name_with_percent_or_star(self):
+        assert email_reader._quote_mailbox("a%b") == '"a%b"'
+        assert email_reader._quote_mailbox("a*b") == '"a*b"'
+
+    def test_escapes_embedded_quotes_and_backslashes(self):
+        assert email_reader._quote_mailbox('a"b') == '"a\\"b"'
+        assert email_reader._quote_mailbox("a\\b") == '"a\\\\b"'
+
+    def test_empty_name_passes_through(self):
+        assert email_reader._quote_mailbox("") == ""
 
 
 class TestMoveToFolder:
@@ -920,3 +1303,226 @@ class TestListFolders:
         assert "INBOX" in folders
         assert "Work" in folders
         assert "root" not in folders  # \\Noselect excluded
+
+
+class TestFindSentFolder:
+    def test_finds_sent_attribute(self, fake_mail):
+        fake_mail.list.return_value = (
+            "OK",
+            [b'(\\HasNoChildren) "/" "INBOX"', b'(\\HasNoChildren \\Sent) "/" "Sent"'],
+        )
+        assert email_reader.find_sent_folder(fake_mail) == "Sent"
+
+    def test_falls_back_to_gmail_default(self, fake_mail):
+        fake_mail.list.return_value = ("OK", [b'(\\HasNoChildren) "/" "INBOX"'])
+        assert email_reader.find_sent_folder(fake_mail) == "[Gmail]/Sent Mail"
+
+
+class TestSyncSentReplies:
+    def _make_sent_raw(self, mid, in_reply_to=None):
+        headers = (
+            f"From: me@e.com\r\nSubject: Re: Hello\r\nDate: Tue, 02 Jan 2024 10:00:00 +0000\r\nMessage-ID: {mid}\r\n"
+        )
+        if in_reply_to:
+            headers += f"In-Reply-To: {in_reply_to}\r\nReferences: {in_reply_to}\r\n"
+        return (headers + "\r\n" + "reply body\r\n").encode()
+
+    def test_persists_new_sent_reply_linked_to_inbox_email(self, monkeypatch, tmp_db, fake_credentials):
+        from src.tests._helpers import save_fetched
+
+        gm_hash = cache._hash_message_id("1809095669921875987")
+        save_fetched(
+            {
+                "message_id": "<orig@e.com>",
+                "from": "a@b.com",
+                "subject": "Hello",
+                "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                "body": "hi",
+                "in_reply_to": None,
+                "thread_id": gm_hash,
+                "gm_thrid": gm_hash,
+            },
+            tmp_db,
+        )
+
+        fake = MagicMock()
+        fake.list.return_value = ("OK", [b'(\\Sent) "/" "Sent"'])
+        fake.select.return_value = ("OK", [b""])
+        fake.uid.side_effect = [
+            ("OK", [b"1"]),
+            (
+                "OK",
+                [(b"UID 1 X-GM-THRID 1809095669921875987", self._make_sent_raw("<sent1@e.com>", "<orig@e.com>"))],
+            ),
+            ("OK", [b"1"]),
+            ("OK", [(b"UID 1", self._make_sent_raw("<sent1@e.com>", "<orig@e.com>"))]),
+        ]
+        fake_imap_session(monkeypatch, imap_mod, fake)
+
+        result = email_reader.sync_sent_replies(db_path=tmp_db)
+        assert result["synced"] == 1
+
+        conv = cache.get_conversation(tmp_db, cache._hash_message_id("<orig@e.com>"))
+        assert "<sent1@e.com>" in [c["message_id"] for c in conv]
+
+        sent = cache.get_email_by_hash(tmp_db, cache._hash_message_id("<sent1@e.com>"))
+        assert sent["is_sent"] == 1
+
+        assert sent["thread_id"] == gm_hash
+        assert sent["gm_thrid"] == gm_hash
+
+    def test_skips_already_cached_sent_message(self, monkeypatch, tmp_db, fake_credentials):
+        from src.tests._helpers import save_fetched
+
+        save_fetched(
+            {
+                "message_id": "<sent1@e.com>",
+                "from": "me@e.com",
+                "subject": "Re: Hello",
+                "date": "Tue, 02 Jan 2024 10:00:00 +0000",
+                "body": "reply",
+                "in_reply_to": "<orig@e.com>",
+            },
+            tmp_db,
+        )
+
+        fake = MagicMock()
+        fake.list.return_value = ("OK", [b'(\\Sent) "/" "Sent"'])
+        fake.select.return_value = ("OK", [b""])
+        fake.uid.side_effect = [
+            ("OK", [b"1"]),  # uid search ALL
+            ("OK", [(b"UID 1", self._make_sent_raw("<sent1@e.com>", "<orig@e.com>"))]),
+        ]
+        fake_imap_session(monkeypatch, imap_mod, fake)
+
+        result = email_reader.sync_sent_replies(db_path=tmp_db)
+        assert result["synced"] == 0
+        assert result["skipped"] == 1
+
+        existing = cache.get_email_by_hash(tmp_db, cache._hash_message_id("<sent1@e.com>"))
+        assert existing["is_sent"] == 1
+
+    def test_no_credentials_returns_zeros(self, monkeypatch, tmp_db):
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: False)
+        assert email_reader.sync_sent_replies(db_path=tmp_db) == {"synced": 0, "skipped": 0}
+
+    def test_empty_sent_folder_returns_zeros(self, monkeypatch, tmp_db, fake_credentials):
+        fake = MagicMock()
+        fake.list.return_value = ("OK", [b'(\\Sent) "/" "Sent"'])
+        fake.select.return_value = ("OK", [b""])
+        fake.uid.return_value = ("OK", [b""])
+        fake_imap_session(monkeypatch, imap_mod, fake)
+        result = email_reader.sync_sent_replies(db_path=tmp_db)
+        assert result == {"synced": 0, "skipped": 0}
+
+    def test_quotes_folder_name_with_spaces_for_select(self, monkeypatch, tmp_db, fake_credentials):
+        fake = MagicMock()
+        fake.list.return_value = ("OK", [b'(\\Sent) "/" "[Gmail]/Sent Mail"'])
+        fake.select.return_value = ("OK", [b""])
+        fake.uid.return_value = ("OK", [b""])
+        fake_imap_session(monkeypatch, imap_mod, fake)
+
+        email_reader.sync_sent_replies(db_path=tmp_db)
+
+        sent_selects = [
+            call.args[0] for call in fake.select.call_args_list if call.args and "Sent Mail" in call.args[0]
+        ]
+        assert sent_selects, "expected at least one SELECT of the Sent folder"
+        for mailbox in sent_selects:
+            assert mailbox.startswith('"') and mailbox.endswith('"'), (
+                f"mailbox name with spaces must be quoted, got: {mailbox!r}"
+            )
+
+
+class TestSyncAllMail:
+    def _make_raw(self, mid, subject="Archived thread", in_reply_to=None, sender="them@e.com"):
+        headers = (
+            f"From: {sender}\r\nSubject: {subject}\r\nDate: Tue, 02 Jan 2024 10:00:00 +0000\r\nMessage-ID: {mid}\r\n"
+        )
+        if in_reply_to:
+            headers += f"In-Reply-To: {in_reply_to}\r\nReferences: {in_reply_to}\r\n"
+        return (headers + "\r\n" + "archived body\r\n").encode()
+
+    def test_persists_new_archived_message_and_returns_hashes(self, monkeypatch, tmp_db, fake_credentials):
+        fake = MagicMock()
+        fake.list.return_value = ("OK", [b'(\\All) "/" "[Gmail]/All Mail"'])
+        fake.select.return_value = ("OK", [b""])
+        fake.uid.side_effect = [
+            ("OK", [b"1"]),
+            ("OK", [(b"UID 1", self._make_raw("<arch1@e.com>"))]),
+            ("OK", [b"1"]),
+            ("OK", [(b"UID 1", self._make_raw("<arch1@e.com>"))]),
+        ]
+        fake_imap_session(monkeypatch, imap_mod, fake)
+
+        result = email_reader.sync_all_mail(db_path=tmp_db)
+        assert result["synced"] == 1
+        assert cache._hash_message_id("<arch1@e.com>") in result["hashes"]
+
+        emails, total, _ = cache.search_emails(tmp_db)
+        assert total == 1
+        assert cache._hash_message_id("<arch1@e.com>") in [e["message_id_hash"] for e in emails]
+
+    def test_skips_already_cached_message(self, monkeypatch, tmp_db, fake_credentials):
+        from src.tests._helpers import save_fetched
+
+        save_fetched(
+            {
+                "message_id": "<dup@e.com>",
+                "from": "them@e.com",
+                "subject": "Already here",
+                "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                "body": "x",
+            },
+            tmp_db,
+        )
+        before = cache.get_total_count(tmp_db)
+
+        fake = MagicMock()
+        fake.list.return_value = ("OK", [b'(\\All) "/" "[Gmail]/All Mail"'])
+        fake.select.return_value = ("OK", [b""])
+        fake.uid.side_effect = [
+            ("OK", [b"1"]),  # search
+            ("OK", [(b"UID 1", self._make_raw("<dup@e.com>", subject="Already here"))]),  # header
+        ]
+        fake_imap_session(monkeypatch, imap_mod, fake)
+
+        result = email_reader.sync_all_mail(db_path=tmp_db)
+        assert result["synced"] == 0
+        assert result["skipped"] == 1
+        assert cache.get_total_count(tmp_db) == before  # no duplicate row
+
+    def test_archived_message_protected_from_inbox_reconcile(self, tmp_db):
+        from src.tests._helpers import save_fetched
+
+        save_fetched(
+            {
+                "message_id": "<arch@e.com>",
+                "from": "them@e.com",
+                "subject": "Archived",
+                "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                "body": "x",
+            },
+            tmp_db,
+        )
+        arch_hash = cache._hash_message_id("<arch@e.com>")
+        inbox_hashes = {cache._hash_message_id("<inbox@e.com>")}
+        deleted = cache.reconcile_inbox(tmp_db, inbox_hashes, protected_hashes={arch_hash})
+        assert deleted == 0
+        assert cache.get_email_by_hash(tmp_db, arch_hash) is not None
+
+    def test_no_credentials_returns_zeros(self, monkeypatch, tmp_db):
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: False)
+        result = email_reader.sync_all_mail(db_path=tmp_db)
+        assert result["synced"] == 0
+        assert result["hashes"] == set()
+
+    def test_empty_folder_returns_zeros(self, monkeypatch, tmp_db, fake_credentials):
+        fake = MagicMock()
+        fake.list.return_value = ("OK", [b'(\\All) "/" "[Gmail]/All Mail"'])
+        fake.select.return_value = ("OK", [b""])
+        fake.uid.return_value = ("OK", [b""])  # search returns no uids
+        fake_imap_session(monkeypatch, imap_mod, fake)
+        result = email_reader.sync_all_mail(db_path=tmp_db)
+        assert result["synced"] == 0
+        assert result["hashes"] == set()

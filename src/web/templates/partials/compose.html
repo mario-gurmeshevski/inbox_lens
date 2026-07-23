@@ -1,0 +1,37 @@
+<form id="compose-form"
+      class="compose-form"
+      data-compose-hash="{{ email_hash }}"
+      data-compose-mode="{{ mode }}">
+  <h2 id="compose-modal-title" class="section-title">{{ 'Reply' if mode == 'reply' else 'Forward' }}</h2>
+  <div class="form-group">
+    <label for="compose-to">To</label>
+    <input id="compose-to"
+           name="to"
+           type="email"
+           value="{{ to_addr }}"
+           required
+           autocomplete="off" />
+  </div>
+  <div class="form-group">
+    <label for="compose-subject">Subject</label>
+    <input id="compose-subject"
+           name="subject"
+           type="text"
+           value="{{ subject_prefix }}: {{ email.subject or '(no subject)' }}"
+           required />
+  </div>
+  <div class="form-group">
+    <label for="compose-body">Body</label>
+    <textarea id="compose-body" name="body" rows="10" required>{{ quoted_body }}</textarea>
+  </div>
+  <div class="compose-actions">
+    <button type="button"
+            class="btn btn-lg btn-danger"
+            id="compose-cancel-btn"
+            data-modal-close="compose-modal">Cancel</button>
+    <button type="submit" class="btn btn-lg" id="compose-send-btn">
+      <i data-lucide="send" class="icon"></i>
+      Send
+    </button>
+  </div>
+</form>

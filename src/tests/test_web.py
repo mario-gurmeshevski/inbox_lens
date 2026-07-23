@@ -1,10 +1,14 @@
 import json
-from unittest.mock import patch
+import threading
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.scripts import cache, email_reader, web
-from src.tests._helpers import _raise, save_fetched_batch as _save_fetched_batch
+from src.tests._helpers import _raise, save_fetched as _save_fetched, save_fetched_batch as _save_fetched_batch
+
+_GM_THRID = "1809095669921875987"
+_TID = cache._hash_message_id(_GM_THRID)
 
 
 class TestFormatDate:
@@ -156,6 +160,30 @@ class TestWebEndpoints:
             resp = client.get("/")
         assert resp.status_code == 200
 
+    def test_dashboard_total_matches_emails_tab(self):
+        self._seed_emails(3)
+        _save_fetched(
+            {
+                "message_id": "<sent@e.com>",
+                "from": "me@e.com",
+                "subject": "Re: sent",
+                "date": "Tue, 09 Jan 2024 10:00:00 +0000",
+                "body": "x",
+                "in_reply_to": "<web0@e.com>",
+            },
+            self.db_path,
+        )
+        cache.mark_sent([cache._hash_message_id("<sent@e.com>")], self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            dash = client.get("/")
+            elist = client.get("/emails")
+        assert dash.status_code == 200
+        assert elist.status_code == 200
+        _, list_total, _ = cache.search_emails(self.db_path)
+        dash_total = cache.get_list_count(self.db_path)
+        assert dash_total == list_total == 4
+
     def test_emails_list_returns_200(self):
         self._seed_emails(3)
         with patch.object(web, "DB_PATH", self.db_path):
@@ -183,6 +211,25 @@ class TestWebEndpoints:
             client = self._make_client()
             resp = client.get("/emails?page=2")
         assert resp.status_code == 200
+
+    def test_emails_list_includes_sent_replies_in_conversation(self):
+        emails = self._seed_emails(2)
+        sent_reply = {
+            "message_id": "<sent-reply@e.com>",
+            "from": "me@e.com",
+            "subject": "Re: Web subject 0",
+            "date": "Tue, 09 Jan 2024 10:00:00 +0000",
+            "body": "my reply",
+            "in_reply_to": emails[0]["message_id"],
+        }
+        _save_fetched(sent_reply, self.db_path)
+        cache.mark_sent([cache._hash_message_id(sent_reply["message_id"])], self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/emails")
+        assert resp.status_code == 200
+        assert "Web subject 0" in resp.text
+        assert "Web subject 1" in resp.text
 
     def test_email_detail_found(self):
         self._seed_emails(1)
@@ -1922,6 +1969,87 @@ class TestUpdateEndpoints:
         assert b'name="page_size"' in resp.content
         assert b'value="100" selected' in resp.content
 
+    def test_settings_thread_replies_save_valid(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+        ):
+            client = self._make_client()
+            resp = client.post(
+                "/settings/thread-replies",
+                data={"thread_replies": "10"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 204
+        assert resp.headers.get("X-Toast") == "Updated"
+        assert cache.get_setting("thread_limit", self.db_path) == "10"
+
+    def test_settings_thread_replies_save_all(self):
+        for raw in ("all", "ALL", "0"):
+            cache.delete_setting("thread_limit", self.db_path)
+            with (
+                patch.object(web, "DB_PATH", self.db_path),
+                patch.object(web, "_is_docker", lambda: False),
+                patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+                patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+            ):
+                client = self._make_client()
+                resp = client.post(
+                    "/settings/thread-replies",
+                    data={"thread_replies": raw},
+                    follow_redirects=False,
+                )
+            assert resp.status_code == 204
+            assert cache.get_setting("thread_limit", self.db_path) == "0"
+
+    def test_settings_thread_replies_rejects_invalid_out_of_set(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+        ):
+            client = self._make_client()
+            resp = client.post(
+                "/settings/thread-replies",
+                data={"thread_replies": "999"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 204
+        assert cache.get_setting("thread_limit", self.db_path) == str(web._DEFAULT_THREAD_LIMIT)
+
+    def test_settings_thread_replies_rejects_non_numeric(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+        ):
+            client = self._make_client()
+            resp = client.post(
+                "/settings/thread-replies",
+                data={"thread_replies": "abc"},
+                follow_redirects=False,
+            )
+        assert resp.status_code == 204
+        assert cache.get_setting("thread_limit", self.db_path) == str(web._DEFAULT_THREAD_LIMIT)
+
+    def test_settings_thread_replies_select_carries_saved_value(self):
+        cache.save_setting("thread_limit", "10", self.db_path)
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(web, "_is_docker", lambda: False),
+            patch.object(web.updater, "get_current_version", lambda: "1.0.0"),
+            patch.object(web.updater, "fetch_latest_version", lambda force=False: None),
+        ):
+            client = self._make_client()
+            resp = client.get("/settings")
+        assert resp.status_code == 200
+        assert b'name="thread_replies"' in resp.content
+        assert b'value="10" selected' in resp.content
+
     def test_settings_page_renders_tab_nav(self):
         with (
             patch.object(web, "DB_PATH", self.db_path),
@@ -2016,3 +2144,570 @@ class TestUpdateEndpoints:
             patch("os.path.realpath", return_value="/etc/localtime"),
         ):
             assert web._detect_local_timezone() == "UTC"
+
+
+class TestComposePartial:
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path):
+        self.db_path = str(tmp_path / "compose_test.db")
+        cache.init_db(self.db_path)
+        cache.save_email_credentials("me@e.com", "secret", self.db_path)
+        self.email = {
+            "message_id": "<orig@e.com>",
+            "from": "Alice <alice@example.com>",
+            "subject": "Lunch?",
+            "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+            "body": "Want to grab lunch?",
+            "thread_id": _TID,
+            "gm_thrid": _TID,
+            "in_reply_to": "",
+        }
+        from src.tests._helpers import save_fetched
+
+        save_fetched(self.email, self.db_path)
+        self.hash = cache._hash_message_id(self.email["message_id"])
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+
+        return TestClient(web.app)
+
+    def test_reply_partial_renders(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._client()
+            resp = client.get(f"/partials/compose/{self.hash}?mode=reply")
+        assert resp.status_code == 200
+        body = resp.text
+        assert "alice@example.com" in body
+        assert 'name="to"' in body
+        assert 'name="subject"' in body
+        assert 'name="body"' in body
+        assert "Re: Lunch?" in body
+        assert "compose-form" in body
+
+    def test_forward_partial_renders_with_quote(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._client()
+            resp = client.get(f"/partials/compose/{self.hash}?mode=forward")
+        assert resp.status_code == 200
+        body = resp.text
+        assert "Fwd: Lunch?" in body
+        assert "Want to grab lunch?" in body
+
+    def test_forward_partial_leaves_to_blank(self):
+        import re
+
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._client()
+            resp = client.get(f"/partials/compose/{self.hash}?mode=forward")
+        to_input = re.search(r'<input[^>]*name="to"[^>]*>', resp.text).group(0)
+        assert 'value=""' in to_input
+
+    def test_reply_partial_prefills_sender(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._client()
+            resp = client.get(f"/partials/compose/{self.hash}?mode=reply")
+        assert "alice@example.com" in resp.text
+
+    def test_unknown_email_returns_404(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._client()
+            resp = client.get("/partials/compose/nonexistent?mode=reply")
+        assert resp.status_code == 404
+
+    def test_compose_partial_escapes_xss_in_quoted_body(self):
+        from src.tests._helpers import save_fetched
+
+        save_fetched(
+            {
+                "message_id": "<xss@e.com>",
+                "from": "Evil <evil@example.com>",
+                "subject": "<script>alert(1)</script>",
+                "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                "body": "<script>alert('xss')</script><img src=x onerror=alert(1)>",
+                "thread_id": _TID,
+                "gm_thrid": _TID,
+                "in_reply_to": "",
+            },
+            self.db_path,
+        )
+        xss_hash = cache._hash_message_id("<xss@e.com>")
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._client()
+            resp = client.get(f"/partials/compose/{xss_hash}?mode=forward")
+        assert resp.status_code == 200
+        body = resp.text
+        assert "<script>alert('xss')</script>" not in body
+        assert "<img src=x onerror=alert(1)>" not in body
+        assert "&lt;script&gt;" in body
+        assert "&lt;img" in body
+
+    def test_compose_partial_escapes_xss_in_subject(self):
+        from src.tests._helpers import save_fetched
+
+        save_fetched(
+            {
+                "message_id": "<xss2@e.com>",
+                "from": "x@e.com",
+                "subject": "Hi <b>bold</b><script>alert(1)</script>",
+                "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                "body": "body",
+                "thread_id": _TID,
+                "gm_thrid": _TID,
+                "in_reply_to": "",
+            },
+            self.db_path,
+        )
+        xss_hash = cache._hash_message_id("<xss2@e.com>")
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._client()
+            resp = client.get(f"/partials/compose/{xss_hash}?mode=reply")
+        body = resp.text
+        assert "<script>alert(1)</script>" not in body
+        assert "&lt;script&gt;" in body
+
+
+class TestSendEmail:
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path):
+        self.db_path = str(tmp_path / "send_test.db")
+        cache.init_db(self.db_path)
+        cache.save_email_credentials("me@e.com", "secret", self.db_path)
+        self.email = {
+            "message_id": "<orig@e.com>",
+            "from": "Alice <alice@example.com>",
+            "subject": "Lunch?",
+            "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+            "body": "Want to grab lunch?",
+            "thread_id": _TID,
+            "gm_thrid": _TID,
+            "in_reply_to": "",
+        }
+        from src.tests._helpers import save_fetched
+
+        save_fetched(self.email, self.db_path)
+        self.hash = cache._hash_message_id(self.email["message_id"])
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+
+        return TestClient(web.app)
+
+    def test_reply_sent_success(self):
+        with patch.object(web, "DB_PATH", self.db_path), patch.object(email_reader, "send_message") as mock_send:
+            client = self._client()
+            resp = client.post(
+                f"/emails/{self.hash}/send",
+                data={"to": "alice@example.com", "subject": "Re: Lunch?", "body": "Sure!", "mode": "reply"},
+            )
+        assert resp.status_code == 204
+        assert resp.headers.get("X-Toast") == "Reply sent"
+        assert resp.headers.get("X-Toast-Tone") == "success"
+        mock_send.assert_called_once()
+        args, kwargs = mock_send.call_args
+        assert args[0] == "alice@example.com"  # to_addr
+        assert args[3] == "reply"  # mode
+        assert kwargs.get("db_path") == self.db_path
+        assert kwargs.get("original_message_id") == "<orig@e.com>"
+        assert kwargs.get("thread_id") == _TID
+
+    def test_forward_sent_success(self):
+        with patch.object(web, "DB_PATH", self.db_path), patch.object(email_reader, "send_message") as mock_send:
+            client = self._client()
+            resp = client.post(
+                f"/emails/{self.hash}/send",
+                data={"to": "bob@example.com", "subject": "Fwd: Lunch?", "body": "FYI", "mode": "forward"},
+            )
+        assert resp.status_code == 204
+        assert resp.headers.get("X-Toast") == "Email forwarded"
+        mock_send.assert_called_once()
+
+    def test_email_not_found(self):
+        with patch.object(web, "DB_PATH", self.db_path), patch.object(email_reader, "send_message") as mock_send:
+            client = self._client()
+            resp = client.post(
+                "/emails/nonexistent/send",
+                data={"to": "x@y.com", "subject": "Hi", "body": "Body", "mode": "reply"},
+            )
+        assert resp.headers.get("X-Toast") == "Email not found"
+        assert resp.headers.get("X-Toast-Tone") == "error"
+        mock_send.assert_not_called()
+
+    def test_missing_fields_returns_error_toast(self):
+        with patch.object(web, "DB_PATH", self.db_path), patch.object(email_reader, "send_message") as mock_send:
+            client = self._client()
+            resp = client.post(
+                f"/emails/{self.hash}/send",
+                data={"to": "", "subject": "Hi", "body": "Body", "mode": "reply"},
+            )
+        assert resp.headers.get("X-Toast-Tone") == "error"
+        mock_send.assert_not_called()
+
+    def test_smtp_failure_returns_error_toast(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(email_reader, "send_message", side_effect=Exception("boom")),
+        ):
+            client = self._client()
+            resp = client.post(
+                f"/emails/{self.hash}/send",
+                data={"to": "alice@example.com", "subject": "Re: Lunch?", "body": "Sure!", "mode": "reply"},
+            )
+        assert resp.headers.get("X-Toast-Tone") == "error"
+        assert "Failed to send" in resp.headers.get("X-Toast", "")
+
+    def test_smtp_failure_does_not_leak_exception(self):
+        secret = "SMTP_INTERNAL_SECRET_DETAIL_xyz"
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(email_reader, "send_message", side_effect=RuntimeError(secret)),
+        ):
+            client = self._client()
+            resp = client.post(
+                f"/emails/{self.hash}/send",
+                data={"to": "alice@example.com", "subject": "Re: Lunch?", "body": "Sure!", "mode": "reply"},
+            )
+        toast = resp.headers.get("X-Toast", "")
+        assert secret not in toast
+        assert resp.headers.get("X-Toast-Tone") == "error"
+
+    def test_rejects_invalid_recipient(self):
+        with patch.object(web, "DB_PATH", self.db_path), patch.object(email_reader, "send_message") as mock_send:
+            client = self._client()
+            resp = client.post(
+                f"/emails/{self.hash}/send",
+                data={"to": "not an email", "subject": "Hi", "body": "Body", "mode": "reply"},
+            )
+        assert resp.headers.get("X-Toast-Tone") == "error"
+        mock_send.assert_not_called()
+
+    def test_rejects_oversized_subject(self):
+        with patch.object(web, "DB_PATH", self.db_path), patch.object(email_reader, "send_message") as mock_send:
+            client = self._client()
+            resp = client.post(
+                f"/emails/{self.hash}/send",
+                data={"to": "alice@example.com", "subject": "x" * 501, "body": "Body", "mode": "reply"},
+            )
+        assert resp.headers.get("X-Toast-Tone") == "error"
+        mock_send.assert_not_called()
+
+    def test_rejects_oversized_body(self):
+        with patch.object(web, "DB_PATH", self.db_path), patch.object(email_reader, "send_message") as mock_send:
+            client = self._client()
+            resp = client.post(
+                f"/emails/{self.hash}/send",
+                data={"to": "alice@example.com", "subject": "Hi", "body": "x" * 50001, "mode": "reply"},
+            )
+        assert resp.headers.get("X-Toast-Tone") == "error"
+        mock_send.assert_not_called()
+
+    def test_send_marks_sent_and_appears_in_thread(self):
+        fake_smtp = MagicMock(name="smtp_conn")
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch("src.scripts.email_reader.smtp.smtplib.SMTP_SSL", return_value=fake_smtp),
+        ):
+            client = self._client()
+            resp = client.post(
+                f"/emails/{self.hash}/send",
+                data={"to": "alice@example.com", "subject": "Re: Lunch?", "body": "Sure!", "mode": "reply"},
+            )
+        assert resp.status_code == 204
+        fake_smtp.sendmail.assert_called_once()
+        conv = cache.get_conversation(self.db_path, self.hash)
+        sent_rows = [c for c in conv if c.get("is_sent")]
+        assert len(sent_rows) == 1
+        assert sent_rows[0]["in_reply_to"] == "<orig@e.com>"
+
+    def test_send_runs_off_event_loop(self):
+        seen_idents = []
+
+        def fake_send(*args, **kwargs):
+            seen_idents.append(threading.get_ident())
+
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(email_reader, "send_message", side_effect=fake_send),
+        ):
+            client = self._client()
+            resp = client.post(
+                f"/emails/{self.hash}/send",
+                data={"to": "alice@example.com", "subject": "Re: Lunch?", "body": "Sure!", "mode": "reply"},
+            )
+        assert resp.status_code == 204
+        assert seen_idents, "send_message was never invoked"
+        assert seen_idents[0] != threading.main_thread().ident
+
+    def test_rejects_multi_at_recipient(self):
+        with patch.object(web, "DB_PATH", self.db_path), patch.object(email_reader, "send_message") as mock_send:
+            client = self._client()
+            resp = client.post(
+                f"/emails/{self.hash}/send",
+                data={"to": "a@b@c.com", "subject": "Hi", "body": "Body", "mode": "reply"},
+            )
+        assert resp.headers.get("X-Toast-Tone") == "error"
+        mock_send.assert_not_called()
+
+    def test_csrf_rejects_bad_origin_on_send(self):
+        from src.scripts import auth
+
+        cache_db = str(self.db_path + "_csrf.db")
+        cache.init_db(cache_db)
+        cache.save_email_credentials("me@e.com", "secret", cache_db)
+        _save_fetched(self.email, cache_db)
+        auth.set_password("dashboardpw", cache_db)
+        auth.login_rate_limiter = auth.LoginRateLimiter()
+        csrf_hash = cache._hash_message_id(self.email["message_id"])
+        with patch.object(web, "DB_PATH", cache_db), patch.object(email_reader, "send_message") as mock_send:
+            client = self._client()
+            client.post("/login", data={"password": "dashboardpw", "next": "/"}, follow_redirects=False)
+            resp = client.post(
+                f"/emails/{csrf_hash}/send",
+                data={"to": "alice@example.com", "subject": "Re: Lunch?", "body": "Sure!", "mode": "reply"},
+                headers={"origin": "http://evil.com"},
+            )
+        assert resp.status_code == 403
+        mock_send.assert_not_called()
+
+    def test_send_rate_limited_returns_warning_toast(self):
+        from src.scripts import auth
+
+        auth.send_rate_limiter = auth.RateLimiter(max_attempts=2, window_seconds=60)
+        try:
+            with patch.object(web, "DB_PATH", self.db_path), patch.object(email_reader, "send_message") as mock_send:
+                client = self._client()
+                for _ in range(2):
+                    client.post(
+                        f"/emails/{self.hash}/send",
+                        data={"to": "a@b.com", "subject": "Hi", "body": "Body", "mode": "reply"},
+                    )
+                resp = client.post(
+                    f"/emails/{self.hash}/send",
+                    data={"to": "a@b.com", "subject": "Hi", "body": "Body", "mode": "reply"},
+                )
+        finally:
+            auth.send_rate_limiter = auth.RateLimiter(max_attempts=10, window_seconds=60)
+        assert resp.status_code == 204
+        assert resp.headers.get("X-Toast-Tone") == "warning"
+        assert "too quickly" in resp.headers.get("X-Toast", "").lower()
+        assert mock_send.call_count == 2
+
+
+class TestComposeModalShell:
+    def test_compose_modal_present_on_email_detail(self, web_db):
+        from fastapi.testclient import TestClient
+
+        from src.tests._helpers import save_fetched
+
+        cache.save_email_credentials("me@e.com", "secret", web_db)
+        email = {
+            "message_id": "<shell@e.com>",
+            "from": "a@b.com",
+            "subject": "S",
+            "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+            "body": "B",
+            "thread_id": _TID,
+            "gm_thrid": _TID,
+            "in_reply_to": "",
+        }
+        save_fetched(email, web_db)
+        h = cache._hash_message_id(email["message_id"])
+        with patch.object(web, "DB_PATH", web_db):
+            client = TestClient(web.app)
+            resp = client.get(f"/emails/{h}")
+        body = resp.text
+        assert 'id="compose-modal"' in body
+        assert 'id="compose-modal-body"' in body
+        assert "compose.css" in body
+        assert "compose.js" in body
+
+    def test_compose_modal_has_aria_dialog_attributes(self, web_db):
+        from fastapi.testclient import TestClient
+
+        from src.tests._helpers import save_fetched
+
+        cache.save_email_credentials("me@e.com", "secret", web_db)
+        email = {
+            "message_id": "<aria@e.com>",
+            "from": "a@b.com",
+            "subject": "S",
+            "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+            "body": "B",
+            "thread_id": _TID,
+            "gm_thrid": _TID,
+            "in_reply_to": "",
+        }
+        save_fetched(email, web_db)
+        h = cache._hash_message_id(email["message_id"])
+        with patch.object(web, "DB_PATH", web_db):
+            client = TestClient(web.app)
+            resp = client.get(f"/emails/{h}")
+        body = resp.text
+        assert 'role="dialog"' in body
+        assert 'aria-modal="true"' in body
+        assert 'aria-labelledby="compose-modal-title"' in body
+
+
+class TestEmailDetailConversation:
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path):
+        self.db_path = str(tmp_path / "thread_test.db")
+        cache.init_db(self.db_path)
+        cache.save_email_credentials("me@e.com", "secret", self.db_path)
+        from src.tests._helpers import save_fetched
+
+        self.save_fetched = save_fetched
+        self.root = {
+            "message_id": "<root@e.com>",
+            "from": "Alice <alice@e.com>",
+            "subject": "Topic",
+            "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+            "body": "root body",
+            "thread_id": _TID,
+            "gm_thrid": _TID,
+            "in_reply_to": "",
+        }
+        save_fetched(self.root, self.db_path)
+        self.root_hash = cache._hash_message_id(self.root["message_id"])
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+
+        return TestClient(web.app)
+
+    def _add_reply(self, mid, sender, day):
+        self.save_fetched(
+            {
+                "message_id": mid,
+                "from": sender,
+                "subject": "Re: Topic",
+                "date": f"Tue, 0{day} Jan 2024 10:00:00 +0000",
+                "body": "reply",
+                "thread_id": _TID,
+                "gm_thrid": _TID,
+                "in_reply_to": "<root@e.com>",
+            },
+            self.db_path,
+        )
+
+    def test_detail_page_shows_full_thread(self):
+        self._add_reply("<r1@e.com>", "Bob <bob@e.com>", 2)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._client()
+            resp = client.get(f"/emails/{self.root_hash}")
+        assert resp.status_code == 200
+        assert "2 messages in this conversation" in resp.text
+        assert "alice@e.com" in resp.text  # root sender
+        assert "bob@e.com" in resp.text  # reply sender
+
+    def test_detail_page_no_conversation_meta_for_single_message(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._client()
+            resp = client.get(f"/emails/{self.root_hash}")
+        assert resp.status_code == 200
+        assert "in this conversation" not in resp.text
+
+    def test_conversation_ordered_oldest_first(self):
+        self._add_reply("<r1@e.com>", "u1@e.com", 2)
+        self._add_reply("<r2@e.com>", "u2@e.com", 3)
+        r1_hash = cache._hash_message_id("<r1@e.com>")
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._client()
+            resp = client.get(f"/emails/{r1_hash}")
+        body = resp.text
+        assert body.index("alice@e.com") < body.index("u1@e.com") < body.index("u2@e.com")
+
+    def test_body_strips_quoted_history_in_conversation(self):
+        self.save_fetched(
+            {
+                "message_id": "<quoted-reply@e.com>",
+                "from": "Bob <bob@e.com>",
+                "subject": "Re: Topic",
+                "date": "Tue, 02 Jan 2024 10:00:00 +0000",
+                "body": ("Here is my fresh reply.\n\nOn Mon, 1 Jan 2024 10:00:00 +0000, Alice wrote:\n> root body\n"),
+                "thread_id": _TID,
+                "gm_thrid": _TID,
+                "in_reply_to": "<root@e.com>",
+            },
+            self.db_path,
+        )
+        reply_hash = cache._hash_message_id("<quoted-reply@e.com>")
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._client()
+            detail = client.get(f"/emails/{reply_hash}")
+        assert detail.status_code == 200
+        assert "Here is my fresh reply." in detail.text
+        assert "On Mon, 1 Jan 2024" not in detail.text
+        assert "root body" in detail.text
+
+    def test_gmail_synced_reply_appears_in_conversation(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from src.scripts.email_reader import imap as imap_mod
+        from src.tests._helpers import fake_imap_session
+
+        sent_raw = (
+            "From: me@e.com\r\n"
+            "Subject: Re: Topic\r\n"
+            "Date: Tue, 02 Jan 2024 10:00:00 +0000\r\n"
+            "Message-ID: <gmail-reply@e.com>\r\n"
+            "In-Reply-To: <root@e.com>\r\n"
+            "References: <root@e.com>\r\n"
+            "\r\n"
+            "sent from gmail\r\n"
+        ).encode()
+
+        fake = MagicMock()
+        fake.list.return_value = ("OK", [b'(\\Sent) "/" "Sent"'])
+        fake.select.return_value = ("OK", [b""])
+        fake.uid.side_effect = [
+            ("OK", [b"1"]),
+            ("OK", [(b"UID 1 X-GM-THRID 1809095669921875987", sent_raw)]),  # header fetch
+            ("OK", [b"1"]),
+            ("OK", [(b"UID 1", sent_raw)]),  # body fetch
+        ]
+        fake_imap_session(monkeypatch, imap_mod, fake)
+
+        result = email_reader.sync_sent_replies(db_path=self.db_path)
+        assert result["synced"] == 1
+
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._client()
+            resp = client.get(f"/emails/{self.root_hash}")
+        assert resp.status_code == 200
+        assert "me@e.com" in resp.text
+        assert "2 messages in this conversation" in resp.text
+
+    def test_detail_shows_show_more_when_thread_over_limit(self):
+        for i, day in enumerate(range(2, 9), 1):
+            self._add_reply(f"<r{i}@e.com>", f"u{i}@e.com", day)
+        cache.save_setting("thread_limit", "5", self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._client()
+            resp = client.get(f"/emails/{self.root_hash}")
+        body = resp.text
+        assert 'id="thread-overflow"' in body
+        assert "thread-show-more" in body
+        assert 'id="thread-overflow" hidden' in body
+        assert "Show 3 more in conversation" in body
+
+    def test_detail_no_show_more_when_under_limit(self):
+        self._add_reply("<r1@e.com>", "u1@e.com", 2)
+        cache.save_setting("thread_limit", "5", self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._client()
+            resp = client.get(f"/emails/{self.root_hash}")
+        body = resp.text
+        assert "thread-overflow" not in body
+        assert "thread-show-more" not in body
+
+    def test_detail_limit_zero_shows_all(self):
+        self._add_reply("<r1@e.com>", "u1@e.com", 2)
+        self._add_reply("<r2@e.com>", "u2@e.com", 3)
+        cache.save_setting("thread_limit", "0", self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._client()
+            resp = client.get(f"/emails/{self.root_hash}")
+        body = resp.text
+        assert "thread-overflow" not in body
+        assert "thread-show-more" not in body

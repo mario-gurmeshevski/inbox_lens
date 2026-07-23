@@ -5,6 +5,7 @@
 {% endblock %}
 {% block styles %}
   <link rel="stylesheet" href="/static/email_detail.css" />
+  <link rel="stylesheet" href="/static/compose.css" />
 {% endblock %}
 {% block content %}
   <div class="back-row">
@@ -17,4 +18,7 @@
        hx-get="/partials/email-detail/{{ email_hash }}"
        hx-trigger="sse:refresh"
        hx-swap="innerHTML">{% include "partials/email_detail_content.html" %}</div>
+{% endblock %}
+{% block scripts %}
+  <script src="/static/js/compose.js"></script>
 {% endblock %}

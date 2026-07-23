@@ -5,7 +5,7 @@
   --bg: #ffffff;
   --bg-surface: #fafafa;
   --card: #ffffff;
-  --card-hover: #fafafa;
+  --card-hover: #f6f3f3;
   --white: #ffffff;
   --black: #000000;
 
@@ -29,6 +29,16 @@
   --pri-high: #d97706;
   --pri-medium: #ca8a04;
   --pri-low: #facc15;
+
+  /* Priority tint pairs (bg / border) */
+--pri-critical-tint-bg: #fef2f2;
+--pri-critical-tint-border: #fecaca;
+--pri-high-tint-bg: #fff7ed;
+--pri-high-tint-border: #fdba74;
+--pri-medium-tint-bg: #fffbeb;
+--pri-medium-tint-border: #fcd34d;
+--pri-low-tint-bg: #fefce8;
+--pri-low-tint-border: #fde047;
 
   /* Accent tints & focus rings */
   --accent-tint: rgba(59, 130, 246, 0.1);
@@ -78,10 +88,10 @@
 
   /* Surfaces */
   --bg: #0f0f10;
-  --bg-surface: #1a1a1d;
-  --card: #18181b;
-  --card-hover: #232327;
-  --white: #2a2a2e;
+  --bg-surface: #141417;
+  --card: #0f0f10;
+  --card-hover: #141417;
+  --white: #0f0f10;
   --black: #f4f4f5;
 
   /* Borders */
@@ -101,9 +111,19 @@
 
   /* Priority hues (brightened for contrast on dark) */
   --pri-critical: #f87171;
-  --pri-high: #fbbf24;
-  --pri-medium: #facc15;
-  --pri-low: #fde047;
+  --pri-high:     #fb923c;
+  --pri-medium:   #fbbf24;
+  --pri-low:      #fde047;
+
+  /* Priority tint pairs (bg / border) */
+  --pri-critical-tint-bg: rgba(248, 113, 113, 0.12);
+  --pri-critical-tint-border: rgba(248, 113, 113, 0.3);
+  --pri-high-tint-bg: rgba(251, 191, 36, 0.12);
+  --pri-high-tint-border: rgba(251, 191, 36, 0.3);
+  --pri-medium-tint-bg: rgba(253, 224, 71, 0.12);
+  --pri-medium-tint-border: rgba(253, 224, 71, 0.3);
+  --pri-low-tint-bg: rgba(253, 224, 71, 0.12);
+  --pri-low-tint-border: rgba(253, 224, 71, 0.3);
 
   /* Accent tints & focus rings */
   --accent-tint: rgba(96, 165, 250, 0.16);

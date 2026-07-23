@@ -69,9 +69,11 @@ Fetch emails from a Gmail inbox via IMAP, cache them in a local SQLite database,
 
    ```
 
-   > Using `make up-ts`? HTTPS requires MagicDNS + HTTPS Certificates enabled in your [Tailscale admin console](https://login.tailscale.com/admin/dns) — see [HTTPS via Tailscale Serve](#https-via-tailscale-serve).
+> Using `make up-ts`? HTTPS requires MagicDNS + HTTPS Certificates enabled in your [Tailscale admin console](https://login.tailscale.com/admin/dns) — see [HTTPS via Tailscale Serve](#https-via-tailscale-serve).
 
-   Open `http://localhost:8000` — on first visit you'll be prompted to connect your email account. You'll need a Gmail [App Password](https://myaccount.google.com/apppasswords) (2-Step Verification must be enabled).
+> `make up` publishes port 8000 on the host — access the dashboard at `http://localhost:8000` or `http://<your-lan-ip>:8000` (the LAN IP is printed when you run `make up`). Uses a Docker named volume (`inbox-lens-data`) for persistent storage.
+
+Open `http://localhost:8000` — on first visit you'll be prompted to connect your email account. You'll need a Gmail [App Password](https://myaccount.google.com/apppasswords) (2-Step Verification must be enabled).
 
 4. **Customize your keywords** (optional):
 
@@ -103,7 +105,7 @@ Fetch emails from a Gmail inbox via IMAP, cache them in a local SQLite database,
 
 ## Testing
 
-The project includes 704 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
+The project includes 859 tests covering all modules. Tests use temporary databases and mock external services (no IMAP credentials needed).
 
 ```bash
 
@@ -119,13 +121,14 @@ make test-cov   # For Mac/Linux
 
 | File                   | Tests | Coverage                                                                                       |
 | ---------------------- | ----- | ---------------------------------------------------------------------------------------------- |
-| `test_cache.py`        | 97    | DB ops, hashing, scanning, search, threads                                                     |
-| `test_web.py`          | 177   | FastAPI endpoints, SSE, Tailscale, auth middleware, update banner/panel, rate-limit cooldown   |
+| `test_web.py`          | 215   | FastAPI endpoints, SSE, Tailscale, auth middleware, update banner/panel, rate-limit cooldown   |
+| `test_imap.py`         | 155   | IMAP helpers, connection, fetch, delete, archive/move, flag sync, bulk ops                     |
+| `test_cache.py`        | 135   | DB ops, hashing, scanning, search, threads                                                     |
 | `test_updater.py`      | 84    | Version parsing/checking, GitHub fetch cache + rate-limit, Docker self-update, swap-helper rollback |
-| `test_email_reader.py` | 72    | Parsing, body cleaning, thread extraction, keywords                                            |
-| `test_idle_monitor.py` | 63    | IDLE loop, ConnectionLost, run_initial_fetch                                                   |
-| `test_auth.py`         | 42    | Password hashing, API keys, sessions, rate limiting                                            |
-| `test_imap.py`         | 120   | IMAP helpers, connection, fetch, delete, archive/move, flag sync, bulk ops                     |
+| `test_email_reader.py` | 83    | Parsing, body cleaning, thread extraction, keywords                                            |
+| `test_idle_monitor.py` | 67    | IDLE loop, ConnectionLost, run_initial_fetch                                                   |
+| `test_auth.py`         | 45    | Password hashing, API keys, sessions, rate limiting                                            |
+| `test_smtp.py`         | 26    | SMTP session, message building, reply/forward, persistence, rate limiting                      |
 | `test_crypto.py`       | 22    | Encryption, settings, credentials                                                              |
 | `test_event_bus.py`    | 12    | Pub/sub dispatch                                                                               |
 | `test_utils.py`        | 8     | Keyword parsing, priority buckets                                                              |
@@ -173,9 +176,9 @@ make up-ts # For Mac/Linux
 
 On first visit you'll be redirected to the setup page to connect your email account.
 
-**Data persistence** — `docker-compose.yaml` mounts `./src/data:/app/src/data` so the database (including keyword configuration), encryption key, and session secret survive container restarts and image updates.
+**Data persistence** — `docker-compose.yaml` persists data in the named `inbox-lens-data` volume so the database (including keyword configuration), encryption key, and session secret survive container restarts and image updates.
 
-**Compose files** — `make up` auto-loads `docker-compose.override.yaml` on top of `docker-compose.yaml`, which publishes port `8000` to the host. `make up-ts` instead uses `-f docker-compose.yaml -f docker-compose.tailscale.yaml`, deliberately skipping the override so no host port is exposed and the dashboard is reachable only via your [tailnet](#remote-access).
+**Compose files** — `make up` auto-loads `docker-compose.override.yaml` on top of `docker-compose.yaml`, which publishes port `8000` to the host. `make up-ts` instead uses `-f docker-compose.yaml -f docker-compose.tailscale.yaml`, deliberately skipping the override so no host port is exposed and the dashboard is reachable only via your [tailnet](#remote-access). The tailscale file uses `ports: !reset []` to undo the base file's port mapping, which requires Docker Compose v2.24+ (the `!reset` tag was introduced then).
 
 **Healthcheck** — the container defines a Docker `HEALTHCHECK` against `GET /health` (served by the FastAPI app), so `docker ps` and orchestrators report live status.
 
@@ -239,9 +242,9 @@ Opens at `http://localhost:8000`. Set `WEB_HOST` and `WEB_PORT` in `.env` to cus
 
 - **Email list** — filterable by status, priority, and search text; paginated; responsive card layout on mobile; bulk-select rows to mark read/unread, star/unstar, archive, delete, or move
 
-- **Email detail** — full body view with rendered Markdown (bold, lists, links, code), colored keyword tags
+- **Email detail** — full body view with rendered Markdown (bold, lists, links, code), colored keyword tags, grouped by conversation (threaded replies with a "Sent" badge on outbound messages)
 
-- **Email actions** — manage mail without leaving the dashboard: mark read/unread and star/unstar (toggle inline), archive, move to folder, and delete. Local state updates instantly and the IMAP mutation syncs in the background; if a remote op fails the affected email reappears on the next refresh
+- **Email actions** — manage mail without leaving the dashboard: mark read/unread and star/unstar (toggle inline), archive, move to folder, delete, and **reply** or **forward** via a compose modal (recipient pre-filled on reply, quoted block on forward, threaded headers). Sent messages are saved locally and the compose endpoint is rate-limited to 10 sends/minute. Local state updates instantly and the IMAP mutation syncs in the background; if a remote op fails the affected email reappears on the next refresh
 
 - **Move to folder** — a folder picker populated from your IMAP account's mailbox list; folder names are validated before being sent to the IMAP server
 
@@ -402,6 +405,8 @@ The dashboard is now available at `https://<hostname>.<tailnet-name>.ts.net` wit
 | Variable                 | Default          | Description                                                                |
 | ------------------------ | ---------------- | -------------------------------------------------------------------------- |
 | `IMAP_SERVER`            | `imap.gmail.com` | IMAP server address                                                        |
+| `SMTP_SERVER`            | `smtp.gmail.com` | SMTP server address (used for reply/forward; reuses IMAP credentials)      |
+| `SMTP_PORT`              | `465`            | SMTP server port                                                           |
 | `WEB_HOST`               | `0.0.0.0`        | Web dashboard host (forced to `127.0.0.1` if no dashboard password is set) |
 | `WEB_PORT`               | `8000`           | Web dashboard port                                                         |
 | `HOST_IP`                | /                | Host IP for network access display (auto-detected)                         |

@@ -261,7 +261,7 @@ class TestGetPriorityCounts:
         for i in range(3):
             e = {
                 "message_id": f"<pc{i}@e.com>",
-                "subject": "s",
+                "subject": f"distinct subject {i}",
                 "date": "Mon, 01 Jan 2024 00:00:00 +0000",
                 "body": "b",
                 "_category": "7",
@@ -375,6 +375,51 @@ class TestUpdateBodiesBatch:
         assert int(row_b["is_read"]) == 1
         assert int(row_b["is_starred"]) == 1
 
+    def test_no_subject_select_issued(self, tmp_db, sample_headers_batch):
+        cache.save_headers_batch(sample_headers_batch, tmp_db)
+        mid = sample_headers_batch[0]["message_id"]
+
+        select_calls: list[str] = []
+
+        class _WrappedConn:
+            def __init__(self, cm):
+                self._cm = cm
+                self._real = None
+
+            def __enter__(self):
+                self._real = self._cm.__enter__()
+                return self
+
+            def __exit__(self, *exc):
+                return self._cm.__exit__(*exc)
+
+            def execute(self, sql, *args, **kwargs):
+                normalized = " ".join(str(sql).upper().split())
+                if normalized.startswith("SELECT") and "FROM EMAILS" in normalized:
+                    select_calls.append(str(sql))
+                return self._real.execute(sql, *args, **kwargs)
+
+            def executemany(self, sql, *args, **kwargs):
+                return self._real.executemany(sql, *args, **kwargs)
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        import src.scripts.cache.db as db_mod
+
+        real_connect = db_mod._connect
+
+        def _spy_connect(db_path):
+            return _WrappedConn(real_connect(db_path))
+
+        db_mod._connect = _spy_connect
+        try:
+            updated = cache.update_bodies_batch([(mid, "body")], tmp_db)
+        finally:
+            db_mod._connect = real_connect
+        assert updated == 1
+        assert select_calls == [], f"unexpected SELECT on emails: {select_calls}"
+
 
 class TestUpdateFlagsBatch:
     def test_refreshes_flags_without_disturbing_body_or_status(self, tmp_db, sample_email):
@@ -398,9 +443,7 @@ class TestUpdateFlagsBatch:
         cache.update_flags_batch([(1, 1, h)], tmp_db)
         cache.update_flags_batch([(0, 0, h)], tmp_db)
         with cache._connect(tmp_db) as conn:
-            row = conn.execute(
-                "SELECT is_read, is_starred FROM emails WHERE message_id_hash = ?", (h,)
-            ).fetchone()
+            row = conn.execute("SELECT is_read, is_starred FROM emails WHERE message_id_hash = ?", (h,)).fetchone()
         assert int(row["is_read"]) == 0
         assert int(row["is_starred"]) == 0
 
@@ -522,6 +565,202 @@ class TestSearchEmails:
         assert total == 10
         assert pages == 2
 
+    def test_sent_emails_remain_in_list(self, tmp_db):
+        self._seed_search_data(tmp_db)
+        emails, total, _ = cache.search_emails(tmp_db)
+        assert total == 10
+        sent_hash = cache._hash_message_id("<se0@e.com>")
+        cache.mark_sent([sent_hash], tmp_db)
+        emails2, total2, _ = cache.search_emails(tmp_db)
+        assert total2 == 10
+
+    def test_sent_emails_remain_in_recent(self, tmp_db):
+        self._seed_search_data(tmp_db)
+        before = cache.get_recent_emails(tmp_db, limit=10)
+        assert len(before) == 10
+        sent_hash = cache._hash_message_id("<se0@e.com>")
+        cache.mark_sent([sent_hash], tmp_db)
+        after = cache.get_recent_emails(tmp_db, limit=10)
+        assert len(after) == 10
+
+    def test_sent_email_remains_in_conversation(self, tmp_db):
+        gm_thrid = "sent-reply-1"
+        tid = cache._hash_message_id(gm_thrid)
+        original = {
+            "message_id": "<orig@e.com>",
+            "from": "alice@e.com",
+            "subject": "Purchase confirmed",
+            "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+            "body": "thanks",
+            "thread_id": tid,
+            "gm_thrid": gm_thrid,
+            "in_reply_to": "",
+        }
+        reply = {
+            "message_id": "<reply@e.com>",
+            "from": "me@e.com",
+            "subject": "Re: Purchase confirmed",
+            "date": "Tue, 02 Jan 2024 10:00:00 +0000",
+            "body": "got it",
+            "thread_id": tid,
+            "gm_thrid": gm_thrid,
+            "in_reply_to": "<orig@e.com>",
+        }
+        _save_fetched(original, tmp_db)
+        _save_fetched(reply, tmp_db)
+        cache.mark_sent([cache._hash_message_id(reply["message_id"])], tmp_db)
+        conv = cache.get_conversation(tmp_db, cache._hash_message_id(original["message_id"]))
+        mids = [c["message_id"] for c in conv]
+        assert "<reply@e.com>" in mids
+        reply_member = next(c for c in conv if c["message_id"] == "<reply@e.com>")
+        assert reply_member["is_sent"] == 1
+
+    def test_mark_sent_is_idempotent_and_ignores_empty(self, tmp_db):
+        self._seed_search_data(tmp_db)
+        h = cache._hash_message_id("<se0@e.com>")
+        assert cache.mark_sent([h], tmp_db) == 1
+        assert cache.mark_sent([h], tmp_db) == 1  # re-marking is fine
+        assert cache.mark_sent([], tmp_db) == 0
+
+
+class TestReconcileInbox:
+    def test_deletes_cached_rows_absent_from_server(self, tmp_db):
+        a = {
+            "message_id": "<a@e.com>",
+            "from": "x",
+            "subject": "A",
+            "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+            "body": "a",
+        }
+        b = {
+            "message_id": "<b@e.com>",
+            "from": "x",
+            "subject": "B",
+            "date": "Mon, 02 Jan 2024 10:00:00 +0000",
+            "body": "b",
+        }
+        ghost = {
+            "message_id": "<ghost@e.com>",
+            "from": "x",
+            "subject": "Ghost",
+            "date": "Mon, 03 Jan 2024 10:00:00 +0000",
+            "body": "gone",
+        }
+        for e in (a, b, ghost):
+            _save_fetched(e, tmp_db)
+        ha = cache._hash_message_id(a["message_id"])
+        hb = cache._hash_message_id(b["message_id"])
+        hghost = cache._hash_message_id(ghost["message_id"])
+        removed = cache.reconcile_inbox(tmp_db, {ha, hb}, protected_hashes=set())
+        assert removed == 1
+        assert cache.get_email_by_hash(tmp_db, hghost) is None
+        assert cache.get_email_by_hash(tmp_db, ha) is not None
+        assert cache.get_email_by_hash(tmp_db, hb) is not None
+
+    def test_preserves_sent_replies(self, tmp_db):
+        inbox = {
+            "message_id": "<a@e.com>",
+            "from": "x",
+            "subject": "A",
+            "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+            "body": "a",
+        }
+        sent = {
+            "message_id": "<sent@e.com>",
+            "from": "me",
+            "subject": "Re: A",
+            "date": "Mon, 02 Jan 2024 10:00:00 +0000",
+            "body": "reply",
+            "in_reply_to": "<a@e.com>",
+        }
+        _save_fetched(inbox, tmp_db)
+        _save_fetched(sent, tmp_db)
+        cache.mark_sent([cache._hash_message_id(sent["message_id"])], tmp_db)
+
+        ha = cache._hash_message_id(inbox["message_id"])
+        cache.reconcile_inbox(tmp_db, {ha}, protected_hashes=set())  # only inbox hash in server set
+        assert cache.get_email_by_hash(tmp_db, ha) is not None
+        assert cache.get_email_by_hash(tmp_db, cache._hash_message_id(sent["message_id"])) is not None
+
+    def test_skips_when_fetch_ratio_below_threshold(self, tmp_db):
+        _save_fetched(
+            {
+                "message_id": "<ghost@e.com>",
+                "from": "x",
+                "subject": "Ghost",
+                "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                "body": "gone",
+            },
+            tmp_db,
+        )
+        hghost = cache._hash_message_id("<ghost@e.com>")
+        removed = cache.reconcile_inbox(tmp_db, set(), protected_hashes=set(), searched_count=100)
+        assert removed == 0
+        assert cache.get_email_by_hash(tmp_db, hghost) is not None
+
+    def test_skips_when_no_protected_hashes(self, tmp_db):
+        _save_fetched(
+            {
+                "message_id": "<ghost@e.com>",
+                "from": "x",
+                "subject": "Ghost",
+                "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                "body": "gone",
+            },
+            tmp_db,
+        )
+        hghost = cache._hash_message_id("<ghost@e.com>")
+        removed = cache.reconcile_inbox(tmp_db, set(), protected_hashes=None)
+        assert removed == 0
+        assert cache.get_email_by_hash(tmp_db, hghost) is not None
+
+    def test_skips_when_ghosts_exceed_cap(self, tmp_db):
+        for i in range(20):
+            _save_fetched(
+                {
+                    "message_id": f"<e{i}@e.com>",
+                    "from": "x",
+                    "subject": f"E{i}",
+                    "date": f"Mon, 0{i + 1} Jan 2024 10:00:00 +0000",
+                    "body": "body",
+                },
+                tmp_db,
+            )
+        one_hash = cache._hash_message_id("<e0@e.com>")
+        removed = cache.reconcile_inbox(tmp_db, {one_hash}, protected_hashes=set(), searched_count=20)
+        assert removed == 0
+        # All rows preserved.
+        assert cache.get_total_count(tmp_db) == 20
+
+    def test_force_bypasses_guards(self, tmp_db):
+        _save_fetched(
+            {
+                "message_id": "<a@e.com>",
+                "from": "x",
+                "subject": "A",
+                "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                "body": "a",
+            },
+            tmp_db,
+        )
+        removed = cache.reconcile_inbox(tmp_db, set(), force=True)
+        assert removed == 1
+        assert cache.get_email_by_hash(tmp_db, cache._hash_message_id("<a@e.com>")) is None
+
+    def test_no_changes_when_everything_present(self, tmp_db):
+        _save_fetched(
+            {
+                "message_id": "<a@e.com>",
+                "from": "x",
+                "subject": "A",
+                "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                "body": "a",
+            },
+            tmp_db,
+        )
+        removed = cache.reconcile_inbox(tmp_db, {cache._hash_message_id("<a@e.com>")}, protected_hashes=set())
+        assert removed == 0
+
 
 class TestRowToDict:
     def test_converts_row_to_dict_with_all_fields(self, tmp_db, sample_email):
@@ -537,6 +776,7 @@ class TestRowToDict:
         assert d["keyword_matches"] == sample_email["keyword_matches"]
         assert d["thread_id"] == "abc123def456"
         assert d["in_reply_to"] == "<parent@example.com>"
+        assert d["is_sent"] == 0
 
     def test_handles_invalid_keyword_json(self, tmp_db):
         with cache._connect(tmp_db) as conn:
@@ -886,3 +1126,455 @@ class TestSchemaMigration:
             tmp_db,
         )
         assert cache.get_total_count(tmp_db) == 1
+
+    def test_migrate_backfills_null_thread_id(self, tmp_path):
+        import sqlite3
+
+        db_path = str(tmp_path / "legacy.db")
+        old_schema = """
+        CREATE TABLE emails (
+            message_id_hash TEXT PRIMARY KEY,
+            message_id TEXT NOT NULL,
+            sender TEXT,
+            subject TEXT,
+            date TEXT,
+            date_parsed TEXT,
+            body TEXT,
+            status TEXT DEFAULT 'fetched',
+            category TEXT,
+            keyword_matches TEXT,
+            thread_id TEXT,
+            in_reply_to TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        """
+        with sqlite3.connect(db_path) as conn:
+            conn.executescript(old_schema)
+            conn.execute(
+                "INSERT INTO emails (message_id_hash, message_id, thread_id) VALUES ('h1', '<m1@e.com>', NULL)"
+            )
+            conn.execute(
+                "INSERT INTO emails (message_id_hash, message_id, thread_id) VALUES ('h2', '<m2@e.com>', NULL)"
+            )
+            conn.execute(
+                "INSERT INTO emails (message_id_hash, message_id, thread_id) VALUES ('h3', '<m3@e.com>', 'keep-me')"
+            )
+
+        cache.init_db(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = {
+                r["message_id_hash"]: r["thread_id"]
+                for r in conn.execute("SELECT message_id_hash, thread_id FROM emails")
+            }
+
+        assert rows["h1"] == "h1"
+        assert rows["h2"] == "h2"
+        assert rows["h3"] == "keep-me"
+
+
+class TestGetConversation:
+    GM_THRID = "1809095669921875987"
+
+    def _save(
+        self,
+        db,
+        message_id,
+        in_reply_to=None,
+        subject="Topic",
+        date="Mon, 01 Jan 2024 10:00:00 +0000",
+        gm_thrid=GM_THRID,
+    ):
+        tid = cache._hash_message_id(gm_thrid) if gm_thrid else None
+        _save_fetched(
+            {
+                "message_id": message_id,
+                "from": "sender@example.com",
+                "subject": subject,
+                "date": date,
+                "body": "body",
+                "thread_id": tid,
+                "gm_thrid": gm_thrid,
+                "in_reply_to": in_reply_to,
+            },
+            db,
+        )
+
+    def test_includes_seed_and_replies_oldest_first(self, tmp_db):
+        self._save(tmp_db, "<root@e.com>", None, date="Mon, 01 Jan 2024 10:00:00 +0000")
+        self._save(tmp_db, "<reply1@e.com>", "<root@e.com>", date="Tue, 02 Jan 2024 10:00:00 +0000")
+        root_hash = cache._hash_message_id("<root@e.com>")
+        conv = cache.get_conversation(tmp_db, root_hash)
+        assert [c["message_id"] for c in conv] == ["<root@e.com>", "<reply1@e.com>"]
+
+    def test_same_conversation_regardless_of_which_message_clicked(self, tmp_db):
+        self._save(tmp_db, "<root@e.com>", None, date="Mon, 01 Jan 2024 10:00:00 +0000")
+        self._save(tmp_db, "<reply1@e.com>", "<root@e.com>", date="Tue, 02 Jan 2024 10:00:00 +0000")
+        from_root = [c["message_id"] for c in cache.get_conversation(tmp_db, cache._hash_message_id("<root@e.com>"))]
+        from_reply = [c["message_id"] for c in cache.get_conversation(tmp_db, cache._hash_message_id("<reply1@e.com>"))]
+        assert from_root == from_reply == ["<root@e.com>", "<reply1@e.com>"]
+
+    def test_includes_sibling_replies_ordered_oldest_first(self, tmp_db):
+        self._save(tmp_db, "<root@e.com>", None, date="Mon, 01 Jan 2024 10:00:00 +0000")
+        self._save(tmp_db, "<r1@e.com>", "<root@e.com>", date="Tue, 02 Jan 2024 10:00:00 +0000")
+        self._save(tmp_db, "<r2@e.com>", "<root@e.com>", date="Wed, 03 Jan 2024 10:00:00 +0000")
+        root_hash = cache._hash_message_id("<root@e.com>")
+        conv = cache.get_conversation(tmp_db, root_hash)
+        assert [c["message_id"] for c in conv] == ["<root@e.com>", "<r1@e.com>", "<r2@e.com>"]
+
+    def test_multi_level_chain_all_chronological(self, tmp_db):
+        self._save(tmp_db, "<a@e.com>", None, date="Mon, 01 Jan 2024 10:00:00 +0000")
+        self._save(tmp_db, "<b@e.com>", "<a@e.com>", date="Tue, 02 Jan 2024 10:00:00 +0000")
+        self._save(tmp_db, "<c@e.com>", "<b@e.com>", date="Wed, 03 Jan 2024 10:00:00 +0000")
+        mid_hash = cache._hash_message_id("<b@e.com>")
+        conv = cache.get_conversation(tmp_db, mid_hash)
+        assert [c["message_id"] for c in conv] == ["<a@e.com>", "<b@e.com>", "<c@e.com>"]
+
+    def test_single_message_returns_just_itself(self, tmp_db):
+        self._save(tmp_db, "<lonely@e.com>", None)
+        h = cache._hash_message_id("<lonely@e.com>")
+        conv = cache.get_conversation(tmp_db, h)
+        assert [c["message_id"] for c in conv] == ["<lonely@e.com>"]
+
+    def test_returns_empty_for_unknown_hash(self, tmp_db):
+        assert cache.get_conversation(tmp_db, "nonexistent") == []
+
+    def test_result_rows_include_hash_and_category(self, tmp_db):
+        self._save(tmp_db, "<root@e.com>", None)
+        self._save(tmp_db, "<r1@e.com>", "<root@e.com>")
+        root_hash = cache._hash_message_id("<root@e.com>")
+        conv = cache.get_conversation(tmp_db, root_hash)
+        assert len(conv) == 2
+        assert conv[1]["_file_hash"] == cache._hash_message_id("<r1@e.com>")
+        assert conv[1]["_category"] == "unclassified"
+
+    def test_get_conversation_merges_after_thread_refresh(self, tmp_db):
+        self._save(tmp_db, "<orig@e.com>", None, gm_thrid=None)
+        self._save(tmp_db, "<reply@e.com>", "<orig@e.com>", gm_thrid="shared-thrid")
+
+        root_hash = cache._hash_message_id("<orig@e.com>")
+        assert [c["message_id"] for c in cache.get_conversation(tmp_db, root_hash)] == ["<orig@e.com>"]
+
+        shared_tid = cache._hash_message_id("shared-thrid")
+        cache.refresh_thread_ids(
+            [
+                (shared_tid, "shared-thrid", cache._hash_message_id("<orig@e.com>")),
+                (shared_tid, "shared-thrid", cache._hash_message_id("<reply@e.com>")),
+            ],
+            tmp_db,
+        )
+        conv = cache.get_conversation(tmp_db, root_hash)
+        assert [c["message_id"] for c in conv] == ["<orig@e.com>", "<reply@e.com>"]
+
+    def test_limit_returns_oldest_n(self, tmp_db):
+        self._save(tmp_db, "<m1@e.com>", None, date="Mon, 01 Jan 2024 10:00:00 +0000")
+        self._save(tmp_db, "<m2@e.com>", "<m1@e.com>", date="Tue, 02 Jan 2024 10:00:00 +0000")
+        self._save(tmp_db, "<m3@e.com>", "<m2@e.com>", date="Wed, 03 Jan 2024 10:00:00 +0000")
+        self._save(tmp_db, "<m4@e.com>", "<m3@e.com>", date="Thu, 04 Jan 2024 10:00:00 +0000")
+        root_hash = cache._hash_message_id("<m1@e.com>")
+        conv = cache.get_conversation(tmp_db, root_hash, limit=2)
+        assert [c["message_id"] for c in conv] == ["<m1@e.com>", "<m2@e.com>"]
+
+    def test_limit_zero_returns_all(self, tmp_db):
+        self._save(tmp_db, "<m1@e.com>", None, date="Mon, 01 Jan 2024 10:00:00 +0000")
+        self._save(tmp_db, "<m2@e.com>", "<m1@e.com>", date="Tue, 02 Jan 2024 10:00:00 +0000")
+        root_hash = cache._hash_message_id("<m1@e.com>")
+        conv = cache.get_conversation(tmp_db, root_hash, limit=0)
+        assert len(conv) == 2
+
+    def test_limit_exceeds_thread_returns_all(self, tmp_db):
+        self._save(tmp_db, "<m1@e.com>", None, date="Mon, 01 Jan 2024 10:00:00 +0000")
+        self._save(tmp_db, "<m2@e.com>", "<m1@e.com>", date="Tue, 02 Jan 2024 10:00:00 +0000")
+        self._save(tmp_db, "<m3@e.com>", "<m2@e.com>", date="Wed, 03 Jan 2024 10:00:00 +0000")
+        root_hash = cache._hash_message_id("<m1@e.com>")
+        conv = cache.get_conversation(tmp_db, root_hash, limit=10)
+        assert len(conv) == 3
+
+
+class TestConversationGrouping:
+    _thread_counter = 0
+
+    def _thread(self, db, subject, dates):
+        type(self)._thread_counter += 1
+        gm_thrid = f"thr{type(self)._thread_counter}"
+        tid = cache._hash_message_id(gm_thrid)
+        mids = [f"<{subject}-{i}@e.com>" for i in range(len(dates))]
+        _save_fetched(
+            {
+                "message_id": mids[0],
+                "from": "a@e.com",
+                "subject": subject,
+                "date": dates[0],
+                "body": "orig",
+                "thread_id": tid,
+                "gm_thrid": gm_thrid,
+            },
+            db,
+        )
+        for i, d in enumerate(dates[1:], start=1):
+            _save_fetched(
+                {
+                    "message_id": mids[i],
+                    "from": "a@e.com",
+                    "subject": f"Re: {subject}",
+                    "date": d,
+                    "body": f"reply{i}",
+                    "thread_id": tid,
+                    "gm_thrid": gm_thrid,
+                },
+                db,
+            )
+        return mids
+
+    def test_replies_collapse_to_one_conversation(self, tmp_db):
+        self._thread(
+            tmp_db,
+            "Hello",
+            [
+                "Mon, 01 Jan 2024 10:00:00 +0000",
+                "Tue, 02 Jan 2024 10:00:00 +0000",
+                "Wed, 03 Jan 2024 10:00:00 +0000",
+            ],
+        )
+        emails, total, _ = cache.search_emails(tmp_db)
+        assert total == 1
+        assert len(emails) == 1
+        assert emails[0]["reply_count"] == 3
+
+    def test_latest_message_is_representative(self, tmp_db):
+        mids = self._thread(
+            tmp_db,
+            "Hello",
+            [
+                "Mon, 01 Jan 2024 10:00:00 +0000",
+                "Tue, 02 Jan 2024 10:00:00 +0000",
+                "Wed, 03 Jan 2024 10:00:00 +0000",
+            ],
+        )
+        emails, _, _ = cache.search_emails(tmp_db)
+        assert emails[0]["message_id"] == mids[-1]
+
+    def test_distinct_conversations_stay_separate(self, tmp_db):
+        self._thread(tmp_db, "Alpha", ["Mon, 01 Jan 2024 10:00:00 +0000"])
+        self._thread(tmp_db, "Beta", ["Mon, 01 Jan 2024 10:00:00 +0000"])
+        _, total, _ = cache.search_emails(tmp_db)
+        assert total == 2
+
+    def test_list_view_shows_latest_while_conversation_shows_all_oldest_first(self, tmp_db):
+        mids = self._thread(
+            tmp_db,
+            "Hello",
+            [
+                "Mon, 01 Jan 2024 10:00:00 +0000",  # root (oldest)
+                "Tue, 02 Jan 2024 10:00:00 +0000",  # reply 1
+                "Wed, 03 Jan 2024 10:00:00 +0000",  # reply 2 (newest)
+            ],
+        )
+        emails, total, _ = cache.search_emails(tmp_db)
+        assert total == 1
+        assert [e["message_id"] for e in emails] == [mids[-1]]
+        recent = cache.get_recent_emails(tmp_db, limit=10)
+        assert [r["message_id"] for r in recent] == [mids[-1]]
+        root_hash = cache._hash_message_id(mids[0])
+        conv = cache.get_conversation(tmp_db, root_hash)
+        assert [c["message_id"] for c in conv] == mids
+
+    def test_get_list_count_counts_conversations(self, tmp_db):
+        self._thread(
+            tmp_db,
+            "Alpha",
+            [
+                "Mon, 01 Jan 2024 10:00:00 +0000",
+                "Tue, 02 Jan 2024 10:00:00 +0000",
+            ],
+        )
+        self._thread(tmp_db, "Beta", ["Mon, 01 Jan 2024 10:00:00 +0000"])
+        assert cache.get_total_count(tmp_db) == 3
+        assert cache.get_list_count(tmp_db) == 2
+
+    def test_checked_can_never_exceed_total(self, tmp_db):
+        self._thread(
+            tmp_db,
+            "Hello",
+            [
+                "Mon, 01 Jan 2024 10:00:00 +0000",
+                "Tue, 02 Jan 2024 10:00:00 +0000",
+            ],
+        )
+        with cache._connect(tmp_db) as conn:
+            conn.execute("UPDATE emails SET status = 'checked', category = '7'")
+        counts = cache.get_counts(tmp_db)
+        total = cache.get_list_count(tmp_db)
+        checked = counts["checked"]
+        assert checked <= total
+        assert checked == total
+
+    def test_recent_emails_one_per_conversation(self, tmp_db):
+        self._thread(
+            tmp_db,
+            "Hello",
+            [
+                "Mon, 01 Jan 2024 10:00:00 +0000",
+                "Tue, 02 Jan 2024 10:00:00 +0000",
+            ],
+        )
+        recent = cache.get_recent_emails(tmp_db, limit=10)
+        assert len(recent) == 1
+        assert recent[0]["reply_count"] == 2
+
+    def test_same_subject_different_senders_stay_separate(self, tmp_db):
+        _save_fetched(
+            {
+                "message_id": "<a@e.com>",
+                "from": "bank-a@e.com",
+                "subject": "Verification code",
+                "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                "body": "code 1111",
+            },
+            tmp_db,
+        )
+        _save_fetched(
+            {
+                "message_id": "<b@e.com>",
+                "from": "bank-b@e.com",
+                "subject": "Verification code",
+                "date": "Tue, 02 Jan 2024 10:00:00 +0000",
+                "body": "code 2222",
+            },
+            tmp_db,
+        )
+        _, total, _ = cache.search_emails(tmp_db)
+        assert total == 2
+
+    def test_transitive_chain_collapses(self, tmp_db):
+        gm_thrid = "chain1"
+        tid = cache._hash_message_id(gm_thrid)
+        _save_fetched(
+            {
+                "message_id": "<a@e.com>",
+                "from": "alice@e.com",
+                "subject": "Root",
+                "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                "body": "a",
+                "thread_id": tid,
+                "gm_thrid": gm_thrid,
+            },
+            tmp_db,
+        )
+        _save_fetched(
+            {
+                "message_id": "<b@e.com>",
+                "from": "bob@e.com",
+                "subject": "Re: Root",
+                "date": "Tue, 02 Jan 2024 10:00:00 +0000",
+                "body": "b",
+                "in_reply_to": "<a@e.com>",
+                "thread_id": tid,
+                "gm_thrid": gm_thrid,
+            },
+            tmp_db,
+        )
+        _save_fetched(
+            {
+                "message_id": "<c@e.com>",
+                "from": "carol@e.com",
+                "subject": "Re: Root",
+                "date": "Wed, 03 Jan 2024 10:00:00 +0000",
+                "body": "c",
+                "in_reply_to": "<b@e.com>",
+                "thread_id": tid,
+                "gm_thrid": gm_thrid,
+            },
+            tmp_db,
+        )
+        emails, total, _ = cache.search_emails(tmp_db)
+        assert total == 1
+        assert emails[0]["reply_count"] == 3
+
+
+class TestGmThridAuthority:
+    def _gm_tid(self, thrid):
+        return cache._hash_message_id(thrid)
+
+    def _save(self, db, mid, gm_thrid, date="Mon, 01 Jan 2024 10:00:00 +0000", subject="Topic"):
+        _save_fetched(
+            {
+                "message_id": mid,
+                "from": "a@e.com",
+                "subject": subject,
+                "date": date,
+                "body": "body",
+                "thread_id": self._gm_tid(gm_thrid) if gm_thrid else None,
+                "gm_thrid": gm_thrid,
+            },
+            db,
+        )
+
+    def test_shared_gm_thrid_groups_into_one_conversation(self, tmp_db):
+        self._save(tmp_db, "<a@e.com>", "1809095669921875987", date="Mon, 01 Jan 2024 10:00:00 +0000")
+        self._save(
+            tmp_db, "<b@e.com>", "1809095669921875987", date="Tue, 02 Jan 2024 10:00:00 +0000", subject="Re: Topic"
+        )
+        emails, total, _ = cache.search_emails(tmp_db)
+        assert total == 1
+        assert emails[0]["reply_count"] == 2
+
+    def test_distinct_gm_thrids_stay_separate(self, tmp_db):
+        self._save(tmp_db, "<a@e.com>", "111")
+        self._save(tmp_db, "<b@e.com>", "222")
+        _, total, _ = cache.search_emails(tmp_db)
+        assert total == 2
+
+    def test_message_without_gm_thrid_is_own_thread(self, tmp_db):
+        self._save(tmp_db, "<a@e.com>", None)
+        self._save(tmp_db, "<b@e.com>", None)
+        _, total, _ = cache.search_emails(tmp_db)
+        assert total == 2
+        with cache._connect(tmp_db) as conn:
+            tids = {r["thread_id"] for r in conn.execute("SELECT thread_id FROM emails")}
+        assert len(tids) == 2
+
+    def test_save_headers_batch_inserts_gm_thrid(self, tmp_db):
+        gm_tid = self._gm_tid("1809095669921875987")
+        cache.save_headers_batch(
+            [
+                {
+                    "message_id": "<g@e.com>",
+                    "from": "a@e.com",
+                    "subject": "G",
+                    "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                    "thread_id": gm_tid,
+                    "gm_thrid": "1809095669921875987",
+                }
+            ],
+            tmp_db,
+        )
+        d = cache.get_email_by_hash(tmp_db, cache._hash_message_id("<g@e.com>"))
+        assert d["thread_id"] == gm_tid
+        assert d["gm_thrid"] == "1809095669921875987"
+
+    def test_refresh_thread_ids_persists_gm_thrid(self, tmp_db):
+        _save_fetched(
+            {
+                "message_id": "<x@e.com>",
+                "from": "a@e.com",
+                "subject": "X",
+                "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                "body": "x",
+            },
+            tmp_db,
+        )
+        h = cache._hash_message_id("<x@e.com>")
+        gm_tid = self._gm_tid("1809095669921875987")
+
+        changed = cache.refresh_thread_ids([(gm_tid, "1809095669921875987", h)], tmp_db)
+        assert changed == 1
+
+        d = cache.get_email_by_hash(tmp_db, h)
+        assert d["thread_id"] == gm_tid
+        assert d["gm_thrid"] == "1809095669921875987"

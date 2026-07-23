@@ -10,19 +10,29 @@
             class="settings-tab is-active"
             data-tab="system"
             role="tab"
-            aria-selected="true">System</button>
+            aria-selected="true"
+            id="tab-system"
+            aria-controls="panel-system">System</button>
     <button type="button"
             class="settings-tab"
             data-tab="preferences"
             role="tab"
-            aria-selected="false">Preferences</button>
+            aria-selected="false"
+            id="tab-preferences"
+            aria-controls="panel-preferences">Preferences</button>
     <button type="button"
             class="settings-tab"
             data-tab="security"
             role="tab"
-            aria-selected="false">Security</button>
+            aria-selected="false"
+            id="tab-security"
+            aria-controls="panel-security">Security</button>
   </nav>
-  <section class="settings-tab-panel" data-tab-panel="system">
+  <section class="settings-tab-panel"
+           data-tab-panel="system"
+           role="tabpanel"
+           aria-labelledby="tab-system"
+           id="panel-system">
     {% if is_docker %}
       <div class="detail-card is-spaced">{% include "partials/update_panel.html" %}</div>
     {% else %}
@@ -156,7 +166,12 @@
       {% endif %}
     </div>
   </section>
-  <section class="settings-tab-panel" data-tab-panel="preferences" hidden>
+  <section class="settings-tab-panel"
+           data-tab-panel="preferences"
+           hidden
+           role="tabpanel"
+           aria-labelledby="tab-preferences"
+           id="panel-preferences">
     <div class="detail-card is-spaced">
       <div class="settings-row">
         <div class="settings-info">
@@ -205,6 +220,35 @@
                 {% for size in page_size_options %}
                   <option value="{{ size }}" {% if page_size == size %}selected{% endif %}>{{ size }}</option>
                 {% endfor %}
+              </select>
+              <i data-lucide="chevron-down" class="theme-select-chevron icon"></i>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+    <div class="detail-card">
+      <div class="settings-row">
+        <div class="settings-info">
+          <div class="settings-label">
+            <i data-lucide="messages-square" class="icon"></i>
+            Thread replies
+          </div>
+          <p class="settings-desc">How many replies to show at once in an email thread before the &ldquo;Show more&rdquo; button. Saves automatically.</p>
+        </div>
+      </div>
+      <div class="settings-network-info">
+        <form hx-post="/settings/thread-replies"
+              hx-trigger="change"
+              class="setup-form">
+          <div class="form-group">
+            <label for="thread-replies">Replies to show</label>
+            <div class="theme-select-wrap">
+              <select id="thread-replies" name="thread_replies" class="theme-select">
+                {% for val in thread_limit_options %}
+                  <option value="{{ val }}" {% if thread_limit == val %}selected{% endif %}>{{ val }}</option>
+                {% endfor %}
+                <option value="all" {% if thread_limit == 0 %}selected{% endif %}>All</option>
               </select>
               <i data-lucide="chevron-down" class="theme-select-chevron icon"></i>
             </div>
@@ -322,7 +366,12 @@
       </div>
     </div>
   </section>
-  <section class="settings-tab-panel" data-tab-panel="security" hidden>
+  <section class="settings-tab-panel"
+           data-tab-panel="security"
+           hidden
+           role="tabpanel"
+           aria-labelledby="tab-security"
+           id="panel-security">
     <div class="detail-card is-spaced">
       <div class="settings-row">
         <div class="settings-info">

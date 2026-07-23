@@ -94,6 +94,7 @@
   flex-direction: column;
   gap: 0.2rem;
   flex: 1;
+  align-items: flex-start;
 }
 
 .count {
@@ -116,7 +117,7 @@
 .word {
   font-size: 0.82rem;
   color: var(--text);
-  padding: 0.15rem 0;
+  padding-bottom: 0.2rem;
   border-radius: var(--radius-sm);
   cursor: pointer;
   outline: none;

@@ -1,6 +1,7 @@
 import asyncio
 import contextvars
 import json
+import logging
 import os
 import socket
 import threading
@@ -21,6 +22,8 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime, parseaddr
 from pathlib import Path
 from zoneinfo import ZoneInfo, available_timezones
+
+from email_validator import EmailNotValidError, validate_email
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -38,6 +41,8 @@ SESSION_COOKIE_MAX_AGE = int(os.getenv("SESSION_COOKIE_MAX_AGE", "2592000"))
 
 _monitor: idle_monitor.IdleMonitor | None = None
 _update_checker: updater.UpdateChecker | None = None
+
+logger = logging.getLogger(__name__)
 
 
 def _on_update_available(result: dict) -> None:
@@ -98,6 +103,7 @@ templates.env.filters["format_date"] = lambda d: _format_date(d)
 templates.env.filters["format_sender"] = lambda raw: _format_sender(raw)
 templates.env.filters["priority_bucket"] = lambda lvl: _priority_bucket(lvl) or "none"
 templates.env.filters["markdown"] = lambda t: _render_markdown(t)
+templates.env.filters["stripped_body"] = lambda t: email_reader.strip_quoted_history(t)
 templates.env.globals["current_theme"] = lambda: _current_theme()
 templates.env.globals["urlencode"] = urlencode
 app.mount("/static/js", StaticFiles(directory=str(_WEB_DIR / "js")), name="js")
@@ -309,6 +315,19 @@ def _get_page_size(db_path: str) -> int:
     except (TypeError, ValueError):
         val = _DEFAULT_PAGE_SIZE
     return val if val in _PAGE_SIZE_VALUES else _DEFAULT_PAGE_SIZE
+
+
+_THREAD_LIMIT_VALUES = (0, 5, 10)
+_DEFAULT_THREAD_LIMIT = 5
+
+
+def _get_thread_limit(db_path: str) -> int:
+    raw = cache.get_setting("thread_limit", db_path)
+    try:
+        val = int(raw) if raw else _DEFAULT_THREAD_LIMIT
+    except (TypeError, ValueError):
+        val = _DEFAULT_THREAD_LIMIT
+    return val if val in (0, *_THREAD_LIMIT_VALUES) else _DEFAULT_THREAD_LIMIT
 
 
 _THEMES = {"system", "light", "dark"}
@@ -771,6 +790,7 @@ def _settings_context(
     if sender_display not in _SENDER_MODES:
         sender_display = "both"
     page_size = _get_page_size(db_path)
+    thread_limit = _get_thread_limit(db_path)
     theme = _current_theme()
     local_ips = _get_local_ips() if network_on else []
     host_ip = os.getenv("HOST_IP", "")
@@ -804,6 +824,8 @@ def _settings_context(
         "sender_display": sender_display,
         "page_size": page_size,
         "page_size_options": _PAGE_SIZE_VALUES,
+        "thread_limit": thread_limit,
+        "thread_limit_options": _THREAD_LIMIT_VALUES,
         "theme": theme,
     }
 
@@ -904,6 +926,23 @@ async def settings_page_size(request: Request):
     if val not in _PAGE_SIZE_VALUES:
         val = _DEFAULT_PAGE_SIZE
     cache.save_setting("page_size", str(val), DB_PATH)
+    return _updated_response()
+
+
+@app.post("/settings/thread-replies", response_class=HTMLResponse)
+async def settings_thread_replies(request: Request):
+    form = await request.form()
+    raw = str(form.get("thread_replies", str(_DEFAULT_THREAD_LIMIT))).strip().lower()
+    if raw == "all":
+        val = 0
+    else:
+        try:
+            val = int(raw)
+        except ValueError:
+            val = _DEFAULT_THREAD_LIMIT
+    if val not in (0, *_THREAD_LIMIT_VALUES):
+        val = _DEFAULT_THREAD_LIMIT
+    cache.save_setting("thread_limit", str(val), DB_PATH)
     return _updated_response()
 
 
@@ -1151,7 +1190,7 @@ async def api_update_status():
 
 def _dashboard_context(db_path: str) -> dict:
     counts = cache.get_counts(db_path)
-    total = counts["headers_only"] + counts["fetched"] + counts["checked"] + counts["fetched_no_body"]
+    total = cache.get_list_count(db_path)
     raw_priority = cache.get_priority_counts(db_path)
     priority_dist = {"critical": 0, "high": 0, "medium": 0, "low": 0}
     for level_str, count in raw_priority.items():
@@ -1216,12 +1255,18 @@ def email_detail(request: Request, email_hash: str):
     if not email_data:
         return HTMLResponse("<h1>Email not found</h1>", status_code=404)
 
+    conversation = cache.get_conversation(DB_PATH, email_hash)
+    thread_total = len(conversation)
+    thread_limit = _get_thread_limit(DB_PATH)
     return templates.TemplateResponse(
         request,
         "email_detail.html",
         {
             "email": email_data,
             "email_hash": email_hash,
+            "conversation": conversation,
+            "thread_total": thread_total,
+            "thread_limit": thread_limit,
         },
     )
 
@@ -1335,6 +1380,54 @@ def list_folders(request: Request):
     return JSONResponse({"folders": email_reader.list_folders(db_path=DB_PATH)})
 
 
+@app.post("/emails/{email_hash}/send")
+async def send_email(request: Request, email_hash: str):
+    form = await request.form()
+    to_addr = (form.get("to") or "").strip()
+    subject = (form.get("subject") or "").strip()
+    body = (form.get("body") or "").strip()
+    mode = "forward" if (form.get("mode") or "").strip() == "forward" else "reply"
+    limiter_key = cache.get_setting("email_user", DB_PATH) or auth._client_ip(request)
+    if auth.send_rate_limiter.is_limited(limiter_key):
+        return _toast("You're sending too quickly. Please wait a minute and try again.", "warning")
+
+    if not to_addr or not subject or not body:
+        return _toast("To, subject, and body are required", "error")
+    try:
+        candidate = parseaddr(to_addr)[1] or to_addr
+        clean_recipient = validate_email(candidate, check_deliverability=False).normalized
+    except EmailNotValidError:
+        return _toast("Enter a valid email address", "error")
+    if len(subject) > 500:
+        return _toast("Subject too long (max 500 chars)", "error")
+    if len(body) > 50000:
+        return _toast("Body too long (max 50,000 chars)", "error")
+
+    email_data = cache.get_email_by_hash(DB_PATH, email_hash)
+    if not email_data:
+        return _toast("Email not found", "error")
+
+    original_message_id = (email_data.get("message_id") or "").strip() or None
+    thread_id = email_data.get("thread_id") or None
+    auth.send_rate_limiter.record_failure(limiter_key)
+    try:
+        await asyncio.to_thread(
+            email_reader.send_message,
+            clean_recipient,
+            subject,
+            body,
+            mode,
+            original_message_id=original_message_id,
+            thread_id=thread_id,
+            db_path=DB_PATH,
+        )
+    except Exception:
+        logger.warning("SMTP send failed", exc_info=True)
+        return _toast("Failed to send - check your SMTP credentials and recipient", "error")
+
+    return _toast("Reply sent" if mode == "reply" else "Email forwarded")
+
+
 @app.post("/emails/bulk")
 async def bulk_email_action(request: Request):
     form = await request.form()
@@ -1440,12 +1533,51 @@ def partial_email_detail(request: Request, email_hash: str):
     if not email_data:
         return HTMLResponse("<p>Email not found</p>", status_code=404)
 
+    conversation = cache.get_conversation(DB_PATH, email_hash)
+    thread_total = len(conversation)
+    thread_limit = _get_thread_limit(DB_PATH)
     return templates.TemplateResponse(
         request,
         "partials/email_detail_content.html",
         {
             "email": email_data,
             "email_hash": email_hash,
+            "conversation": conversation,
+            "thread_total": thread_total,
+            "thread_limit": thread_limit,
+        },
+    )
+
+
+@app.get("/partials/compose/{email_hash}", response_class=HTMLResponse)
+def partial_compose(request: Request, email_hash: str, mode: str = Query("reply")):
+    email_data = cache.get_email_by_hash(DB_PATH, email_hash)
+    if not email_data:
+        return HTMLResponse("<p>Email not found</p>", status_code=404)
+
+    mode = "forward" if mode == "forward" else "reply"
+    to_addr = "" if mode == "forward" else parseaddr(email_data.get("from") or "")[1]
+    prefix = "Fwd" if mode == "forward" else "Re"
+    quoted_body = ""
+    if mode == "forward" and email_data.get("body"):
+        header = (
+            f"----- Original Message -----\n"
+            f"From: {email_data.get('from') or ''}\n"
+            f"Date: {email_data.get('date') or ''}\n"
+            f"Subject: {email_data.get('subject') or ''}\n\n"
+        )
+        quoted_body = header + "\n".join(f"> {line}" for line in email_data["body"].splitlines())
+
+    return templates.TemplateResponse(
+        request,
+        "partials/compose.html",
+        {
+            "email": email_data,
+            "email_hash": email_hash,
+            "mode": mode,
+            "to_addr": to_addr,
+            "subject_prefix": prefix,
+            "quoted_body": quoted_body,
         },
     )
 

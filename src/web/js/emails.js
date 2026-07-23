@@ -1,8 +1,8 @@
 (function () {
   "use strict";
 
-  var selected = new Set();
-  var moveTarget = null; // "bulk" or a single email_hash
+  const selected = new Set();
+  let moveTarget = null; // "bulk" or a single email_hash
 
   function tableContainer() {
     return document.getElementById("email-table");
@@ -13,7 +13,7 @@
   }
 
   function rowCheckboxes() {
-    var container = tableContainer();
+    const container = tableContainer();
     if (!container) return [];
     return Array.prototype.slice.call(
       container.querySelectorAll('input[data-bulk-row]')
@@ -21,7 +21,7 @@
   }
 
   function selectAllCheckbox() {
-    var container = tableContainer();
+    const container = tableContainer();
     return container
       ? container.querySelector('input[data-bulk-select-all]')
       : null;
@@ -31,24 +31,24 @@
     rowCheckboxes().forEach(function (cb) {
       cb.checked = selected.has(cb.value);
     });
-    var all = selectAllCheckbox();
+    const all = selectAllCheckbox();
     if (all) {
-      var visible = rowCheckboxes();
+      const visible = rowCheckboxes();
       all.checked =
         visible.length > 0 && visible.every(function (cb) { return cb.checked; });
     }
   }
 
   function updateToolbar() {
-    var bar = toolbar();
+    const bar = toolbar();
     if (!bar) return;
-    var count = selected.size;
+    const count = selected.size;
     if (count > 0) {
       bar.removeAttribute("hidden");
     } else {
       bar.setAttribute("hidden", "");
     }
-    var countEl = bar.querySelector("[data-bulk-count]");
+    const countEl = bar.querySelector("[data-bulk-count]");
     if (countEl) {
       countEl.textContent =
         count + (count === 1 ? " email selected" : " emails selected");
@@ -87,47 +87,23 @@
     refresh();
   }
 
-  function postForm(url, params) {
-    var body = new URLSearchParams();
-    Object.keys(params || {}).forEach(function (k) {
-      var v = params[k];
-      if (Array.isArray(v)) {
-        v.forEach(function (item) { body.append(k, item); });
-      } else {
-        body.append(k, v);
-      }
-    });
-    return fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: body.toString(),
-    }).then(function (resp) {
-      var msg = resp.headers.get("X-Toast");
-      if (msg && window.showToast) {
-        var tone = resp.headers.get("X-Toast-Tone") || (resp.ok ? "success" : "error");
-        window.showToast(msg, tone);
-      }
-      return resp;
-    });
-  }
-
   function postBulk(action, extra) {
-    var params = { action: action, hashes: Array.from(selected) };
+    const params = { action: action, hashes: Array.from(selected) };
     if (extra) {
       Object.keys(extra).forEach(function (k) { params[k] = extra[k]; });
     }
-    return postForm("/emails/bulk", params).then(function (resp) {
+    return window.postForm("/emails/bulk", params).then(function (resp) {
       if (resp.ok) clearSelection();
     });
   }
 
   function confirmAndPost(btn) {
-    var action = btn.getAttribute("data-bulk-action");
+    const action = btn.getAttribute("data-bulk-action");
     if (action === "move") {
       openFolderModal("bulk");
       return;
     }
-    var question = btn.getAttribute("data-confirm");
+    const question = btn.getAttribute("data-confirm");
     if (!question) {
       postBulk(action);
       return;
@@ -152,7 +128,7 @@
 
   function openFolderModal(target) {
     moveTarget = target;
-    var body = document.getElementById("folder-modal-body");
+    const body = document.getElementById("folder-modal-body");
     if (typeof openModal !== "function" || !body) return;
     body.innerHTML = '<p class="folder-loading">Loading folders…</p>';
     openModal("folder-modal");
@@ -174,7 +150,7 @@
   }
 
   function renderFolderList(folders) {
-    var body = document.getElementById("folder-modal-body");
+    const body = document.getElementById("folder-modal-body");
     if (!body) return;
     if (!folders.length) {
       body.innerHTML = '<p class="folder-loading">No folders found.</p>';
@@ -182,7 +158,7 @@
     }
     body.innerHTML = "";
     folders.forEach(function (name) {
-      var btn = document.createElement("button");
+      const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "btn btn-sm folder-option";
       btn.textContent = name;
@@ -195,12 +171,12 @@
   }
 
   function chooseFolder(folder) {
-    var target = moveTarget;
+    const target = moveTarget;
     closeFolderModal();
     if (target === "bulk") {
       postBulk("move", { folder: folder });
     } else if (target) {
-      postForm("/emails/" + encodeURIComponent(target) + "/move", {
+      window.postForm("/emails/" + encodeURIComponent(target) + "/move", {
         folder: folder,
       }).then(function (resp) {
         if (resp.ok) window.location.href = "/emails";
@@ -209,11 +185,11 @@
   }
 
   function init() {
-    var container = tableContainer();
+    const container = tableContainer();
     if (!container) return;
 
     container.addEventListener("change", function (e) {
-      var el = e.target;
+      const el = e.target;
       if (el.hasAttribute("data-bulk-row")) {
         toggleRow(el.value, el.checked);
       } else if (el.hasAttribute("data-bulk-select-all")) {
@@ -221,10 +197,10 @@
       }
     });
 
-    var bar = toolbar();
+    const bar = toolbar();
     if (bar) {
       bar.addEventListener("click", function (e) {
-        var btn = e.target.closest("[data-bulk-action]");
+        const btn = e.target.closest("[data-bulk-action]");
         if (!btn) return;
         if (selected.size === 0) {
           if (window.showToast) window.showToast("No emails selected", "warning");
@@ -235,17 +211,17 @@
     }
 
     document.addEventListener("click", function (e) {
-      var btn = e.target.closest("[data-move-email]");
+      const btn = e.target.closest("[data-move-email]");
       if (!btn) return;
       openFolderModal(btn.getAttribute("data-move-email"));
     });
     container.addEventListener("click", function (e) {
-      var btn = e.target.closest(".star-toggle");
+      const btn = e.target.closest(".star-toggle");
       if (!btn) return;
     });
 
     document.body.addEventListener("htmx:afterSwap", function (e) {
-      var target = e.detail && e.detail.target;
+      const target = e.detail && e.detail.target;
       if (target && target.id === "email-table") {
         refresh();
       }
@@ -253,7 +229,7 @@
 
     document.addEventListener("keydown", function (e) {
       if (e.key !== "Escape") return;
-      var modal = document.getElementById("folder-modal");
+      const modal = document.getElementById("folder-modal");
       if (modal && !modal.hasAttribute("hidden")) {
         closeFolderModal();
       }

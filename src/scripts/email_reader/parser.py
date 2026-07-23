@@ -1,9 +1,7 @@
-import functools
 import html
 import logging
 import re
 import threading
-import hashlib
 from itertools import groupby
 from email.header import decode_header
 
@@ -32,7 +30,10 @@ def decode_str(value):
     parts = []
     for part, charset in decoded:
         if isinstance(part, bytes):
-            parts.append(part.decode(charset or "utf-8", errors="replace"))
+            try:
+                parts.append(part.decode(charset or "utf-8", errors="replace"))
+            except LookupError:
+                parts.append(part.decode("utf-8", errors="replace"))
         else:
             parts.append(part)
     return "".join(parts)
@@ -46,6 +47,71 @@ _RE_BLANK_LINE = re.compile(r"\n[ \t]+\n")
 _RE_NEWLINES = re.compile(r"\n{3,}")
 _RE_RUNS = re.compile(r"([-*_])\1{2,}")
 _RE_PREFIX = re.compile(r"^(Re|Fwd|Fw|Reply)\s*:\s*", re.IGNORECASE)
+_RE_QUOTE_PREFIX = re.compile(r"^(>{1,}\s?|\|{1,}\s?)")
+_RE_ON_WROTE = re.compile(r"^On\s.+\bwrote:\s*$", re.IGNORECASE)
+_RE_LOCALE_WROTE = re.compile(
+    r"^.{0,200}"
+    r"(?:"
+    r"wrote|"  # English
+    r"a\s+écrit|"  # French
+    r"schrieb|"  # German
+    r"verfass(?:te|t)|"  # German (verfasste)
+    r"escribió|"  # Spanish
+    r"schreef|"  # Dutch
+    r"напиш(?:а|ова)|"  # Macedonian
+    r"напис(?:ал|ла|а|лав|ао)|"  # ru/uk/bg/sr
+    r"escreveu|"  # Portuguese
+    r"scrisse|"  # Italian
+    r"yazdı"  # Turkish
+    r")"
+    r".*:\s*$",
+    re.IGNORECASE,
+)
+
+_RE_DATE_EMAIL_COLON = re.compile(r"^.{0,120}\b[\w.+-]+@[\w-]+\.[\w.-]+.{0,40}:\s*$")
+_RE_ORIGINAL_MSG = re.compile(r"^-{2,}\s*Original Message\s*-{2,}", re.IGNORECASE)
+_RE_FORWARDED = re.compile(r"^-{2,}\s*Forwarded message\s*-{2,}", re.IGNORECASE)
+_RE_OUTLOOK_FROM = re.compile(r"^From:\s.+$", re.IGNORECASE)
+_RE_SHOW_QUOTED = re.compile(r"show quoted text", re.IGNORECASE)
+
+
+def _has_following_header(lines: list[str], start: int, window: int = 3) -> bool:
+    upper = min(window, len(lines) - start - 1)
+    for offset in range(1, upper + 1):
+        nxt = lines[start + offset].strip().lower()
+        if nxt.startswith(("date:", "subject:")):
+            return True
+    return False
+
+
+def strip_quoted_history(text: str) -> str:
+    if not text:
+        return ""
+    lines = text.split("\n")
+    cut = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if _RE_QUOTE_PREFIX.match(line):
+            cut = i
+            break
+        if _RE_SHOW_QUOTED.search(stripped):
+            cut = i
+            break
+        if (
+            _RE_ON_WROTE.match(stripped)
+            or _RE_LOCALE_WROTE.match(stripped)
+            or _RE_ORIGINAL_MSG.match(stripped)
+            or _RE_FORWARDED.match(stripped)
+            or (_RE_OUTLOOK_FROM.match(stripped) and _has_following_header(lines, i))
+            or _RE_DATE_EMAIL_COLON.match(stripped)
+        ):
+            cut = i
+            break
+    if cut is not None:
+        lines = lines[:cut]
+    return _clean_body("\n".join(lines))
 
 
 def _clean_body(text: str) -> str:
@@ -97,35 +163,15 @@ def get_text_body(msg):
     return ""
 
 
-@functools.lru_cache(maxsize=4096)
-def _hash_thread_id(value: str) -> str:
-    return hashlib.sha256(value.encode()).hexdigest()[:16]
+def strip_subject_prefix(subject: str) -> str:
+    stripped = subject or ""
+    while True:
+        new = _RE_PREFIX.sub("", stripped).strip()
+        if new == stripped:
+            break
+        stripped = new
+    return stripped
 
 
-def _normalize_subject(subject: str) -> str:
-    stripped = _RE_PREFIX.sub("", subject).strip()
-    return stripped.lower() if stripped else ""
-
-
-def extract_thread_info(msg) -> dict:
-    in_reply_to = msg.get("In-Reply-To", "") or ""
-    references = msg.get("References", "") or ""
-    thread_index = msg.get("Thread-Index", "") or ""
-    subject = msg.get("Subject", "") or ""
-
-    if references:
-        refs = references.strip().split()
-        if refs:
-            return {"thread_id": _hash_thread_id(refs[0]), "in_reply_to": in_reply_to.strip()}
-
-    if in_reply_to.strip():
-        return {"thread_id": _hash_thread_id(in_reply_to.strip()), "in_reply_to": in_reply_to.strip()}
-
-    if thread_index:
-        return {"thread_id": _hash_thread_id(thread_index[:22]), "in_reply_to": ""}
-
-    normalized = _normalize_subject(subject)
-    if normalized:
-        return {"thread_id": _hash_thread_id(normalized), "in_reply_to": ""}
-
-    return {"thread_id": None, "in_reply_to": ""}
+def has_subject_prefix(subject: str) -> bool:
+    return bool(_RE_PREFIX.match((subject or "").strip()))

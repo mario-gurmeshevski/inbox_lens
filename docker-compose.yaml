@@ -3,8 +3,10 @@ services:
     image: ghcr.io/mario-gurmeshevski/inbox_lens:latest
     build: .
     volumes:
-      - ./src/data:/app/src/data
+      - inbox-lens-data:/app/src/data
       - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8000:8000"
     environment:
       - HOST_IP=${HOST_IP:-}
     labels:
@@ -16,3 +18,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+volumes:
+  inbox-lens-data:

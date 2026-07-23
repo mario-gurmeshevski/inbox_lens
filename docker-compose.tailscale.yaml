@@ -73,6 +73,7 @@ services:
 
   web:
     network_mode: "service:tailscale"
+    ports: !reset []
     depends_on:
       - tailscale
     volumes:

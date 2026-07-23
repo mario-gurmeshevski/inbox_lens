@@ -569,9 +569,17 @@ class TestFetchNew:
 
 
 class TestRunInitialFetch:
-    def test_calls_fetch_headers_and_cache(self, monkeypatch):
+    def _patch_sync_all_mail(self, monkeypatch):
         monkeypatch.setattr(
-            email_reader, "fetch_headers_and_cache", lambda db_path=None: {"new_count": 0, "existing_count": 0}
+            email_reader,
+            "sync_all_mail",
+            lambda db_path=None: {"synced": 0, "skipped": 0, "hashes": set()},
+        )
+
+    def test_calls_fetch_headers_and_cache(self, monkeypatch):
+        self._patch_sync_all_mail(monkeypatch)
+        monkeypatch.setattr(
+            email_reader, "fetch_headers_and_cache", lambda db_path=None, **kw: {"new_count": 0, "existing_count": 0}
         )
         monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: [])
         monkeypatch.setattr(cache, "read_emails", lambda db_path, limit=None: [])
@@ -579,12 +587,14 @@ class TestRunInitialFetch:
         assert result["new_count"] == 0
 
     def test_returns_error_result(self, monkeypatch):
-        monkeypatch.setattr(email_reader, "fetch_headers_and_cache", lambda db_path=None: {"error": "bad"})
+        self._patch_sync_all_mail(monkeypatch)
+        monkeypatch.setattr(email_reader, "fetch_headers_and_cache", lambda db_path=None, **kw: {"error": "bad"})
         result = run_initial_fetch(db_path="/db")
         assert result["error"] == "bad"
 
     def test_calls_on_refresh_three_times(self, monkeypatch):
-        monkeypatch.setattr(email_reader, "fetch_headers_and_cache", lambda db_path=None: {"new_count": 0})
+        self._patch_sync_all_mail(monkeypatch)
+        monkeypatch.setattr(email_reader, "fetch_headers_and_cache", lambda db_path=None, **kw: {"new_count": 0})
         monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: [])
         monkeypatch.setattr(cache, "read_emails", lambda db_path, limit=None: [])
         calls = []
@@ -592,16 +602,18 @@ class TestRunInitialFetch:
         assert len(calls) == 3
 
     def test_swallows_on_refresh_exception(self, monkeypatch):
-        monkeypatch.setattr(email_reader, "fetch_headers_and_cache", lambda db_path=None: {"new_count": 0})
+        self._patch_sync_all_mail(monkeypatch)
+        monkeypatch.setattr(email_reader, "fetch_headers_and_cache", lambda db_path=None, **kw: {"new_count": 0})
         monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: [])
         monkeypatch.setattr(cache, "read_emails", lambda db_path, limit=None: [])
         run_initial_fetch(db_path="/db", on_refresh=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
 
     def test_fetches_bodies_for_imap_id_pairs(self, monkeypatch):
+        self._patch_sync_all_mail(monkeypatch)
         monkeypatch.setattr(
             email_reader,
             "fetch_headers_and_cache",
-            lambda db_path=None: {"new_count": 1, "imap_id_pairs": [(b"1", "<m@e.com>")]},
+            lambda db_path=None, **kw: {"new_count": 1, "imap_id_pairs": [(b"1", "<m@e.com>")]},
         )
         monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: [])
         monkeypatch.setattr(cache, "read_emails", lambda db_path, limit=None: [])
@@ -611,7 +623,8 @@ class TestRunInitialFetch:
         assert len(fetches) == 1
 
     def test_fetches_bodies_for_headers_only_ids(self, monkeypatch):
-        monkeypatch.setattr(email_reader, "fetch_headers_and_cache", lambda db_path=None: {"new_count": 0})
+        self._patch_sync_all_mail(monkeypatch)
+        monkeypatch.setattr(email_reader, "fetch_headers_and_cache", lambda db_path=None, **kw: {"new_count": 0})
         monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: ["<h@e.com>"])
         monkeypatch.setattr(cache, "read_emails", lambda db_path, limit=None: [])
         fetches = []
@@ -620,7 +633,8 @@ class TestRunInitialFetch:
         assert len(fetches) == 1
 
     def test_scans_emails(self, monkeypatch):
-        monkeypatch.setattr(email_reader, "fetch_headers_and_cache", lambda db_path=None: {"new_count": 0})
+        self._patch_sync_all_mail(monkeypatch)
+        monkeypatch.setattr(email_reader, "fetch_headers_and_cache", lambda db_path=None, **kw: {"new_count": 0})
         monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: [])
         monkeypatch.setattr(cache, "read_emails", lambda db_path, limit=None: [{"message_id": "<m@e.com>"}])
         scans = []
@@ -629,8 +643,70 @@ class TestRunInitialFetch:
         assert len(scans) == 1
 
     def test_top_level_exception_returns_error(self, monkeypatch):
+        self._patch_sync_all_mail(monkeypatch)
         monkeypatch.setattr(
-            email_reader, "fetch_headers_and_cache", lambda db_path=None: (_ for _ in ()).throw(RuntimeError("kaboom"))
+            email_reader,
+            "fetch_headers_and_cache",
+            lambda db_path=None, **kw: (_ for _ in ()).throw(RuntimeError("kaboom")),
         )
         result = run_initial_fetch(db_path="/db")
         assert "error" in result
+
+    def test_calls_sync_sent_replies(self, monkeypatch):
+        self._patch_sync_all_mail(monkeypatch)
+        monkeypatch.setattr(email_reader, "fetch_headers_and_cache", lambda db_path=None, **kw: {"new_count": 0})
+        monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: [])
+        monkeypatch.setattr(cache, "read_emails", lambda db_path, limit=None: [])
+        calls = []
+        monkeypatch.setattr(
+            email_reader, "sync_sent_replies", lambda db_path=None: calls.append(db_path) or {"synced": 0, "skipped": 0}
+        )
+        run_initial_fetch(db_path="/db")
+        assert calls == ["/db"]
+
+    def test_swallows_sync_sent_replies_exception(self, monkeypatch):
+        self._patch_sync_all_mail(monkeypatch)
+        monkeypatch.setattr(email_reader, "fetch_headers_and_cache", lambda db_path=None, **kw: {"new_count": 0})
+        monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: [])
+        monkeypatch.setattr(cache, "read_emails", lambda db_path, limit=None: [])
+        monkeypatch.setattr(
+            email_reader, "sync_sent_replies", lambda db_path=None: (_ for _ in ()).throw(RuntimeError("boom"))
+        )
+        run_initial_fetch(db_path="/db")
+
+    def test_calls_sync_all_mail_before_inbox_fetch(self, monkeypatch):
+        order = []
+        monkeypatch.setattr(
+            email_reader,
+            "sync_all_mail",
+            lambda db_path=None: order.append("all_mail") or {"synced": 0, "skipped": 0, "hashes": set()},
+        )
+        monkeypatch.setattr(
+            email_reader,
+            "fetch_headers_and_cache",
+            lambda db_path=None, **kw: order.append("inbox") or {"new_count": 0},
+        )
+        monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: [])
+        monkeypatch.setattr(cache, "read_emails", lambda db_path, limit=None: [])
+        run_initial_fetch(db_path="/db")
+        assert order[0] == "all_mail"
+        assert order[1] == "inbox"
+
+    def test_passes_all_mail_hashes_as_protected(self, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(
+            email_reader,
+            "sync_all_mail",
+            lambda db_path=None: {"synced": 0, "skipped": 0, "hashes": {"abc", "def"}},
+        )
+        monkeypatch.setattr(
+            email_reader,
+            "fetch_headers_and_cache",
+            lambda db_path=None, protected_hashes=None, **kw: (
+                seen.update(protected=protected_hashes) or {"new_count": 0}
+            ),
+        )
+        monkeypatch.setattr(cache, "get_headers_only_message_ids", lambda db_path=None: [])
+        monkeypatch.setattr(cache, "read_emails", lambda db_path, limit=None: [])
+        run_initial_fetch(db_path="/db")
+        assert seen["protected"] == {"abc", "def"}

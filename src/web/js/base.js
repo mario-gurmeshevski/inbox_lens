@@ -17,6 +17,30 @@ function closeModal(id) {
   document.body.style.overflow = "";
 }
 
+window.postForm = function (url, params) {
+  const body = new URLSearchParams();
+  Object.keys(params || {}).forEach(function (k) {
+    const v = params[k];
+    if (Array.isArray(v)) {
+      v.forEach(function (item) { body.append(k, item); });
+    } else {
+      body.append(k, v);
+    }
+  });
+  return fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  }).then(function (resp) {
+    const msg = resp.headers.get("X-Toast");
+    if (msg && typeof window.showToast === "function") {
+      const tone = resp.headers.get("X-Toast-Tone") || (resp.ok ? "success" : "error");
+      window.showToast(msg, tone);
+    }
+    return resp;
+  });
+};
+
 function openAccountModal() {
   openModal("account-modal");
 }
@@ -34,6 +58,12 @@ document.addEventListener("keydown", function (e) {
     const modal = document.getElementById("account-modal");
     if (modal && !modal.hasAttribute("hidden")) {
       closeAccountModal();
+      return;
+    }
+    const composeModal = document.getElementById("compose-modal");
+    if (composeModal && !composeModal.hasAttribute("hidden")) {
+      if (typeof window.closeComposeModal === "function") window.closeComposeModal();
+      else closeModal("compose-modal");
     }
   }
 });
@@ -45,6 +75,8 @@ document.addEventListener("click", function (e) {
     if (!id) return;
     if (id === "account-modal") {
       closeAccountModal();
+    } else if (id === "compose-modal" && typeof window.closeComposeModal === "function") {
+      window.closeComposeModal();
     } else if (typeof closeModal === "function") {
       closeModal(id);
     }

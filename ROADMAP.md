@@ -25,4 +25,14 @@ Expand beyond Gmail to support other major email providers out of the box.
 
 Manage emails directly from the dashboard without leaving the UI.
 
-- Reply or forward via IMAP/SMTP (planned — requires SMTP credentials and a compose UI)
+- **Compose Enhancements:** Support for CC/BCC, Rich-text/HTML editing, persistent signatures, and drafts.
+- **Attachments:** Upload files with size validation and forward original attachments via IMAP.
+- **Outbound Reliability:** Sent folder syncing, an offline outbox queue, and SMTP connection testing in the UI.
+
+## Completed
+
+- **Outbound rate limiting:** Reply/forward sends are throttled to 10 per minute per account (in-memory sliding window) to guard against runaway loops and compromised sessions. A hit limit surfaces a warning toast and leaves the compose modal open so the user can retry.
+- **Header-decode robustness:** `decode_str` now falls back to UTF-8 on unknown RFC 2047 charsets instead of aborting a header batch with `LookupError`.
+- **Forward recipient UX:** Forwarding no longer pre-fills the original sender as the recipient — "To" starts blank so you pick a new recipient.
+- **Quoted-history trimming:** The `From:`-line heuristic in `strip_quoted_history` now requires a following `Date:`/`Subject:` line, so a user-written "From:" line in the body no longer truncates the displayed message.
+

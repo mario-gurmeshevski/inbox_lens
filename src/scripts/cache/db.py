@@ -33,12 +33,15 @@ CREATE TABLE IF NOT EXISTS emails (
     in_reply_to TEXT,
     is_read INTEGER DEFAULT 0,
     is_starred INTEGER DEFAULT 0,
+    is_sent INTEGER DEFAULT 0,
+    gm_thrid TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_status ON emails(status);
 CREATE INDEX IF NOT EXISTS idx_category ON emails(category);
 CREATE INDEX IF NOT EXISTS idx_date ON emails(date_parsed);
 CREATE INDEX IF NOT EXISTS idx_thread ON emails(thread_id);
+CREATE INDEX IF NOT EXISTS idx_in_reply_to ON emails(in_reply_to);
 
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -49,7 +52,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 _LIST_COLUMNS = (
     "message_id_hash, message_id, sender, subject, date, date_parsed, "
-    "status, category, keyword_matches, thread_id, in_reply_to, is_read, is_starred"
+    "status, category, keyword_matches, thread_id, in_reply_to, is_read, is_starred, is_sent"
 )
 
 
@@ -126,18 +129,28 @@ def _connect(db_path: str):
         raise
 
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 
 def _migrate(db_path: str) -> None:
     with _connect(db_path) as conn:
-        if conn.execute("PRAGMA user_version").fetchone()[0] >= _SCHEMA_VERSION:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version >= _SCHEMA_VERSION:
             return
-        required = {"is_read": "INTEGER DEFAULT 0", "is_starred": "INTEGER DEFAULT 0"}
+
+        required = {
+            "is_read": "INTEGER DEFAULT 0",
+            "is_starred": "INTEGER DEFAULT 0",
+            "is_sent": "INTEGER DEFAULT 0",
+            "gm_thrid": "TEXT",
+        }
         existing = {row["name"] for row in conn.execute("PRAGMA table_info(emails)").fetchall()}
         for column, decl in required.items():
             if column not in existing:
                 conn.execute(f"ALTER TABLE emails ADD COLUMN {column} {decl}")
+
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_in_reply_to ON emails(in_reply_to)")
+        conn.execute("UPDATE emails SET thread_id = message_id_hash WHERE thread_id IS NULL")
         conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
@@ -193,6 +206,50 @@ def delete_emails_by_hashes(db_path: str, message_id_hashes: list[str]) -> int:
     return removed
 
 
+def reconcile_inbox(
+    db_path: str,
+    server_hashes: set[str],
+    protected_hashes: set[str] | None = None,
+    searched_count: int = 0,
+    min_ratio: float = 0.9,
+    force: bool = False,
+) -> int:
+    if not force:
+        if searched_count and len(server_hashes) / searched_count < min_ratio:
+            logger.warning(
+                "Skipping reconcile: fetched %d of %d UIDs (<%.0f%%)",
+                len(server_hashes),
+                searched_count,
+                min_ratio * 100,
+            )
+            return 0
+        if protected_hashes is None:
+            logger.warning("Skipping reconcile: no protected_hashes (All Mail sync missing)")
+            return 0
+
+    with _connect(db_path) as conn:
+        rows = conn.execute("SELECT message_id_hash FROM emails WHERE COALESCE(is_sent, 0) = 0").fetchall()
+    cached_hashes = {row["message_id_hash"] for row in rows}
+    ghosts = cached_hashes - server_hashes
+    if protected_hashes:
+        ghosts -= protected_hashes
+    ghosts = list(ghosts)
+    if not ghosts:
+        return 0
+
+    if not force:
+        cached_count = len(cached_hashes)
+        if cached_count >= 20 and len(ghosts) / cached_count > 0.25:
+            logger.warning(
+                "Skipping reconcile: ghosts %d > 25%% of %d cached",
+                len(ghosts),
+                cached_count,
+            )
+            return 0
+
+    return delete_emails_by_hashes(db_path, ghosts)
+
+
 _FLAG_COLUMNS = frozenset({"is_read", "is_starred"})
 
 
@@ -220,6 +277,31 @@ def set_read_by_hashes(db_path: str, message_id_hashes: list[str], read: bool) -
 
 def set_starred_by_hashes(db_path: str, message_id_hashes: list[str], starred: bool) -> int:
     return _set_flag_by_hashes(db_path, message_id_hashes, "is_starred", starred)
+
+
+def update_thread_id(db_path: str, message_id_hash: str, thread_id: str) -> None:
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE emails SET thread_id = ? WHERE message_id_hash = ?",
+            (thread_id, message_id_hash),
+        )
+
+
+def refresh_thread_ids(updates: list[tuple[str | None, str | None, str]], db_path: str) -> int:
+    if not updates:
+        return 0
+    changed = 0
+    with _connect(db_path) as conn:
+        for thread_id, gm_thrid, message_id_hash in updates:
+            if thread_id is None:
+                continue
+            cur = conn.execute(
+                "UPDATE emails SET thread_id = ?, gm_thrid = COALESCE(?, gm_thrid) "
+                "WHERE message_id_hash = ? AND (thread_id IS NOT ? OR gm_thrid IS NULL)",
+                (thread_id, gm_thrid, message_id_hash, thread_id),
+            )
+            changed += cur.rowcount
+    return changed
 
 
 def get_message_ids_by_hashes(db_path: str, message_id_hashes: list[str]) -> list[tuple[str, str]]:
@@ -255,6 +337,7 @@ def save_headers_batch(emails: list[dict], db_path: str) -> int:
             continue
         message_id_hash = _hash_message_id(message_id)
         date_parsed = _parse_date_iso(email_data.get("date", ""))
+        thread_id = email_data.get("thread_id") or message_id_hash
         prepared.append(
             (
                 message_id_hash,
@@ -263,8 +346,9 @@ def save_headers_batch(emails: list[dict], db_path: str) -> int:
                 email_data.get("subject", ""),
                 email_data.get("date", ""),
                 date_parsed,
-                email_data.get("thread_id"),
+                thread_id,
                 email_data.get("in_reply_to"),
+                email_data.get("gm_thrid"),
             )
         )
 
@@ -280,8 +364,8 @@ def save_headers_batch(emails: list[dict], db_path: str) -> int:
         if insert_rows:
             conn.executemany(
                 """INSERT OR IGNORE INTO emails
-                   (message_id_hash, message_id, sender, subject, date, date_parsed, body, status, category, keyword_matches, thread_id, in_reply_to)
-                   VALUES (?, ?, ?, ?, ?, ?, '', 'headers_only', NULL, NULL, ?, ?)""",
+                   (message_id_hash, message_id, sender, subject, date, date_parsed, body, status, category, keyword_matches, thread_id, in_reply_to, gm_thrid)
+                   VALUES (?, ?, ?, ?, ?, ?, '', 'headers_only', NULL, NULL, ?, ?, ?)""",
                 insert_rows,
             )
 
@@ -336,8 +420,7 @@ def update_flags_batch(updates: list[tuple], db_path: str) -> int:
     if not updates:
         return 0
     rows = [
-        (int(bool(is_read)), int(bool(is_starred)), message_id_hash)
-        for is_read, is_starred, message_id_hash in updates
+        (int(bool(is_read)), int(bool(is_starred)), message_id_hash) for is_read, is_starred, message_id_hash in updates
     ]
     affected = 0
     with _connect(db_path) as conn:
@@ -349,9 +432,23 @@ def update_flags_batch(updates: list[tuple], db_path: str) -> int:
     return affected
 
 
+def mark_sent(message_id_hashes: list[str], db_path: str) -> int:
+    if not message_id_hashes:
+        return 0
+    affected = 0
+    with _connect(db_path) as conn:
+        for cursor in _run_in_batches(
+            conn,
+            "UPDATE emails SET is_sent = 1 WHERE message_id_hash IN ({placeholders})",
+            message_id_hashes,
+        ):
+            affected += cursor.rowcount
+    return affected
+
+
 def get_headers_only_message_ids(db_path: str) -> list[str]:
     with _connect(db_path) as conn:
-        rows = conn.execute(f"SELECT message_id FROM emails WHERE status = '{STATUS_HEADERS_ONLY}'").fetchall()
+        rows = conn.execute("SELECT message_id FROM emails WHERE status = ?", (STATUS_HEADERS_ONLY,)).fetchall()
     return [row["message_id"] for row in rows]
 
 
@@ -374,4 +471,6 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         "in_reply_to": row["in_reply_to"],
         "is_read": int(_col("is_read", 0) or 0),
         "is_starred": int(_col("is_starred", 0) or 0),
+        "is_sent": int(_col("is_sent", 0) or 0),
+        "gm_thrid": _col("gm_thrid", None),
     }

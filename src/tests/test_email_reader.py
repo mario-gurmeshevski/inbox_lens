@@ -1,4 +1,3 @@
-import hashlib
 import json
 from email import message_from_string
 from email.mime.multipart import MIMEMultipart
@@ -24,6 +23,10 @@ class TestDecodeStr:
     def test_handles_multipart_encoded(self):
         result = email_reader.decode_str("=?utf-8?q?hello?= =?utf-8?q?_world?=")
         assert "hello" in result
+
+    def test_decode_str_unknown_charset_falls_back(self):
+        out = email_reader.decode_str("=?x-unknown-8bit?B?SGk=?=")
+        assert isinstance(out, str)
 
 
 class TestCleanBody:
@@ -84,6 +87,164 @@ class TestCleanBody:
         assert email_reader._clean_body(None) == ""
 
 
+class TestStripQuotedHistory:
+    def test_none_returns_empty(self):
+        assert email_reader.strip_quoted_history(None) == ""
+
+    def test_empty_string_returns_empty(self):
+        assert email_reader.strip_quoted_history("") == ""
+
+    def test_keeps_plain_body_without_quotes(self):
+        body = "Hi Mario:\n\nLet's talk tomorrow."
+        assert email_reader.strip_quoted_history(body) == body
+
+    def test_strips_on_wrote_block(self):
+        body = (
+            "Hi Alice,\n\n"
+            "Thanks for the note.\n\n"
+            "On Mon, 1 Jan 2024 10:00:00 +0000, Alice wrote:\n"
+            "> Original message here\n"
+            "> more lines\n"
+        )
+        out = email_reader.strip_quoted_history(body)
+        assert "Thanks for the note." in out
+        assert "Original message here" not in out
+        assert "On Mon, 1 Jan 2024" not in out
+
+    def test_strips_gt_prefixed_quotes(self):
+        body = "My reply.\n\n> quoted line one\n>> nested quote\n> quoted line two\n"
+        out = email_reader.strip_quoted_history(body)
+        assert out.strip() == "My reply."
+
+    def test_strips_outlook_original_message(self):
+        body = "Here's my take.\n\n-----Original Message-----\nFrom: Alice\nSubject: Old thread\n\nOld body.\n"
+        out = email_reader.strip_quoted_history(body)
+        assert "Here's my take." in out
+        assert "-----Original Message-----" not in out
+        assert "Old body." not in out
+
+    def test_strips_forwarded_separator(self):
+        body = "See below.\n\n---------- Forwarded message ----------\nFrom: X\n\nOld.\n"
+        out = email_reader.strip_quoted_history(body)
+        assert "See below." in out
+        assert "Forwarded message" not in out
+        assert "Old." not in out
+
+    def test_does_not_mangle_greeting_colon(self):
+        body = "Hi Mario:\n\nJust checking in.\n\nCheers."
+        assert email_reader.strip_quoted_history(body) == body
+
+    def test_does_not_cut_on_prose_from_line(self):
+        body = "Quick note.\n\nFrom: the team about the project.\n\nMore detail here."
+        out = email_reader.strip_quoted_history(body)
+        assert "More detail here." in out
+        assert "From: the team" in out
+
+    def test_still_cuts_outlook_block_with_following_subject(self):
+        body = "My reply.\n\n-----Original Message-----\nFrom: Alice\nSubject: Old thread\nDate: x\n\nOld body."
+        out = email_reader.strip_quoted_history(body)
+        assert "Old body." not in out
+        assert "My reply." in out
+
+    def test_strips_locale_dutch_hubspot(self):
+        body = (
+            "Hi Mario,\n\n"
+            "Assuming you've already tested the main workflows, I'd be curious "
+            "to hear how it compares.\n\n"
+            "Get security done.\n\n"
+            "vrijdag 3 juli 2026, 17:31:07 +0200, Hannah Jonsson "
+            "hannah.jonsson@aikidosecurity.tech:\n\n"
+            "Hi Mario,\n\n"
+            "Given you're testing us out, I imagine you might be dealing with "
+            "false positives.\n"
+        )
+        out = email_reader.strip_quoted_history(body)
+        assert "Assuming you've already tested" in out
+        assert "Get security done." in out
+        assert "Given you're testing us out" not in out
+        assert "vrijdag 3 juli" not in out
+
+    def test_strips_locale_french(self):
+        body = "Bonjour,\n\nRéponse ici.\n\nLe 1 janv. 2024 à 10:00, Alice a écrit :\n\nAncien message.\n"
+        out = email_reader.strip_quoted_history(body)
+        assert "Réponse ici." in out
+        assert "Ancien message." not in out
+        assert "a écrit" not in out
+
+    def test_strips_locale_german(self):
+        body = "Hallo,\n\nMeine Antwort.\n\nAm 01.01.2024 um 10:00 schrieb Alice:\n\nAlte Nachricht.\n"
+        out = email_reader.strip_quoted_history(body)
+        assert "Meine Antwort." in out
+        assert "Alte Nachricht." not in out
+        assert "schrieb" not in out
+
+    def test_strips_locale_spanish(self):
+        body = "Hola,\n\nMi respuesta.\n\nEl 1 ene 2024 a las 10:00, Alice escribió:\n\nMensaje antiguo.\n"
+        out = email_reader.strip_quoted_history(body)
+        assert "Mi respuesta." in out
+        assert "Mensaje antiguo." not in out
+        assert "escribió" not in out
+
+    def test_strips_locale_macedonian_cyrillic(self):
+        body = "Здраво,\n\nЕве одговор.\n\nНа понеделник, 1 јануари 2024 г., Марио напиша:\n> Оригинална порака\n"
+        out = email_reader.strip_quoted_history(body)
+        assert "Еве одговор." in out
+        assert "Оригинална порака" not in out
+        assert "напиша" not in out
+
+    def test_strips_locale_macedonian_no_gt_prefix(self):
+        body = "Здраво,\n\nЕве одговор.\n\nНа 01.01.2024 во 10:00, Марио напиша:\n\nОригинална порака овде.\n"
+        out = email_reader.strip_quoted_history(body)
+        assert "Еве одговор." in out
+        assert "Оригинална порака" not in out
+
+    def test_strips_locale_russian_cyrillic(self):
+        body = "Привет,\n\nОтвет.\n\n1 янв. 2024 г. в 10:00 Алиса написал(а):\n\nОригинал.\n"
+        out = email_reader.strip_quoted_history(body)
+        assert "Ответ." in out
+        assert "Оригинал." not in out
+
+    def test_does_not_mangle_cyrillic_greeting_colon(self):
+        body = "Здраво Марио:\n\nСамо проверувам."
+        assert email_reader.strip_quoted_history(body) == body
+
+    def test_long_line_does_not_collapse(self):
+        long_line = "x" * 5000
+        body = f"Hi,\n\nReply here.\n\n{long_line}\n\nMore text."
+        import time
+
+        start = time.perf_counter()
+        out = email_reader.strip_quoted_history(body)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 0.5, f"strip_quoted_history took too long: {elapsed:.3f}s"
+        assert "Reply here." in out
+        assert long_line in out
+
+
+class TestHasSubjectPrefix:
+    def test_detects_reply_prefix(self):
+        assert email_reader.has_subject_prefix("Re: Lunch?")
+
+    def test_detects_forward_prefixes(self):
+        assert email_reader.has_subject_prefix("Fwd: Lunch?")
+        assert email_reader.has_subject_prefix("FW: Lunch?")
+
+    def test_case_insensitive(self):
+        assert email_reader.has_subject_prefix("RE: lunch")
+        assert email_reader.has_subject_prefix("fwd: lunch")
+
+    def test_no_prefix(self):
+        assert not email_reader.has_subject_prefix("Lunch?")
+        assert not email_reader.has_subject_prefix("Hello world")
+
+    def test_empty_or_none(self):
+        assert not email_reader.has_subject_prefix("")
+        assert not email_reader.has_subject_prefix(None)
+
+    def test_strips_leading_whitespace(self):
+        assert email_reader.has_subject_prefix("  Re: Lunch?")
+
+
 class TestHtmlToText:
     def test_converts_html_to_text(self):
         result = email_reader._html_to_text("<p>Hello <b>world</b></p>")
@@ -139,79 +300,6 @@ class TestGetTextBody:
         msg = message_from_string("")
         result = email_reader.get_text_body(msg)
         assert result == ""
-
-
-class TestHashThreadId:
-    def test_returns_16_char_hex(self):
-        result = email_reader._hash_thread_id("test-thread-id")
-        assert len(result) == 16
-        assert all(c in "0123456789abcdef" for c in result)
-
-    def test_consistent(self):
-        a = email_reader._hash_thread_id("test")
-        b = email_reader._hash_thread_id("test")
-        assert a == b
-
-    def test_matches_sha256(self):
-        val = "my-thread-ref"
-        expected = hashlib.sha256(val.encode()).hexdigest()[:16]
-        assert email_reader._hash_thread_id(val) == expected
-
-
-class TestNormalizeSubject:
-    def test_strips_re_prefix(self):
-        assert email_reader._normalize_subject("Re: Hello") == "hello"
-
-    def test_strips_fwd_prefix(self):
-        assert email_reader._normalize_subject("Fwd: Hello") == "hello"
-
-    def test_strips_fw_prefix(self):
-        assert email_reader._normalize_subject("Fw: Hello") == "hello"
-
-    def test_strips_reply_prefix(self):
-        assert email_reader._normalize_subject("Reply: Hello") == "hello"
-
-    def test_strips_multiple_prefixes(self):
-        assert email_reader._normalize_subject("Re: Re: Hello") == "re: hello"
-
-    def test_lowercases(self):
-        assert email_reader._normalize_subject("HELLO WORLD") == "hello world"
-
-    def test_empty_string(self):
-        assert email_reader._normalize_subject("") == ""
-
-
-class TestExtractThreadInfo:
-    def test_uses_references_first(self):
-        msg = message_from_string("References: <ref1@mail.com> <ref2@mail.com>\nIn-Reply-To: <reply@mail.com>\n\n")
-        result = email_reader.extract_thread_info(msg)
-        assert result["thread_id"] == email_reader._hash_thread_id("<ref1@mail.com>")
-        assert result["in_reply_to"] == "<reply@mail.com>"
-
-    def test_uses_in_reply_to_second(self):
-        msg = message_from_string("In-Reply-To: <reply@mail.com>\n\n")
-        result = email_reader.extract_thread_info(msg)
-        assert result["thread_id"] == email_reader._hash_thread_id("<reply@mail.com>")
-        assert result["in_reply_to"] == "<reply@mail.com>"
-
-    def test_uses_thread_index_third(self):
-        msg = message_from_string("Thread-Index: abcdefghijklmnopqrstuvwxyz\n\n")
-        result = email_reader.extract_thread_info(msg)
-        expected_input = "abcdefghijklmnopqrstuvwxyz"[:22]
-        assert result["thread_id"] == email_reader._hash_thread_id(expected_input)
-        assert result["in_reply_to"] == ""
-
-    def test_falls_back_to_normalized_subject(self):
-        msg = message_from_string("Subject: Re: My Topic\n\n")
-        result = email_reader.extract_thread_info(msg)
-        assert result["thread_id"] == email_reader._hash_thread_id("my topic")
-        assert result["in_reply_to"] == ""
-
-    def test_returns_none_thread_id_when_nothing(self):
-        msg = message_from_string("\n\n")
-        result = email_reader.extract_thread_info(msg)
-        assert result["thread_id"] is None
-        assert result["in_reply_to"] == ""
 
 
 class TestExtractUid:

@@ -240,3 +240,17 @@ class TestRateLimiter:
         assert rl.is_limited("9.9.9.9") is True
         clock[0] = 200.0
         assert rl.is_limited("9.9.9.9") is False
+
+    def test_rate_limiter_is_generic_key(self):
+        rl = auth.RateLimiter(max_attempts=2, window_seconds=60)
+        rl.record_failure("send:user@e.com")
+        rl.record_failure("send:user@e.com")
+        assert rl.is_limited("send:user@e.com") is True
+        assert rl.is_limited("send:other@e.com") is False
+
+    def test_login_alias_is_rate_limiter(self):
+        assert auth.LoginRateLimiter is auth.RateLimiter
+
+    def test_send_rate_limiter_defaults(self):
+        assert auth.send_rate_limiter.max_attempts == 10
+        assert auth.send_rate_limiter.window_seconds == 60

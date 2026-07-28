@@ -29,6 +29,7 @@ if (-not $Task) {
     Write-Host "  down             Stop and remove Docker Compose"
     Write-Host "  stop             Stop Docker Compose containers (no data removed)"
     Write-Host "  start            Start previously-stopped Docker Compose containers"
+    Write-Host "  restart          Restart running Docker Compose containers"
     Write-Host "  tailscale-up     Show Tailscale logs (login URL)"
     Write-Host "  tailscale-status Show Tailscale status"
     Write-Host "  tailscale-ip     Show Tailscale IP"
@@ -191,6 +192,11 @@ switch ($Task) {
 
     "start" {
         $argList = @("compose") + $COMPOSE_FILES_TS + @("start")
+        & docker @argList
+    }
+
+    "restart" {
+        $argList = @("compose") + $COMPOSE_FILES_TS + @("restart")
         & docker @argList
     }
 

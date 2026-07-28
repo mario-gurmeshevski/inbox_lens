@@ -359,11 +359,28 @@ def _parse_list_folder_name(folder_line):
     return None
 
 
-def move_to_trash(mail, message_id):
+def move_to_trash(mail, message_id, db_path=None):
     global _trash_folder_cache
-    mail.select("INBOX")
+    folder = resolve_folder_for_message(db_path, message_id, mail=mail)
+    mail.select(_quote_mailbox(folder))
     email_id = _resolve_uid(mail, message_id)
     if not email_id:
+        tried = {folder}
+        for candidate in (resolve_sent_folder(db_path, mail=mail), "INBOX"):
+            if candidate in tried:
+                continue
+            tried.add(candidate)
+            mail.select(_quote_mailbox(candidate))
+            email_id = _resolve_uid(mail, message_id)
+            if email_id:
+                folder = candidate
+                break
+    if not email_id:
+        logger.warning(
+            "move_to_trash: message not found in any tried folder %r (message_id=%s)",
+            tried,
+            message_id,
+        )
         return False
 
     if _trash_folder_cache is None:
@@ -372,6 +389,7 @@ def move_to_trash(mail, message_id):
 
     status, _ = mail.uid("copy", email_id, _quote_mailbox(trash_folder))
     if status != "OK":
+        logger.warning("move_to_trash: copy to %r failed (status=%s)", trash_folder, status)
         return False
 
     mail.uid("store", email_id, "+FLAGS", "\\Deleted")
@@ -403,37 +421,61 @@ def resolve_archive_folder(db_path=None) -> str:
         db_path = DB_PATH
     try:
         with imap_session(db_path) as mail:
-            _archive_folder_cache = find_archive_folder(mail)
+            folder = find_archive_folder(mail)
+            _archive_folder_cache = folder
+            return folder
     except Exception:
         logger.warning("Failed to resolve archive folder", exc_info=True)
-        _archive_folder_cache = GMAIL_DEFAULT_ARCHIVE
-    return _archive_folder_cache
+        return GMAIL_DEFAULT_ARCHIVE
 
 
 def find_sent_folder(mail) -> str:
     return find_folder_by_attr(mail, "\\Sent", GMAIL_DEFAULT_SENT)
 
 
-def resolve_sent_folder(db_path=None) -> str:
+def resolve_sent_folder(db_path=None, mail=None) -> str:
     global _sent_folder_cache
     if _sent_folder_cache is not None:
         return _sent_folder_cache
     if db_path is None:
         db_path = DB_PATH
     try:
-        with imap_session(db_path) as mail:
-            _sent_folder_cache = find_sent_folder(mail)
+        if mail is not None:
+            folder = find_sent_folder(mail)
+        else:
+            with imap_session(db_path) as session:
+                folder = find_sent_folder(session)
+        _sent_folder_cache = folder
+        return folder
     except Exception:
         logger.warning("Failed to resolve Sent folder", exc_info=True)
-        _sent_folder_cache = GMAIL_DEFAULT_SENT
-    return _sent_folder_cache
+        return GMAIL_DEFAULT_SENT
+
+
+def resolve_folder_for_message(db_path, message_id, mail=None) -> str:
+    if not message_id:
+        return "INBOX"
+    if db_path is None:
+        db_path = DB_PATH
+    try:
+        h = cache._hash_message_id(message_id)
+        row = cache.get_email_by_hash(db_path, h)
+        if row:
+            folder = (row.get("folder") or "").strip()
+            if folder and folder != "Sent":
+                return folder
+            if int(row.get("is_sent") or 0) == 1:
+                return resolve_sent_folder(db_path, mail=mail)
+    except Exception:
+        logger.debug("Folder resolution fell back to INBOX for %s", message_id, exc_info=True)
+    return "INBOX"
 
 
 def sync_sent_replies(db_path=None) -> dict:
     if db_path is None:
         db_path = DB_PATH
     if not cache.has_email_credentials(db_path):
-        return {"synced": 0, "skipped": 0}
+        return {"synced": 0, "skipped": 0, "reconciled": 0}
 
     cache.init_db(db_path)
     synced = 0
@@ -444,13 +486,13 @@ def sync_sent_replies(db_path=None) -> dict:
             status, _ = mail.select(_quote_mailbox(sent_folder))
             if status != "OK":
                 logger.warning("Could not select Sent folder: %s", sent_folder)
-                return {"synced": 0, "skipped": 0}
+                return {"synced": 0, "skipped": 0, "reconciled": 0}
 
             status, data = mail.uid("search", None, "ALL")
             uids = data[0].split() if (status == "OK" and data and data[0]) else []
             if not uids:
                 mail.select("INBOX")
-                return {"synced": 0, "skipped": 0}
+                return {"synced": 0, "skipped": 0, "reconciled": 0}
 
             parsed_headers = _fetch_headers_bulk(mail, uids)
             mail.select("INBOX")  # restore INBOX selection for other callers
@@ -459,6 +501,7 @@ def sync_sent_replies(db_path=None) -> dict:
             new_message_ids = []
             all_sent_hashes = []
             thread_id_refreshes: list[tuple[str | None, str | None, str]] = []
+            existing_sent_hashes: list[str] = []
             for header in parsed_headers:
                 header.pop("_uid", None)
                 header.pop("is_read", None)
@@ -473,7 +516,9 @@ def sync_sent_replies(db_path=None) -> dict:
                     thread_id = header.get("thread_id") or h
                     if thread_id:
                         thread_id_refreshes.append((thread_id, header.get("gm_thrid"), h))
+                    existing_sent_hashes.append(h)
                     continue
+                header["folder"] = sent_folder
                 new_headers.append(header)
                 new_message_ids.append(mid)
 
@@ -482,7 +527,10 @@ def sync_sent_replies(db_path=None) -> dict:
                     cache.mark_sent(all_sent_hashes, db_path)
                 if thread_id_refreshes:
                     cache.refresh_thread_ids(thread_id_refreshes, db_path)
-                return {"synced": 0, "skipped": skipped}
+                if existing_sent_hashes:
+                    cache.refresh_folders(sent_folder, existing_sent_hashes, db_path)
+                reconciled = cache.reconcile_sent(db_path, set(all_sent_hashes), searched_count=len(uids))
+                return {"synced": 0, "skipped": skipped, "reconciled": reconciled}
 
             cache.save_headers_batch(new_headers, db_path)
 
@@ -490,16 +538,19 @@ def sync_sent_replies(db_path=None) -> dict:
                 cache.mark_sent(all_sent_hashes, db_path)
             if thread_id_refreshes:
                 cache.refresh_thread_ids(thread_id_refreshes, db_path)
+            if existing_sent_hashes:
+                cache.refresh_folders(sent_folder, existing_sent_hashes, db_path)
 
             bodies = _fetch_bodies_in_folder(db_path, sent_folder, new_message_ids)
             if bodies:
                 cache.update_bodies_batch(bodies, db_path)
                 synced = len(bodies)
+            reconciled = cache.reconcile_sent(db_path, set(all_sent_hashes), searched_count=len(uids))
     except Exception:
         logger.warning("Sent folder sync failed", exc_info=True)
-        return {"synced": synced, "skipped": skipped}
+        return {"synced": synced, "skipped": skipped, "reconciled": 0}
 
-    return {"synced": synced, "skipped": skipped}
+    return {"synced": synced, "skipped": skipped, "reconciled": reconciled}
 
 
 def sync_all_mail(db_path=None) -> dict:
@@ -592,10 +643,11 @@ def list_folders(db_path=None) -> list[str]:
     return folders
 
 
-def move_to_folder(mail, message_id, folder: str) -> bool:
+def move_to_folder(mail, message_id, folder: str, db_path=None) -> bool:
     if not _validate_folder_name(folder):
         return False
-    mail.select("INBOX")
+    src_folder = resolve_folder_for_message(db_path, message_id, mail=mail)
+    mail.select(_quote_mailbox(src_folder))
     email_id = _resolve_uid(mail, message_id)
     if not email_id:
         return False
@@ -609,38 +661,50 @@ def move_to_folder(mail, message_id, folder: str) -> bool:
     return True
 
 
-def set_flags_bulk(mail, message_ids: list[str], flag: str, on: bool) -> int:
+def _group_ids_by_folder(db_path, message_ids: list[str], mail=None) -> dict[str, list[str]]:
+    groups: dict[str, list[str]] = {}
+    for mid in message_ids:
+        folder = resolve_folder_for_message(db_path, mid, mail=mail)
+        groups.setdefault(folder, []).append(mid)
+    return groups
+
+
+def set_flags_bulk(mail, message_ids: list[str], flag: str, on: bool, db_path=None) -> int:
     if not message_ids:
         return 0
-    mail.select("INBOX")
     op = "+FLAGS" if on else "-FLAGS"
     updated = 0
-    for mid in message_ids:
-        uid = _resolve_uid(mail, mid)
-        if not uid:
-            continue
-        status, _ = mail.uid("store", uid, op, flag)
-        if status == "OK":
-            updated += 1
+    for folder, ids in _group_ids_by_folder(db_path, message_ids, mail=mail).items():
+        mail.select(_quote_mailbox(folder))
+        for mid in ids:
+            uid = _resolve_uid(mail, mid)
+            if not uid:
+                continue
+            status, _ = mail.uid("store", uid, op, flag)
+            if status == "OK":
+                updated += 1
     return updated
 
 
-def _bulk_move_uids(mail, message_ids: list[str], folder: str) -> int:
+def _bulk_move_uids(mail, message_ids: list[str], folder: str, db_path=None) -> list[str]:
     if not message_ids or not _validate_folder_name(folder):
-        return 0
-    mail.select("INBOX")
-    moved_uids: list[bytes] = []
-    for mid in message_ids:
-        uid = _resolve_uid(mail, mid)
-        if not uid:
-            continue
-        status, _ = mail.uid("copy", uid, _quote_mailbox(folder))
-        if status == "OK":
-            moved_uids.append(uid)
-    if moved_uids:
-        mail.uid("store", b",".join(moved_uids), "+FLAGS", "\\Deleted")
-        mail.expunge()
-    return len(moved_uids)
+        return []
+    moved: list[str] = []
+    for src_folder, ids in _group_ids_by_folder(db_path, message_ids, mail=mail).items():
+        mail.select(_quote_mailbox(src_folder))
+        moved_uids: list[tuple[bytes, str]] = []  # (uid, message_id)
+        for mid in ids:
+            uid = _resolve_uid(mail, mid)
+            if not uid:
+                continue
+            status, _ = mail.uid("copy", uid, _quote_mailbox(folder))
+            if status == "OK":
+                moved_uids.append((uid, mid))
+        if moved_uids:
+            mail.uid("store", b",".join(uid for uid, _ in moved_uids), "+FLAGS", "\\Deleted")
+            mail.expunge()
+            moved.extend(mid for _, mid in moved_uids)
+    return moved
 
 
 def fetch_headers_and_cache(db_path=None, protected_hashes=None):
@@ -704,6 +768,7 @@ def fetch_headers_and_cache(db_path=None, protected_hashes=None):
             thread_id_refreshes: list[tuple[str | None, str | None, str]] = []
             for header, eid, mid, h in header_entries:
                 if h not in existing_hashes:
+                    header["folder"] = "INBOX"
                     new_headers.append(header)
                     new_ids.append((eid, mid))
                 else:
@@ -854,7 +919,7 @@ def delete_email(message_id, db_path=None):
 
     try:
         with imap_session(db_path) as mail:
-            success = move_to_trash(mail, message_id)
+            success = move_to_trash(mail, message_id, db_path)
             if success:
                 cache.delete_email(message_id, db_path)
                 return {"deleted": True, "message_id": message_id}
@@ -872,7 +937,7 @@ def archive_remote(message_id, db_path=None) -> bool:
     try:
         folder = resolve_archive_folder(db_path)
         with imap_session(db_path) as mail:
-            return move_to_folder(mail, message_id, folder)
+            return move_to_folder(mail, message_id, folder, db_path)
     except Exception:
         logger.warning("Background IMAP archive failed", exc_info=True)
         return False
@@ -885,7 +950,7 @@ def move_remote(message_id, folder: str, db_path=None) -> bool:
         return False
     try:
         with imap_session(db_path) as mail:
-            return move_to_folder(mail, message_id, folder)
+            return move_to_folder(mail, message_id, folder, db_path)
     except Exception:
         logger.warning("Background IMAP move failed", exc_info=True)
         return False
@@ -898,48 +963,48 @@ def bulk_set_flag_remote(message_ids: list[str], flag: str, on: bool, db_path=No
         return 0
     try:
         with imap_session(db_path) as mail:
-            return set_flags_bulk(mail, message_ids, flag, on)
+            return set_flags_bulk(mail, message_ids, flag, on, db_path)
     except Exception:
         logger.warning("Background bulk IMAP flag sync failed", exc_info=True)
         return 0
 
 
-def bulk_move_remote(message_ids: list[str], folder: str, db_path=None) -> int:
+def bulk_move_remote(message_ids: list[str], folder: str, db_path=None) -> list[str]:
     if db_path is None:
         db_path = DB_PATH
     if not message_ids or not folder or not cache.has_email_credentials(db_path):
-        return 0
-    moved = 0
+        return []
+    moved: list[str] = []
     try:
         with imap_session(db_path) as mail:
-            moved = _bulk_move_uids(mail, message_ids, folder)
+            moved = _bulk_move_uids(mail, message_ids, folder, db_path)
     except Exception:
         logger.warning("Background bulk IMAP move failed", exc_info=True)
         return moved
     return moved
 
 
-def bulk_archive_remote(message_ids: list[str], db_path=None) -> int:
+def bulk_archive_remote(message_ids: list[str], db_path=None) -> list[str]:
     if db_path is None:
         db_path = DB_PATH
     if not message_ids or not cache.has_email_credentials(db_path):
-        return 0
+        return []
     folder = resolve_archive_folder(db_path)
     return bulk_move_remote(message_ids, folder, db_path)
 
 
-def bulk_delete_remote(message_ids: list[str], db_path=None) -> int:
+def bulk_delete_remote(message_ids: list[str], db_path=None) -> list[str]:
     if db_path is None:
         db_path = DB_PATH
     if not message_ids or not cache.has_email_credentials(db_path):
-        return 0
-    deleted = 0
+        return []
+    deleted: list[str] = []
     try:
         with imap_session(db_path) as mail:
             global _trash_folder_cache
             if _trash_folder_cache is None:
                 _trash_folder_cache = find_trash_folder(mail)
-            deleted = _bulk_move_uids(mail, message_ids, _trash_folder_cache)
+            deleted = _bulk_move_uids(mail, message_ids, _trash_folder_cache, db_path)
     except Exception:
         logger.warning("Background bulk IMAP delete failed", exc_info=True)
         return deleted

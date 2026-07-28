@@ -1,4 +1,4 @@
-.PHONY: install uninstall dev-install web test test-cov lint format unused pre-commit clean reset up up-ts down stop start tailscale-up tailscale-status tailscale-ip tailscale-logout purge
+.PHONY: install uninstall dev-install web test test-cov lint format unused pre-commit clean reset up up-ts down stop start restart tailscale-up tailscale-status tailscale-ip tailscale-logout purge
 
 PYTHON ?= python3
 VENV := .venv
@@ -87,6 +87,9 @@ start:
 	else \
 	  echo "Tailscale not logged in. Run: make tailscale-up"; \
 	fi
+
+restart:
+	docker compose $(COMPOSE_FILES_TS) restart
 
 tailscale-up:
 	@echo "Tailscale logs (look for login URL on first run):"

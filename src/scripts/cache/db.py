@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS emails (
     is_starred INTEGER DEFAULT 0,
     is_sent INTEGER DEFAULT 0,
     gm_thrid TEXT,
+    cc TEXT,
+    folder TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_status ON emails(status);
@@ -47,12 +49,26 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS drafts (
+    id           TEXT PRIMARY KEY,
+    to_addr      TEXT,
+    cc           TEXT,
+    bcc          TEXT,
+    subject      TEXT,
+    body         TEXT,
+    mode         TEXT,
+    thread_id    TEXT,
+    in_reply_to  TEXT,
+    updated_at   TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_drafts_updated ON drafts(updated_at);
 """
 
 
 _LIST_COLUMNS = (
     "message_id_hash, message_id, sender, subject, date, date_parsed, "
-    "status, category, keyword_matches, thread_id, in_reply_to, is_read, is_starred, is_sent"
+    "status, category, keyword_matches, thread_id, in_reply_to, is_read, is_starred, is_sent, cc, folder"
 )
 
 
@@ -129,20 +145,20 @@ def _connect(db_path: str):
         raise
 
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 
 def _migrate(db_path: str) -> None:
     with _connect(db_path) as conn:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        if version >= _SCHEMA_VERSION:
-            return
 
         required = {
             "is_read": "INTEGER DEFAULT 0",
             "is_starred": "INTEGER DEFAULT 0",
             "is_sent": "INTEGER DEFAULT 0",
             "gm_thrid": "TEXT",
+            "cc": "TEXT",
+            "folder": "TEXT",
         }
         existing = {row["name"] for row in conn.execute("PRAGMA table_info(emails)").fetchall()}
         for column, decl in required.items():
@@ -150,8 +166,29 @@ def _migrate(db_path: str) -> None:
                 conn.execute(f"ALTER TABLE emails ADD COLUMN {column} {decl}")
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_in_reply_to ON emails(in_reply_to)")
-        conn.execute("UPDATE emails SET thread_id = message_id_hash WHERE thread_id IS NULL")
-        conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS drafts (\n"
+            "    id           TEXT PRIMARY KEY,\n"
+            "    to_addr      TEXT,\n"
+            "    cc           TEXT,\n"
+            "    bcc          TEXT,\n"
+            "    subject      TEXT,\n"
+            "    body         TEXT,\n"
+            "    mode         TEXT,\n"
+            "    thread_id    TEXT,\n"
+            "    in_reply_to  TEXT,\n"
+            "    updated_at   TEXT DEFAULT (datetime('now'))\n"
+            ")"
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_drafts_updated ON drafts(updated_at)")
+        needs_backfill = conn.execute("SELECT 1 FROM emails WHERE thread_id IS NULL LIMIT 1").fetchone()
+        if needs_backfill:
+            conn.execute("UPDATE emails SET thread_id = message_id_hash WHERE thread_id IS NULL")
+        needs_folder = conn.execute("SELECT 1 FROM emails WHERE folder IS NULL LIMIT 1").fetchone()
+        if needs_folder:
+            conn.execute("UPDATE emails SET folder = 'INBOX' WHERE folder IS NULL AND is_sent = 0")
+        if version < _SCHEMA_VERSION:
+            conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
 def init_db(db_path: str) -> None:
@@ -214,6 +251,8 @@ def reconcile_inbox(
     min_ratio: float = 0.9,
     force: bool = False,
 ) -> int:
+    if not server_hashes and not force:
+        return 0
     if not force:
         if searched_count and len(server_hashes) / searched_count < min_ratio:
             logger.warning(
@@ -242,6 +281,46 @@ def reconcile_inbox(
         if cached_count >= 20 and len(ghosts) / cached_count > 0.25:
             logger.warning(
                 "Skipping reconcile: ghosts %d > 25%% of %d cached",
+                len(ghosts),
+                cached_count,
+            )
+            return 0
+
+    return delete_emails_by_hashes(db_path, ghosts)
+
+
+def reconcile_sent(
+    db_path: str,
+    server_hashes: set[str],
+    searched_count: int = 0,
+    min_ratio: float = 0.9,
+    force: bool = False,
+) -> int:
+    if not server_hashes and not force:
+        return 0
+    if not force:
+        if searched_count and len(server_hashes) / searched_count < min_ratio:
+            logger.warning(
+                "Skipping sent reconcile: fetched %d of %d UIDs (<%.0f%%)",
+                len(server_hashes),
+                searched_count,
+                min_ratio * 100,
+            )
+            return 0
+
+    with _connect(db_path) as conn:
+        rows = conn.execute("SELECT message_id_hash FROM emails WHERE COALESCE(is_sent, 0) = 1").fetchall()
+    cached_hashes = {row["message_id_hash"] for row in rows}
+    ghosts = cached_hashes - server_hashes
+    ghosts = list(ghosts)
+    if not ghosts:
+        return 0
+
+    if not force:
+        cached_count = len(cached_hashes)
+        if cached_count >= 20 and len(ghosts) / cached_count > 0.25:
+            logger.warning(
+                "Skipping sent reconcile: ghosts %d > 25%% of %d cached",
                 len(ghosts),
                 cached_count,
             )
@@ -304,6 +383,23 @@ def refresh_thread_ids(updates: list[tuple[str | None, str | None, str]], db_pat
     return changed
 
 
+def refresh_folders(folder: str, hashes: list[str], db_path: str) -> int:
+    if not folder or not hashes:
+        return 0
+    changed = 0
+    with _connect(db_path) as conn:
+        for cursor in _run_in_batches(
+            conn,
+            "UPDATE emails SET folder = ? "
+            "WHERE message_id_hash IN ({placeholders}) "
+            "AND (folder IS NULL OR folder = '' OR folder = 'Sent')",
+            hashes,
+            leading=[folder],
+        ):
+            changed += cursor.rowcount
+    return changed
+
+
 def get_message_ids_by_hashes(db_path: str, message_id_hashes: list[str]) -> list[tuple[str, str]]:
     if not message_id_hashes:
         return []
@@ -349,6 +445,8 @@ def save_headers_batch(emails: list[dict], db_path: str) -> int:
                 thread_id,
                 email_data.get("in_reply_to"),
                 email_data.get("gm_thrid"),
+                email_data.get("cc"),
+                email_data.get("folder"),
             )
         )
 
@@ -364,8 +462,8 @@ def save_headers_batch(emails: list[dict], db_path: str) -> int:
         if insert_rows:
             conn.executemany(
                 """INSERT OR IGNORE INTO emails
-                   (message_id_hash, message_id, sender, subject, date, date_parsed, body, status, category, keyword_matches, thread_id, in_reply_to, gm_thrid)
-                   VALUES (?, ?, ?, ?, ?, ?, '', 'headers_only', NULL, NULL, ?, ?, ?)""",
+                   (message_id_hash, message_id, sender, subject, date, date_parsed, body, status, category, keyword_matches, thread_id, in_reply_to, gm_thrid, cc, folder)
+                   VALUES (?, ?, ?, ?, ?, ?, '', 'headers_only', NULL, NULL, ?, ?, ?, ?, ?)""",
                 insert_rows,
             )
 
@@ -473,4 +571,6 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         "is_starred": int(_col("is_starred", 0) or 0),
         "is_sent": int(_col("is_sent", 0) or 0),
         "gm_thrid": _col("gm_thrid", None),
+        "cc": _col("cc", None),
+        "folder": _col("folder", None),
     }

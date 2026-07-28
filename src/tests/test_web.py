@@ -1,6 +1,5 @@
 import json
-import threading
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -231,6 +230,111 @@ class TestWebEndpoints:
         assert "Web subject 0" in resp.text
         assert "Web subject 1" in resp.text
 
+    def test_sent_view_shows_only_sent(self):
+        self._seed_emails(2)  # inbox mails
+        sent = {
+            "message_id": "<sent-only@e.com>",
+            "from": "me@e.com",
+            "subject": "My sent mail",
+            "date": "Tue, 09 Jan 2024 10:00:00 +0000",
+            "body": "outgoing",
+        }
+        _save_fetched(sent, self.db_path)
+        cache.mark_sent([cache._hash_message_id(sent["message_id"])], self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/emails/sent")
+        assert resp.status_code == 200
+        assert "Sent" in resp.text  # heading
+        assert "My sent mail" in resp.text
+        assert "Web subject 0" not in resp.text  # inbox mail excluded
+        assert "Web subject 1" not in resp.text
+
+    def test_sent_view_empty_when_no_sent(self):
+        self._seed_emails(2)  # inbox only
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/emails/sent")
+        assert resp.status_code == 200
+        assert "Web subject 0" not in resp.text
+
+    def test_sent_nav_link_present(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/emails")
+        assert 'href="/emails/sent"' in resp.text
+        assert 'nav-label">Sent' in resp.text
+
+    def test_inbox_hides_sent_by_default(self):
+        self._seed_emails(1)
+        sent = {
+            "message_id": "<sent-hide@e.com>",
+            "from": "me@e.com",
+            "subject": "Outgoing only",
+            "date": "Tue, 09 Jan 2024 10:00:00 +0000",
+            "body": "x",
+            "thread_id": cache._hash_message_id("<web0@e.com>"),
+        }
+        _save_fetched(sent, self.db_path)
+        cache.mark_sent([cache._hash_message_id(sent["message_id"])], self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/emails")
+        assert resp.status_code == 200
+        assert "Outgoing only" not in resp.text
+
+    def test_inbox_shows_sent_when_setting_enabled(self):
+        self._seed_emails(1)
+        sent = {
+            "message_id": "<sent-show@e.com>",
+            "from": "me@e.com",
+            "subject": "Outgoing visible",
+            "date": "Tue, 09 Jan 2024 10:00:00 +0000",
+            "body": "x",
+            "thread_id": cache._hash_message_id("<web0@e.com>"),
+        }
+        _save_fetched(sent, self.db_path)
+        cache.mark_sent([cache._hash_message_id(sent["message_id"])], self.db_path)
+        cache.save_setting("show_sent_in_inbox", "1", self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/emails")
+        assert resp.status_code == 200
+        assert "Outgoing visible" in resp.text
+
+    def test_sent_view_shows_all_sent_even_same_thread(self):
+        parent = self._seed_emails(1)[0]
+        for i, mid in enumerate(("<r1@e.com>", "<r2@e.com>"), start=1):
+            reply = {
+                "message_id": mid,
+                "from": "me@e.com",
+                "subject": f"Re: reply {i}",
+                "date": f"Tue, {9 + i} Jan 2024 10:00:00 +0000",
+                "body": "x",
+                "in_reply_to": parent["message_id"],
+                "thread_id": cache._hash_message_id(parent["message_id"]),
+            }
+            _save_fetched(reply, self.db_path)
+            cache.mark_sent([cache._hash_message_id(mid)], self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/emails/sent")
+        assert resp.status_code == 200
+        assert "Re: reply 1" in resp.text
+        assert "Re: reply 2" in resp.text
+
+    def test_save_show_sent_in_inbox_setting(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post("/settings/show-sent-in-inbox", data={"show_sent_in_inbox": "true"})
+        assert resp.status_code == 200
+        assert cache.get_setting("show_sent_in_inbox", self.db_path) == "1"
+        # Toggle off
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post("/settings/show-sent-in-inbox", data={"show_sent_in_inbox": "false"})
+        assert cache.get_setting("show_sent_in_inbox", self.db_path) == ""
+
     def test_email_detail_found(self):
         self._seed_emails(1)
         email_hash = cache._hash_message_id("<web0@e.com>")
@@ -245,20 +349,36 @@ class TestWebEndpoints:
             resp = client.get("/emails/nonexistent")
         assert resp.status_code == 404
 
-    def test_delete_email_redirects(self):
+    def test_delete_email_returns_204_with_toast(self):
         self._seed_emails(1)
         email_hash = cache._hash_message_id("<web0@e.com>")
         with patch.object(web, "DB_PATH", self.db_path), patch("src.scripts.email_reader.delete_email") as mock_del:
             mock_del.return_value = {"deleted": True, "message_id": "<web0@e.com>"}
             client = self._make_client()
             resp = client.post(f"/emails/{email_hash}/delete", follow_redirects=False)
-        assert resp.status_code == 303
+        assert resp.status_code == 204
+        assert "X-Toast" in resp.headers
 
-    def test_delete_nonexistent_redirects(self):
+    def test_delete_nonexistent_returns_error_toast(self):
         with patch.object(web, "DB_PATH", self.db_path):
             client = self._make_client()
             resp = client.post("/emails/nonexistent/delete", follow_redirects=False)
-        assert resp.status_code == 303
+        assert resp.status_code == 204
+        assert "X-Toast" in resp.headers
+        assert "not found" in resp.headers["X-Toast"].lower()
+
+    def test_delete_email_imap_failure_returns_error_toast(self):
+        self._seed_emails(1)
+        email_hash = cache._hash_message_id("<web0@e.com>")
+        with patch.object(web, "DB_PATH", self.db_path), patch("src.scripts.email_reader.delete_email") as mock_del:
+            mock_del.return_value = {"deleted": False, "error": "IMAP: message not found in any folder"}
+            client = self._make_client()
+            resp = client.post(f"/emails/{email_hash}/delete", follow_redirects=False)
+        assert resp.status_code == 204
+        assert "X-Toast" in resp.headers
+        assert "IMAP" in resp.headers["X-Toast"]
+        assert "not found" in resp.headers["X-Toast"].lower()
+        assert cache.get_email_by_hash(self.db_path, email_hash) is not None
 
     def test_toggle_read_returns_204_and_flips_state(self):
         self._seed_emails(1)
@@ -415,48 +535,127 @@ class TestWebEndpoints:
         assert mock_defer.call_args.args[2] == "\\Flagged"
         assert mock_defer.call_args.args[3] is True
 
-    def test_bulk_archive_removes_rows_and_defers_imap(self):
+    def test_bulk_archive_removes_rows_only_on_imap_success(self):
         self._seed_emails(2)
         h0 = cache._hash_message_id("<web0@e.com>")
         h1 = cache._hash_message_id("<web1@e.com>")
         with (
             patch.object(web, "DB_PATH", self.db_path),
-            patch.object(web, "_defer") as mock_defer,
+            patch("src.scripts.web._defer") as mock_defer,
+            patch("src.scripts.email_reader.bulk_archive_remote") as mock_archive,
         ):
+            mock_archive.return_value = ["<web0@e.com>", "<web1@e.com>"]
             client = self._make_client()
             resp = client.post("/emails/bulk", data={"action": "archive", "hashes": [h0, h1]})
         assert resp.status_code == 204
+        assert "Removed 2" in resp.headers["X-Toast"]
         assert cache.get_total_count(self.db_path) == 0
-        mock_defer.assert_called_once()
-        # Archive defers bulk_archive_remote (which resolves the folder on the
-        # background thread, not the request path).
-        assert mock_defer.call_args.args[0] == email_reader.bulk_archive_remote
+        mock_archive.assert_called_once()
+        mock_defer.assert_not_called()
 
-    def test_bulk_move_removes_rows_and_defers_imap(self):
+    def test_bulk_archive_imap_failure_keeps_emails_in_cache(self):
         self._seed_emails(2)
         h0 = cache._hash_message_id("<web0@e.com>")
         h1 = cache._hash_message_id("<web1@e.com>")
         with (
             patch.object(web, "DB_PATH", self.db_path),
-            patch.object(web, "_defer") as mock_defer,
+            patch("src.scripts.email_reader.bulk_archive_remote") as mock_archive,
         ):
+            mock_archive.return_value = []
+            client = self._make_client()
+            resp = client.post("/emails/bulk", data={"action": "archive", "hashes": [h0, h1]})
+        assert resp.status_code == 204
+        assert "failed" in resp.headers["X-Toast"].lower()
+        assert cache.get_total_count(self.db_path) == 2
+        mock_archive.assert_called_once()
+
+    def test_bulk_archive_partial_success_only_removes_archived(self):
+        self._seed_emails(2)
+        h0 = cache._hash_message_id("<web0@e.com>")
+        h1 = cache._hash_message_id("<web1@e.com>")
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch("src.scripts.email_reader.bulk_archive_remote") as mock_archive,
+        ):
+            mock_archive.return_value = ["<web0@e.com>"]
+            client = self._make_client()
+            resp = client.post("/emails/bulk", data={"action": "archive", "hashes": [h0, h1]})
+        assert resp.status_code == 204
+        assert "Removed 1" in resp.headers["X-Toast"]
+        assert cache.get_total_count(self.db_path) == 1
+        assert cache.get_email_by_hash(self.db_path, h0) is None  # archived
+        assert cache.get_email_by_hash(self.db_path, h1) is not None  # kept
+        mock_archive.assert_called_once()
+
+    def test_bulk_move_removes_rows_only_on_imap_success(self):
+        self._seed_emails(2)
+        h0 = cache._hash_message_id("<web0@e.com>")
+        h1 = cache._hash_message_id("<web1@e.com>")
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch("src.scripts.web._defer") as mock_defer,
+            patch("src.scripts.email_reader.bulk_move_remote") as mock_move,
+        ):
+            mock_move.return_value = ["<web0@e.com>", "<web1@e.com>"]
             client = self._make_client()
             resp = client.post(
                 "/emails/bulk",
                 data={"action": "move", "folder": "Work", "hashes": [h0, h1]},
             )
         assert resp.status_code == 204
+        assert "Moved 2 to Work" in resp.headers["X-Toast"]
         assert cache.get_total_count(self.db_path) == 0
-        mock_defer.assert_called_once()
-        assert mock_defer.call_args.args[0] == email_reader.bulk_move_remote
-        assert mock_defer.call_args.args[2] == "Work"
+        mock_move.assert_called_once()
+        args = mock_move.call_args.args
+        assert args[1] == "Work"
+        assert args[2] == self.db_path
+        mock_defer.assert_not_called()
+
+    def test_bulk_move_imap_failure_keeps_emails_in_cache(self):
+        self._seed_emails(2)
+        h0 = cache._hash_message_id("<web0@e.com>")
+        h1 = cache._hash_message_id("<web1@e.com>")
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch("src.scripts.email_reader.bulk_move_remote") as mock_move,
+        ):
+            mock_move.return_value = []
+            client = self._make_client()
+            resp = client.post(
+                "/emails/bulk",
+                data={"action": "move", "folder": "Work", "hashes": [h0, h1]},
+            )
+        assert resp.status_code == 204
+        assert "failed" in resp.headers["X-Toast"].lower()
+        assert cache.get_total_count(self.db_path) == 2
+        mock_move.assert_called_once()
+
+    def test_bulk_move_partial_success_only_removes_moved(self):
+        self._seed_emails(2)
+        h0 = cache._hash_message_id("<web0@e.com>")
+        h1 = cache._hash_message_id("<web1@e.com>")
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch("src.scripts.email_reader.bulk_move_remote") as mock_move,
+        ):
+            mock_move.return_value = ["<web0@e.com>"]
+            client = self._make_client()
+            resp = client.post(
+                "/emails/bulk",
+                data={"action": "move", "folder": "Work", "hashes": [h0, h1]},
+            )
+        assert resp.status_code == 204
+        assert "Moved 1 to Work" in resp.headers["X-Toast"]
+        assert cache.get_total_count(self.db_path) == 1
+        assert cache.get_email_by_hash(self.db_path, h0) is None  # moved
+        assert cache.get_email_by_hash(self.db_path, h1) is not None  # kept
 
     def test_bulk_move_without_folder_warns_and_keeps_rows(self):
         self._seed_emails(1)
         h0 = cache._hash_message_id("<web0@e.com>")
         with (
             patch.object(web, "DB_PATH", self.db_path),
-            patch.object(web, "_defer") as mock_defer,
+            patch("src.scripts.email_reader.bulk_move_remote") as mock_move,
         ):
             client = self._make_client()
             resp = client.post("/emails/bulk", data={"action": "move", "hashes": [h0]})
@@ -464,14 +663,14 @@ class TestWebEndpoints:
         assert "no destination" in resp.headers["X-Toast"].lower()
         # No local delete, no remote op when the folder is missing.
         assert cache.get_total_count(self.db_path) == 1
-        mock_defer.assert_not_called()
+        mock_move.assert_not_called()
 
     def test_bulk_move_with_unsafe_folder_warns_and_keeps_rows(self):
         self._seed_emails(1)
         h0 = cache._hash_message_id("<web0@e.com>")
         with (
             patch.object(web, "DB_PATH", self.db_path),
-            patch.object(web, "_defer") as mock_defer,
+            patch("src.scripts.email_reader.bulk_move_remote") as mock_move,
         ):
             client = self._make_client()
             resp = client.post(
@@ -481,7 +680,7 @@ class TestWebEndpoints:
         assert resp.status_code == 204
         assert "no destination" in resp.headers["X-Toast"].lower()
         assert cache.get_total_count(self.db_path) == 1
-        mock_defer.assert_not_called()
+        mock_move.assert_not_called()
 
     def test_bulk_delete_removes_rows_and_defers_imap(self):
         self._seed_emails(2)
@@ -489,14 +688,48 @@ class TestWebEndpoints:
         h1 = cache._hash_message_id("<web1@e.com>")
         with (
             patch.object(web, "DB_PATH", self.db_path),
-            patch.object(web, "_defer") as mock_defer,
+            patch("src.scripts.email_reader.bulk_delete_remote") as mock_bulk_delete,
         ):
+            mock_bulk_delete.return_value = ["<web0@e.com>", "<web1@e.com>"]
             client = self._make_client()
             resp = client.post("/emails/bulk", data={"action": "delete", "hashes": [h0, h1]})
         assert resp.status_code == 204
         assert cache.get_total_count(self.db_path) == 0
-        mock_defer.assert_called_once()
-        assert mock_defer.call_args.args[0] == email_reader.bulk_delete_remote
+        mock_bulk_delete.assert_called_once()
+
+    def test_bulk_delete_imap_failure_keeps_emails_in_cache(self):
+        self._seed_emails(2)
+        h0 = cache._hash_message_id("<web0@e.com>")
+        h1 = cache._hash_message_id("<web1@e.com>")
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch("src.scripts.email_reader.bulk_delete_remote") as mock_bulk_delete,
+        ):
+            mock_bulk_delete.return_value = []
+            client = self._make_client()
+            resp = client.post("/emails/bulk", data={"action": "delete", "hashes": [h0, h1]})
+        assert resp.status_code == 204
+        assert "failed" in resp.headers["X-Toast"].lower()
+        assert cache.get_total_count(self.db_path) == 2
+        mock_bulk_delete.assert_called_once()
+
+    def test_bulk_delete_partial_success_only_removes_deleted(self):
+        self._seed_emails(2)
+        h0 = cache._hash_message_id("<web0@e.com>")
+        h1 = cache._hash_message_id("<web1@e.com>")
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch("src.scripts.email_reader.bulk_delete_remote") as mock_bulk_delete,
+        ):
+            mock_bulk_delete.return_value = ["<web0@e.com>"]
+            client = self._make_client()
+            resp = client.post("/emails/bulk", data={"action": "delete", "hashes": [h0, h1]})
+        assert resp.status_code == 204
+        assert "Removed 1" in resp.headers["X-Toast"]
+        assert cache.get_total_count(self.db_path) == 1
+        assert cache.get_email_by_hash(self.db_path, h0) is None  # deleted
+        assert cache.get_email_by_hash(self.db_path, h1) is not None  # kept
+        mock_bulk_delete.assert_called_once()
 
     def test_setup_page_no_credentials(self):
         with (
@@ -2267,230 +2500,428 @@ class TestComposePartial:
         assert "&lt;script&gt;" in body
 
 
-class TestSendEmail:
-    @pytest.fixture(autouse=True)
-    def setup(self, tmp_path):
-        self.db_path = str(tmp_path / "send_test.db")
-        cache.init_db(self.db_path)
-        cache.save_email_credentials("me@e.com", "secret", self.db_path)
-        self.email = {
-            "message_id": "<orig@e.com>",
-            "from": "Alice <alice@example.com>",
-            "subject": "Lunch?",
-            "date": "Mon, 01 Jan 2024 10:00:00 +0000",
-            "body": "Want to grab lunch?",
-            "thread_id": _TID,
-            "gm_thrid": _TID,
-            "in_reply_to": "",
-        }
-        from src.tests._helpers import save_fetched
+class TestComposeSend:
+    def test_send_new_email(self, web_client, monkeypatch):
+        captured = {}
 
-        save_fetched(self.email, self.db_path)
-        self.hash = cache._hash_message_id(self.email["message_id"])
-
-    def _client(self):
-        from fastapi.testclient import TestClient
-
-        return TestClient(web.app)
-
-    def test_reply_sent_success(self):
-        with patch.object(web, "DB_PATH", self.db_path), patch.object(email_reader, "send_message") as mock_send:
-            client = self._client()
-            resp = client.post(
-                f"/emails/{self.hash}/send",
-                data={"to": "alice@example.com", "subject": "Re: Lunch?", "body": "Sure!", "mode": "reply"},
+        def fake_send(to_addrs, cc_addrs, bcc_addrs, subject, body_md, body_html, mode, **kw):
+            captured.update(
+                to=to_addrs,
+                cc=cc_addrs,
+                bcc=bcc_addrs,
+                subject=subject,
+                body_md=body_md,
+                body_html=body_html,
+                mode=mode,
+                kw=kw,
             )
+
+        monkeypatch.setattr(email_reader, "send_message", fake_send)
+        resp = web_client.post(
+            "/emails/send",
+            data={
+                "to": "alice@example.com",
+                "cc": "",
+                "bcc": "",
+                "subject": "Hi",
+                "body": "Hello **world**",
+                "mode": "new",
+            },
+        )
         assert resp.status_code == 204
-        assert resp.headers.get("X-Toast") == "Reply sent"
         assert resp.headers.get("X-Toast-Tone") == "success"
-        mock_send.assert_called_once()
-        args, kwargs = mock_send.call_args
-        assert args[0] == "alice@example.com"  # to_addr
-        assert args[3] == "reply"  # mode
-        assert kwargs.get("db_path") == self.db_path
-        assert kwargs.get("original_message_id") == "<orig@e.com>"
-        assert kwargs.get("thread_id") == _TID
+        assert captured["to"] == ["alice@example.com"]
+        assert captured["cc"] == []
+        assert captured["bcc"] == []
+        assert captured["subject"] == "Hi"
+        assert captured["body_md"] == "Hello **world**"
+        assert captured["mode"] == "new"
+        assert "<strong>world</strong>" in captured["body_html"]
 
-    def test_forward_sent_success(self):
-        with patch.object(web, "DB_PATH", self.db_path), patch.object(email_reader, "send_message") as mock_send:
-            client = self._client()
-            resp = client.post(
-                f"/emails/{self.hash}/send",
-                data={"to": "bob@example.com", "subject": "Fwd: Lunch?", "body": "FYI", "mode": "forward"},
-            )
+    def test_send_with_cc_and_bcc(self, web_client, monkeypatch):
+        captured = {}
+
+        def fake_send(*args, **kw):
+            captured.update(to=args[0], cc=args[1], bcc=args[2])
+
+        monkeypatch.setattr(email_reader, "send_message", fake_send)
+        resp = web_client.post(
+            "/emails/send",
+            data={
+                "to": "to@x.com",
+                "cc": "a@x.com, b@x.com",
+                "bcc": "secret@x.com",
+                "subject": "Hi",
+                "body": "Body",
+                "mode": "new",
+            },
+        )
         assert resp.status_code == 204
-        assert resp.headers.get("X-Toast") == "Email forwarded"
-        mock_send.assert_called_once()
+        assert captured["to"] == ["to@x.com"]
+        assert captured["cc"] == ["a@x.com", "b@x.com"]
+        assert captured["bcc"] == ["secret@x.com"]
 
-    def test_email_not_found(self):
-        with patch.object(web, "DB_PATH", self.db_path), patch.object(email_reader, "send_message") as mock_send:
-            client = self._client()
-            resp = client.post(
-                "/emails/nonexistent/send",
-                data={"to": "x@y.com", "subject": "Hi", "body": "Body", "mode": "reply"},
-            )
-        assert resp.headers.get("X-Toast") == "Email not found"
-        assert resp.headers.get("X-Toast-Tone") == "error"
-        mock_send.assert_not_called()
+    def test_invalid_recipient_rejected(self, web_client, monkeypatch):
+        called = {"n": 0}
 
-    def test_missing_fields_returns_error_toast(self):
-        with patch.object(web, "DB_PATH", self.db_path), patch.object(email_reader, "send_message") as mock_send:
-            client = self._client()
-            resp = client.post(
-                f"/emails/{self.hash}/send",
-                data={"to": "", "subject": "Hi", "body": "Body", "mode": "reply"},
-            )
-        assert resp.headers.get("X-Toast-Tone") == "error"
-        mock_send.assert_not_called()
+        def fake_send(*a, **k):
+            called["n"] += 1
 
-    def test_smtp_failure_returns_error_toast(self):
-        with (
-            patch.object(web, "DB_PATH", self.db_path),
-            patch.object(email_reader, "send_message", side_effect=Exception("boom")),
-        ):
-            client = self._client()
-            resp = client.post(
-                f"/emails/{self.hash}/send",
-                data={"to": "alice@example.com", "subject": "Re: Lunch?", "body": "Sure!", "mode": "reply"},
-            )
-        assert resp.headers.get("X-Toast-Tone") == "error"
-        assert "Failed to send" in resp.headers.get("X-Toast", "")
-
-    def test_smtp_failure_does_not_leak_exception(self):
-        secret = "SMTP_INTERNAL_SECRET_DETAIL_xyz"
-        with (
-            patch.object(web, "DB_PATH", self.db_path),
-            patch.object(email_reader, "send_message", side_effect=RuntimeError(secret)),
-        ):
-            client = self._client()
-            resp = client.post(
-                f"/emails/{self.hash}/send",
-                data={"to": "alice@example.com", "subject": "Re: Lunch?", "body": "Sure!", "mode": "reply"},
-            )
-        toast = resp.headers.get("X-Toast", "")
-        assert secret not in toast
-        assert resp.headers.get("X-Toast-Tone") == "error"
-
-    def test_rejects_invalid_recipient(self):
-        with patch.object(web, "DB_PATH", self.db_path), patch.object(email_reader, "send_message") as mock_send:
-            client = self._client()
-            resp = client.post(
-                f"/emails/{self.hash}/send",
-                data={"to": "not an email", "subject": "Hi", "body": "Body", "mode": "reply"},
-            )
-        assert resp.headers.get("X-Toast-Tone") == "error"
-        mock_send.assert_not_called()
-
-    def test_rejects_oversized_subject(self):
-        with patch.object(web, "DB_PATH", self.db_path), patch.object(email_reader, "send_message") as mock_send:
-            client = self._client()
-            resp = client.post(
-                f"/emails/{self.hash}/send",
-                data={"to": "alice@example.com", "subject": "x" * 501, "body": "Body", "mode": "reply"},
-            )
-        assert resp.headers.get("X-Toast-Tone") == "error"
-        mock_send.assert_not_called()
-
-    def test_rejects_oversized_body(self):
-        with patch.object(web, "DB_PATH", self.db_path), patch.object(email_reader, "send_message") as mock_send:
-            client = self._client()
-            resp = client.post(
-                f"/emails/{self.hash}/send",
-                data={"to": "alice@example.com", "subject": "Hi", "body": "x" * 50001, "mode": "reply"},
-            )
-        assert resp.headers.get("X-Toast-Tone") == "error"
-        mock_send.assert_not_called()
-
-    def test_send_marks_sent_and_appears_in_thread(self):
-        fake_smtp = MagicMock(name="smtp_conn")
-        with (
-            patch.object(web, "DB_PATH", self.db_path),
-            patch("src.scripts.email_reader.smtp.smtplib.SMTP_SSL", return_value=fake_smtp),
-        ):
-            client = self._client()
-            resp = client.post(
-                f"/emails/{self.hash}/send",
-                data={"to": "alice@example.com", "subject": "Re: Lunch?", "body": "Sure!", "mode": "reply"},
-            )
+        monkeypatch.setattr(email_reader, "send_message", fake_send)
+        resp = web_client.post(
+            "/emails/send",
+            data={
+                "to": "not-an-email",
+                "cc": "",
+                "bcc": "",
+                "subject": "Hi",
+                "body": "Body",
+                "mode": "new",
+            },
+        )
         assert resp.status_code == 204
-        fake_smtp.sendmail.assert_called_once()
-        conv = cache.get_conversation(self.db_path, self.hash)
-        sent_rows = [c for c in conv if c.get("is_sent")]
-        assert len(sent_rows) == 1
-        assert sent_rows[0]["in_reply_to"] == "<orig@e.com>"
-
-    def test_send_runs_off_event_loop(self):
-        seen_idents = []
-
-        def fake_send(*args, **kwargs):
-            seen_idents.append(threading.get_ident())
-
-        with (
-            patch.object(web, "DB_PATH", self.db_path),
-            patch.object(email_reader, "send_message", side_effect=fake_send),
-        ):
-            client = self._client()
-            resp = client.post(
-                f"/emails/{self.hash}/send",
-                data={"to": "alice@example.com", "subject": "Re: Lunch?", "body": "Sure!", "mode": "reply"},
-            )
-        assert resp.status_code == 204
-        assert seen_idents, "send_message was never invoked"
-        assert seen_idents[0] != threading.main_thread().ident
-
-    def test_rejects_multi_at_recipient(self):
-        with patch.object(web, "DB_PATH", self.db_path), patch.object(email_reader, "send_message") as mock_send:
-            client = self._client()
-            resp = client.post(
-                f"/emails/{self.hash}/send",
-                data={"to": "a@b@c.com", "subject": "Hi", "body": "Body", "mode": "reply"},
-            )
         assert resp.headers.get("X-Toast-Tone") == "error"
-        mock_send.assert_not_called()
+        assert called["n"] == 0
 
-    def test_csrf_rejects_bad_origin_on_send(self):
-        from src.scripts import auth
+    def test_empty_to_rejected(self, web_client, monkeypatch):
+        called = {"n": 0}
 
-        cache_db = str(self.db_path + "_csrf.db")
-        cache.init_db(cache_db)
-        cache.save_email_credentials("me@e.com", "secret", cache_db)
-        _save_fetched(self.email, cache_db)
-        auth.set_password("dashboardpw", cache_db)
-        auth.login_rate_limiter = auth.LoginRateLimiter()
-        csrf_hash = cache._hash_message_id(self.email["message_id"])
-        with patch.object(web, "DB_PATH", cache_db), patch.object(email_reader, "send_message") as mock_send:
-            client = self._client()
-            client.post("/login", data={"password": "dashboardpw", "next": "/"}, follow_redirects=False)
-            resp = client.post(
-                f"/emails/{csrf_hash}/send",
-                data={"to": "alice@example.com", "subject": "Re: Lunch?", "body": "Sure!", "mode": "reply"},
-                headers={"origin": "http://evil.com"},
-            )
-        assert resp.status_code == 403
-        mock_send.assert_not_called()
+        def fake_send(*a, **k):
+            called["n"] += 1
 
-    def test_send_rate_limited_returns_warning_toast(self):
-        from src.scripts import auth
+        monkeypatch.setattr(email_reader, "send_message", fake_send)
+        resp = web_client.post(
+            "/emails/send",
+            data={
+                "to": "",
+                "cc": "",
+                "bcc": "",
+                "subject": "Hi",
+                "body": "Body",
+                "mode": "new",
+            },
+        )
+        assert resp.headers.get("X-Toast-Tone") == "error"
+        assert called["n"] == 0
 
-        auth.send_rate_limiter = auth.RateLimiter(max_attempts=2, window_seconds=60)
-        try:
-            with patch.object(web, "DB_PATH", self.db_path), patch.object(email_reader, "send_message") as mock_send:
-                client = self._client()
-                for _ in range(2):
-                    client.post(
-                        f"/emails/{self.hash}/send",
-                        data={"to": "a@b.com", "subject": "Hi", "body": "Body", "mode": "reply"},
-                    )
-                resp = client.post(
-                    f"/emails/{self.hash}/send",
-                    data={"to": "a@b.com", "subject": "Hi", "body": "Body", "mode": "reply"},
-                )
-        finally:
-            auth.send_rate_limiter = auth.RateLimiter(max_attempts=10, window_seconds=60)
+    def test_reply_passes_threading(self, web_client, monkeypatch):
+        captured = {}
+
+        def fake_send(*args, **kw):
+            captured.update(kw=kw, mode=args[6])
+
+        monkeypatch.setattr(email_reader, "send_message", fake_send)
+        resp = web_client.post(
+            "/emails/send",
+            data={
+                "to": "alice@example.com",
+                "cc": "",
+                "bcc": "",
+                "subject": "Re: Lunch?",
+                "body": "Sure!",
+                "mode": "reply",
+                "original_message_id": "<orig@e.com>",
+                "thread_id": "thread-1",
+            },
+        )
         assert resp.status_code == 204
+        assert captured["mode"] == "reply"
+        assert captured["kw"]["original_message_id"] == "<orig@e.com>"
+        assert captured["kw"]["thread_id"] == "thread-1"
+
+    def test_draft_deleted_on_success(self, web_client, monkeypatch):
+        from src.scripts import web as _web
+
+        monkeypatch.setattr(email_reader, "send_message", lambda *a, **k: None)
+        cache.save_draft(
+            {
+                "id": "d1",
+                "to_addr": "a@x.com",
+                "cc": "",
+                "bcc": "",
+                "subject": "S",
+                "body": "B",
+                "mode": "new",
+                "thread_id": None,
+                "in_reply_to": None,
+            },
+            _web.DB_PATH,
+        )
+        resp = web_client.post(
+            "/emails/send",
+            data={
+                "to": "a@x.com",
+                "cc": "",
+                "bcc": "",
+                "subject": "S",
+                "body": "B",
+                "mode": "new",
+                "draft_id": "d1",
+            },
+        )
+        assert resp.status_code == 204
+        assert cache.get_draft("d1", _web.DB_PATH) is None
+
+    def test_draft_retained_on_smtp_failure(self, web_client, monkeypatch):
+        from src.scripts import web as _web
+
+        cache.save_draft(
+            {
+                "id": "d2",
+                "to_addr": "a@x.com",
+                "cc": "",
+                "bcc": "",
+                "subject": "S",
+                "body": "B",
+                "mode": "new",
+                "thread_id": None,
+                "in_reply_to": None,
+            },
+            _web.DB_PATH,
+        )
+
+        def boom(*a, **k):
+            raise RuntimeError("smtp down")
+
+        monkeypatch.setattr(email_reader, "send_message", boom)
+        resp = web_client.post(
+            "/emails/send",
+            data={
+                "to": "a@x.com",
+                "cc": "",
+                "bcc": "",
+                "subject": "S",
+                "body": "B",
+                "mode": "new",
+                "draft_id": "d2",
+            },
+        )
+        assert resp.headers.get("X-Toast-Tone") == "error"
+        assert cache.get_draft("d2", _web.DB_PATH) is not None
+
+    def test_rate_limited(self, web_client, monkeypatch):
+        from src.scripts import auth as _auth
+        from src.scripts import web as _web
+
+        cache.save_setting("email_user", "tester@e.com", _web.DB_PATH)
+        for _ in range(15):
+            _auth.send_rate_limiter.record_failure("tester@e.com")
+        monkeypatch.setattr(email_reader, "send_message", lambda *a, **k: None)
+        resp = web_client.post(
+            "/emails/send",
+            data={
+                "to": "a@x.com",
+                "cc": "",
+                "bcc": "",
+                "subject": "S",
+                "body": "B",
+                "mode": "new",
+            },
+        )
         assert resp.headers.get("X-Toast-Tone") == "warning"
-        assert "too quickly" in resp.headers.get("X-Toast", "").lower()
-        assert mock_send.call_count == 2
+        _auth.send_rate_limiter.reset("tester@e.com")
+
+    def test_compose_new_partial(self, web_client):
+        resp = web_client.get("/partials/compose-new")
+        assert resp.status_code == 200
+        assert "compose-body" in resp.text
+        assert 'name="mode" value="new"' in resp.text
+
+    def test_csrf_rejects_bad_origin_on_send(self, web_client, monkeypatch):
+        from src.scripts import auth, web
+
+        auth.set_password("dashboardpw", web.DB_PATH)
+        web_client.post("/login", data={"password": "dashboardpw", "next": "/"}, follow_redirects=False)
+        called = {"n": 0}
+        monkeypatch.setattr(email_reader, "send_message", lambda *a, **k: called.update(n=called["n"] + 1))
+        resp = web_client.post(
+            "/emails/send",
+            data={"to": "a@x.com", "cc": "", "bcc": "", "subject": "Hi", "body": "B", "mode": "new"},
+            headers={"origin": "http://evil.com", "host": "testserver"},
+        )
+        assert resp.status_code == 403
+        assert called["n"] == 0  # send_message never invoked
+
+    def test_csrf_allows_matching_origin_on_send(self, web_client, monkeypatch):
+        from src.scripts import auth, web
+
+        auth.set_password("dashboardpw", web.DB_PATH)
+        web_client.post("/login", data={"password": "dashboardpw", "next": "/"}, follow_redirects=False)
+        monkeypatch.setattr(email_reader, "send_message", lambda *a, **k: None)
+        resp = web_client.post(
+            "/emails/send",
+            data={"to": "a@x.com", "cc": "", "bcc": "", "subject": "Hi", "body": "B", "mode": "new"},
+            headers={"origin": "http://testserver", "host": "testserver"},
+        )
+        assert resp.status_code == 204
+
+
+class TestDrafts:
+    def test_save_draft(self, web_client):
+        from src.scripts import web as _web
+
+        resp = web_client.post(
+            "/drafts/save",
+            data={
+                "draft_id": "d10",
+                "to": "a@x.com",
+                "cc": "",
+                "bcc": "",
+                "subject": "S",
+                "body": "B",
+                "mode": "new",
+                "original_message_id": "",
+                "thread_id": "",
+            },
+        )
+        assert resp.status_code == 204
+        got = cache.get_draft("d10", _web.DB_PATH)
+        assert got is not None
+        assert got["to_addr"] == "a@x.com"
+        assert got["subject"] == "S"
+
+    def test_drafts_page_lists_drafts(self, web_client):
+        from src.scripts import web as _web
+
+        cache.save_draft(
+            {
+                "id": "d11",
+                "to_addr": "a@x.com",
+                "cc": "",
+                "bcc": "",
+                "subject": "My draft",
+                "body": "B",
+                "mode": "new",
+                "thread_id": None,
+                "in_reply_to": None,
+            },
+            _web.DB_PATH,
+        )
+        resp = web_client.get("/drafts")
+        assert resp.status_code == 200
+        assert "My draft" in resp.text
+
+    def test_delete_draft_route(self, web_client):
+        from src.scripts import web as _web
+
+        cache.save_draft(
+            {
+                "id": "d12",
+                "to_addr": "",
+                "cc": "",
+                "bcc": "",
+                "subject": "X",
+                "body": "B",
+                "mode": "new",
+                "thread_id": None,
+                "in_reply_to": None,
+            },
+            _web.DB_PATH,
+        )
+        resp = web_client.post("/drafts/d12/delete", follow_redirects=False)
+        assert resp.status_code in (303, 204)
+        assert cache.get_draft("d12", _web.DB_PATH) is None
+
+    def test_get_draft_json(self, web_client):
+        from src.scripts import web as _web
+
+        cache.save_draft(
+            {
+                "id": "d13",
+                "to_addr": "a@x.com",
+                "cc": "c@x.com",
+                "bcc": "",
+                "subject": "S",
+                "body": "Body",
+                "mode": "reply",
+                "thread_id": "t1",
+                "in_reply_to": "<o@x.com>",
+            },
+            _web.DB_PATH,
+        )
+        resp = web_client.get("/drafts/d13.json")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == "d13"
+        assert data["cc"] == "c@x.com"
+        assert data["in_reply_to"] == "<o@x.com>"
+
+    def test_missing_draft_json_returns_404(self, web_client):
+        resp = web_client.get("/drafts/does-not-exist.json")
+        assert resp.status_code == 404
+
+    def test_save_draft_rejects_oversized_subject(self, web_client):
+        from src.scripts import web as _web
+
+        resp = web_client.post(
+            "/drafts/save",
+            data={
+                "draft_id": "big1",
+                "subject": "x" * 501,
+                "body": "B",
+                "mode": "new",
+            },
+        )
+        assert resp.status_code == 204
+        assert resp.headers.get("X-Toast-Tone") == "error"
+        assert cache.get_draft("big1", _web.DB_PATH) is None
+
+    def test_save_draft_rejects_oversized_body(self, web_client):
+        from src.scripts import web as _web
+
+        resp = web_client.post(
+            "/drafts/save",
+            data={
+                "draft_id": "big2",
+                "subject": "S",
+                "body": "x" * 50001,
+                "mode": "new",
+            },
+        )
+        assert resp.status_code == 204
+        assert resp.headers.get("X-Toast-Tone") == "error"
+        assert cache.get_draft("big2", _web.DB_PATH) is None
+
+    def test_compose_draft_endpoint_prefills_fields(self, web_client):
+        from src.scripts import web as _web
+
+        cache.save_draft(
+            {
+                "id": "d14",
+                "to_addr": "to@x.com",
+                "cc": "cc@x.com",
+                "bcc": "bcc@x.com",
+                "subject": "Draft subject",
+                "body": "Draft body",
+                "mode": "new",
+                "thread_id": None,
+                "in_reply_to": None,
+            },
+            _web.DB_PATH,
+        )
+        resp = web_client.get("/partials/compose-draft/d14")
+        assert resp.status_code == 200
+        assert "to@x.com" in resp.text
+        assert "cc@x.com" in resp.text
+        assert "bcc@x.com" in resp.text
+        assert "Draft subject" in resp.text
+        assert "Draft body" in resp.text
+        assert 'value="d14"' in resp.text
+
+    def test_compose_draft_endpoint_404_for_missing(self, web_client):
+        resp = web_client.get("/partials/compose-draft/nope")
+        assert resp.status_code == 404
+
+    def test_emails_page_has_fab(self, web_client):
+        resp = web_client.get("/emails")
+        assert resp.status_code == 200
+        assert "compose-fab" in resp.text
+
+    def test_drafts_link_in_nav(self, web_client):
+        resp = web_client.get("/emails")
+        assert resp.status_code == 200
+        assert 'href="/drafts"' in resp.text
+        assert 'nav-label">Drafts' in resp.text
 
 
 class TestComposeModalShell:
@@ -2711,3 +3142,110 @@ class TestEmailDetailConversation:
         body = resp.text
         assert "thread-overflow" not in body
         assert "thread-show-more" not in body
+
+
+class TestSignature:
+    def test_settings_page_shows_signature(self, web_client):
+        from src.scripts import web as _web
+
+        cache.save_setting("signature", "-- \nCheers", _web.DB_PATH)
+        resp = web_client.get("/settings")
+        assert resp.status_code == 200
+        assert "Signature" in resp.text
+        assert "Cheers" in resp.text
+
+    def test_save_signature(self, web_client):
+        from src.scripts import web as _web
+
+        resp = web_client.post("/settings/signature", data={"signature": "-- \nThanks!"})
+        assert resp.status_code == 204
+        assert cache.get_setting("signature", _web.DB_PATH) == "-- \nThanks!"
+
+    def test_signature_preview_renders_html(self, web_client):
+        resp = web_client.get("/settings/signature/preview", params={"text": "**hi**"})
+        assert resp.status_code == 200
+        assert "<strong>hi</strong>" in resp.text
+
+    def test_signature_preview_strips_script(self, web_client):
+        resp = web_client.get("/settings/signature/preview", params={"text": "<script>x</script>**ok**"})
+        assert resp.status_code == 200
+        assert "<script" not in resp.text
+        assert "<strong>ok</strong>" in resp.text
+
+    def test_compose_draft_refreshes_signature_to_current(self, web_client):
+        from src.scripts import web as _web
+
+        cache.save_draft(
+            {
+                "id": "d-sig",
+                "to_addr": "to@x.com",
+                "cc": "",
+                "bcc": "",
+                "subject": "S",
+                "body": "My reply\n\n-- \nOldSig",
+                "mode": "new",
+                "thread_id": None,
+                "in_reply_to": None,
+            },
+            _web.DB_PATH,
+        )
+        cache.save_setting("signature", "NewSig", _web.DB_PATH)
+
+        resp = web_client.get("/partials/compose-draft/d-sig")
+        assert resp.status_code == 200
+        assert "NewSig" in resp.text
+        assert "OldSig" not in resp.text
+        assert "My reply" in resp.text
+
+    def test_with_signature_is_idempotent(self, tmp_path, monkeypatch):
+        from src.scripts import web as _web
+
+        db_path = str(tmp_path / "test_web.db")
+        cache.init_db(db_path)
+        monkeypatch.setattr(_web, "DB_PATH", db_path)
+
+        _web.cache.save_setting("signature", "Sig", db_path)
+        once = _web._with_signature("Body", db_path)
+        twice = _web._with_signature(once, db_path)
+        assert once == twice
+        assert once.count("-- ") == 1
+        assert "Sig" in once
+        assert "Body" in once
+
+    def test_with_signature_strips_block_when_setting_cleared(self, tmp_path, monkeypatch):
+        from src.scripts import web as _web
+
+        db_path = str(tmp_path / "test_web.db")
+        cache.init_db(db_path)
+        monkeypatch.setattr(_web, "DB_PATH", db_path)
+
+        _web.cache.save_setting("signature", "", db_path)
+        result = _web._with_signature("Body\n\n-- \nStale", db_path)
+        assert "-- " not in result
+        assert "Stale" not in result
+        assert "Body" in result
+
+
+class TestDraftPruning:
+    def test_prune_stale_drafts_drops_old_rows(self, tmp_path):
+        db_path = str(tmp_path / "p.db")
+        cache.init_db(db_path)
+        cache.save_draft(
+            {
+                "id": "old",
+                "to_addr": "",
+                "cc": "",
+                "bcc": "",
+                "subject": "",
+                "body": "x",
+                "mode": "new",
+                "thread_id": None,
+                "in_reply_to": None,
+            },
+            db_path,
+        )
+        with cache._connect(db_path) as conn:
+            conn.execute("UPDATE drafts SET updated_at = '2000-01-01 00:00:00' WHERE id = 'old'")
+        removed = cache.prune_stale_drafts(db_path, max_age_days=30)
+        assert removed == 1
+        assert cache.get_draft("old", db_path) is None

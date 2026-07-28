@@ -148,5 +148,6 @@ def web_client(web_db):
     from fastapi.testclient import TestClient
     from src.scripts import web
 
+    cache.save_email_credentials("me@e.com", "secret", web_db)
     with patch.object(web, "DB_PATH", web_db):
         yield TestClient(web.app)

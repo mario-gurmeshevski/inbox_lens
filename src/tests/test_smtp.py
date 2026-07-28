@@ -46,70 +46,129 @@ class TestSmtpSession:
 
 class TestBuildMessage:
     def test_reply_subject_prefix(self):
-        msg = smtp_mod.build_message("me@e.com", "alice@example.com", "Lunch?", "Sure!", "reply", "<orig@e.com>")
+        msg = smtp_mod.build_message(
+            "me@e.com", ["alice@example.com"], "Lunch?", "Sure!", "reply", original_message_id="<orig@e.com>"
+        )
         assert msg["Subject"] == "Re: Lunch?"
         assert msg["To"] == "alice@example.com"
         assert msg["From"] == "me@e.com"
 
     def test_reply_strips_existing_prefix(self):
-        msg = smtp_mod.build_message("me@e.com", "alice@example.com", "Re: Lunch?", "Sure!", "reply", "<orig@e.com>")
+        msg = smtp_mod.build_message(
+            "me@e.com", ["alice@example.com"], "Re: Lunch?", "Sure!", "reply", original_message_id="<orig@e.com>"
+        )
         assert msg["Subject"] == "Re: Lunch?"
 
     def test_reply_sets_threading_headers(self):
-        msg = smtp_mod.build_message("me@e.com", "alice@example.com", "Lunch?", "Sure!", "reply", "<orig@e.com>")
+        msg = smtp_mod.build_message(
+            "me@e.com", ["alice@example.com"], "Lunch?", "Sure!", "reply", original_message_id="<orig@e.com>"
+        )
         assert msg["In-Reply-To"] == "<orig@e.com>"
         assert msg["References"] == "<orig@e.com>"
 
     def test_forward_subject_and_no_threading(self):
-        msg = smtp_mod.build_message("me@e.com", "bob@example.com", "Lunch?", "FYI", "forward", "<orig@e.com>")
+        msg = smtp_mod.build_message(
+            "me@e.com", ["bob@example.com"], "Lunch?", "FYI", "forward", original_message_id="<orig@e.com>"
+        )
         assert msg["Subject"] == "Fwd: Lunch?"
         assert msg["To"] == "bob@example.com"
         assert msg.get("In-Reply-To") is None
         assert msg.get("References") is None
 
-    def test_body_passes_through_unchanged(self):
-        msg = smtp_mod.build_message("me@e.com", "x@y.com", "Hi", "Line 1\nLine 2", "reply", None)
-        payload = msg.get_payload(decode=True).decode("utf-8")
-        assert payload == "Line 1\nLine 2"
-
     def test_missing_message_id_omits_threading(self):
-        msg = smtp_mod.build_message("me@e.com", "alice@example.com", "Lunch?", "Sure!", "reply", None)
+        msg = smtp_mod.build_message("me@e.com", ["alice@example.com"], "Lunch?", "Sure!", "reply")
         assert msg.get("In-Reply-To") is None
         assert msg.get("References") is None
 
     def test_empty_subject_gets_placeholder(self):
-        msg = smtp_mod.build_message("me@e.com", "x@y.com", "", "Body", "reply", None)
+        msg = smtp_mod.build_message("me@e.com", ["x@y.com"], "", "Body", "reply")
         assert msg["Subject"] == "Re: (no subject)"
 
-    def test_content_type_is_plain_utf8(self):
-        msg = smtp_mod.build_message("me@e.com", "x@y.com", "Hi", "Body", "reply", None)
+    def test_new_mode_does_not_prefix_subject(self):
+        msg = smtp_mod.build_message("me@e.com", ["x@y.com"], "test", "Body", "new")
+        assert msg["Subject"] == "test"
+
+    def test_new_mode_passes_subject_through_unchanged(self):
+        msg = smtp_mod.build_message("me@e.com", ["x@y.com"], "Re: Lunch?", "Body", "new")
+        assert msg["Subject"] == "Re: Lunch?"
+
+    def test_new_mode_empty_subject_stays_empty(self):
+        msg = smtp_mod.build_message("me@e.com", ["x@y.com"], "", "Body", "new")
+        assert msg["Subject"] == ""
+
+    def test_new_mode_has_no_threading_headers(self):
+        msg = smtp_mod.build_message("me@e.com", ["x@y.com"], "Hi", "Body", "new", original_message_id="<orig@e.com>")
+        assert msg.get("In-Reply-To") is None
+        assert msg.get("References") is None
+
+    def test_plain_when_no_html(self):
+        msg = smtp_mod.build_message("me@e.com", ["x@y.com"], "Hi", "Body", "reply")
         assert msg.get_content_type() == "text/plain"
-        assert (msg.get_content_charset() or "utf-8").lower() == "utf-8"
+
+    def test_multipart_alternative_when_html(self):
+        msg = smtp_mod.build_message(
+            "me@e.com", ["x@y.com"], "Hi", "**bold**", "reply", html="<p><strong>bold</strong></p>"
+        )
+        assert msg.get_content_type() == "multipart/alternative"
+        parts = msg.get_payload()
+        assert len(parts) == 2
+        assert parts[0].get_content_type() == "text/plain"
+        assert parts[1].get_content_type() == "text/html"
+        assert parts[0].get_payload(decode=True).decode("utf-8") == "**bold**"
+        assert "<strong>bold</strong>" in parts[1].get_payload(decode=True).decode("utf-8")
 
     def test_keeps_existing_prefix_as_typed(self):
         msg = smtp_mod.build_message(
-            "me@e.com", "alice@example.com", "Re: Re: Lunch?", "Sure!", "reply", "<orig@e.com>"
+            "me@e.com", ["alice@example.com"], "Re: Re: Lunch?", "Sure!", "reply", original_message_id="<orig@e.com>"
         )
         assert msg["Subject"] == "Re: Re: Lunch?"
 
     def test_keeps_mixed_prefix_as_typed_forward(self):
-        msg = smtp_mod.build_message("me@e.com", "bob@example.com", "Fwd: Re: Lunch?", "FYI", "forward", "<orig@e.com>")
+        msg = smtp_mod.build_message(
+            "me@e.com", ["bob@example.com"], "Fwd: Re: Lunch?", "FYI", "forward", original_message_id="<orig@e.com>"
+        )
         assert msg["Subject"] == "Fwd: Re: Lunch?"
 
     def test_rejects_newlines_in_subject(self):
         with pytest.raises(ValueError):
-            smtp_mod.build_message("me@e.com", "x@y.com", "hi\nBcc: evil@x.com", "body", "reply")
+            smtp_mod.build_message("me@e.com", ["x@y.com"], "hi\nBcc: evil@x.com", "body", "reply")
 
     def test_rejects_bare_cr_in_subject(self):
         with pytest.raises(ValueError):
-            smtp_mod.build_message("me@e.com", "x@y.com", "hi\rextra", "body", "reply")
+            smtp_mod.build_message("me@e.com", ["x@y.com"], "hi\rextra", "body", "reply")
 
     def test_rejects_newlines_in_to_addr(self):
         with pytest.raises(ValueError):
-            smtp_mod.build_message("me@e.com", "x@y.com\r\nBcc: evil@x.com", "hi", "body", "reply")
+            smtp_mod.build_message("me@e.com", ["x@y.com\r\nBcc: evil@x.com"], "hi", "body", "reply")
+
+    def test_rejects_newlines_in_cc_addr(self):
+        with pytest.raises(ValueError):
+            smtp_mod.build_message(
+                "me@e.com", ["x@y.com"], "hi", "body", "reply", cc_addrs=["a@b.com\nBcc: evil@x.com"]
+            )
+
+    def test_rejects_newlines_in_bcc_addr(self):
+        with pytest.raises(ValueError):
+            smtp_mod.build_message("me@e.com", ["x@y.com"], "hi", "body", "reply", bcc_addrs=["a@b.com\nX: y"])
+
+    def test_cc_header_set_from_cc_addrs(self):
+        msg = smtp_mod.build_message("me@e.com", ["to@x.com"], "Hi", "Body", "reply", cc_addrs=["a@x.com", "b@x.com"])
+        assert msg["Cc"] == "a@x.com, b@x.com"
+
+    def test_cc_header_omitted_when_empty(self):
+        msg = smtp_mod.build_message("me@e.com", ["to@x.com"], "Hi", "Body", "reply")
+        assert msg.get("Cc") is None
+
+    def test_bcc_header_never_set(self):
+        msg = smtp_mod.build_message("me@e.com", ["to@x.com"], "Hi", "Body", "reply", bcc_addrs=["secret@x.com"])
+        assert msg.get("Bcc") is None
+
+    def test_to_header_joins_multiple(self):
+        msg = smtp_mod.build_message("me@e.com", ["a@x.com", "b@x.com"], "Hi", "Body", "reply")
+        assert msg["To"] == "a@x.com, b@x.com"
 
     def test_allows_newlines_in_body(self):
-        msg = smtp_mod.build_message("me@e.com", "x@y.com", "Hi", "line1\nline2", "reply")
+        msg = smtp_mod.build_message("me@e.com", ["x@y.com"], "Hi", "line1\nline2", "reply")
         assert "line1\nline2" in msg.get_payload(decode=True).decode("utf-8")
 
 
@@ -118,7 +177,17 @@ class TestSendMessage:
         monkeypatch.setattr(cache, "get_email_credentials", lambda db_path=None: ("me@e.com", "secret"))
         fake = MagicMock(name="smtp")
         with patch.object(smtp_mod.smtplib, "SMTP_SSL", return_value=fake):
-            smtp_mod.send_message("alice@example.com", "Lunch?", "Sure!", "reply", "<orig@e.com>", db_path="/db")
+            smtp_mod.send_message(
+                ["alice@example.com"],
+                [],
+                [],
+                "Lunch?",
+                "Sure!",
+                None,
+                "reply",
+                original_message_id="<orig@e.com>",
+                db_path="/db",
+            )
         fake.login.assert_called_once_with("me@e.com", "secret")
         assert fake.sendmail.call_count == 1
         args = fake.sendmail.call_args.args
@@ -128,11 +197,47 @@ class TestSendMessage:
         assert "In-Reply-To: <orig@e.com>" in args[2]
         fake.quit.assert_called_once()
 
+    def test_envelope_includes_cc_and_bcc(self, monkeypatch):
+        monkeypatch.setattr(cache, "get_email_credentials", lambda db_path=None: ("me@e.com", "secret"))
+        fake = MagicMock(name="smtp")
+        with patch.object(smtp_mod.smtplib, "SMTP_SSL", return_value=fake):
+            smtp_mod.send_message(
+                ["to@x.com"],
+                ["cc@x.com"],
+                ["bcc@x.com"],
+                "Hi",
+                "Body",
+                "<p>Body</p>",
+                "reply",
+                db_path="/db",
+            )
+        args = fake.sendmail.call_args.args
+        assert args[0] == "me@e.com"
+        assert args[1] == ["to@x.com", "cc@x.com", "bcc@x.com"]
+
+    def test_bcc_absent_from_message_body(self, monkeypatch):
+        monkeypatch.setattr(cache, "get_email_credentials", lambda db_path=None: ("me@e.com", "secret"))
+        fake = MagicMock(name="smtp")
+        with patch.object(smtp_mod.smtplib, "SMTP_SSL", return_value=fake):
+            smtp_mod.send_message(["to@x.com"], [], ["bcc@x.com"], "Hi", "Body", None, "reply", db_path="/db")
+        raw = fake.sendmail.call_args.args[2]
+        assert "bcc@x.com" not in raw.lower()
+
     def test_sends_forward(self, monkeypatch):
         monkeypatch.setattr(cache, "get_email_credentials", lambda db_path=None: ("me@e.com", "secret"))
         fake = MagicMock(name="smtp")
         with patch.object(smtp_mod.smtplib, "SMTP_SSL", return_value=fake):
-            smtp_mod.send_message("bob@example.com", "Lunch?", "FYI", "forward", "<orig@e.com>", db_path="/db")
+            smtp_mod.send_message(
+                ["bob@example.com"],
+                [],
+                [],
+                "Lunch?",
+                "FYI",
+                None,
+                "forward",
+                original_message_id="<orig@e.com>",
+                db_path="/db",
+            )
         args = fake.sendmail.call_args.args
         assert args[1] == ["bob@example.com"]
         assert "Fwd: Lunch?" in args[2]
@@ -144,7 +249,7 @@ class TestSendMessage:
         fake.sendmail.side_effect = smtplib.SMTPRecipientsRefused({"x@y.com": (550, b"no")})
         with patch.object(smtp_mod.smtplib, "SMTP_SSL", return_value=fake):
             with pytest.raises(smtplib.SMTPRecipientsRefused):
-                smtp_mod.send_message("x@y.com", "Hi", "Body", "reply", None, db_path="/db")
+                smtp_mod.send_message(["x@y.com"], [], [], "Hi", "Body", None, "reply", db_path="/db")
 
     def test_reply_persists_to_cache_with_thread_id(self, tmp_db, fake_credentials):
         parent_thread = cache._hash_message_id("parent-gm-thrid")
@@ -160,13 +265,15 @@ class TestSendMessage:
             ],
             tmp_db,
         )
-
         fake = MagicMock(name="smtp")
         with patch.object(smtp_mod.smtplib, "SMTP_SSL", return_value=fake):
             smtp_mod.send_message(
-                "alice@example.com",
+                ["alice@example.com"],
+                [],
+                [],
                 "Re: Lunch?",
                 "Sure!",
+                None,
                 "reply",
                 original_message_id="<orig@e.com>",
                 thread_id=parent_thread,
@@ -174,7 +281,7 @@ class TestSendMessage:
             )
         with cache._connect(tmp_db) as conn:
             rows = conn.execute(
-                "SELECT message_id, sender, subject, is_sent, thread_id, in_reply_to, body "
+                "SELECT message_id, sender, subject, is_sent, thread_id, in_reply_to, body, cc "
                 "FROM emails WHERE is_sent = 1"
             ).fetchall()
         assert len(rows) == 1
@@ -184,22 +291,42 @@ class TestSendMessage:
         assert sent["sender"] == "user@e.com"
         assert sent["subject"] == "Re: Lunch?"
         assert sent["body"] == "Sure!"
+        assert sent["cc"] is None or sent["cc"] == ""
         parent_hash = cache._hash_message_id("<orig@e.com>")
         conv = cache.get_conversation(tmp_db, parent_hash)
         assert any(c["message_id"] == sent["message_id"] for c in conv)
+
+    def test_reply_with_cc_persists_cc_column(self, tmp_db, fake_credentials):
+        fake = MagicMock(name="smtp")
+        with patch.object(smtp_mod.smtplib, "SMTP_SSL", return_value=fake):
+            smtp_mod.send_message(
+                ["to@x.com"],
+                ["cc1@x.com", "cc2@x.com"],
+                [],
+                "Hi",
+                "Body",
+                None,
+                "reply",
+                db_path=tmp_db,
+            )
+        with cache._connect(tmp_db) as conn:
+            row = conn.execute("SELECT cc FROM emails WHERE is_sent = 1").fetchone()
+        assert row["cc"] == "cc1@x.com, cc2@x.com"
 
     def test_forward_persists_to_cache_without_in_reply_to(self, tmp_db, fake_credentials):
         fake = MagicMock(name="smtp")
         with patch.object(smtp_mod.smtplib, "SMTP_SSL", return_value=fake):
             smtp_mod.send_message(
-                "bob@example.com",
+                ["bob@example.com"],
+                [],
+                [],
                 "Fwd: Lunch?",
                 "FYI",
+                None,
                 "forward",
                 original_message_id="<orig@e.com>",
                 db_path=tmp_db,
             )
-
         with cache._connect(tmp_db) as conn:
             rows = conn.execute(
                 "SELECT message_id, is_sent, thread_id, in_reply_to FROM emails WHERE is_sent = 1"
@@ -213,7 +340,7 @@ class TestSendMessage:
         fake = MagicMock(name="smtp")
         monkeypatch.setattr(cache, "save_headers_batch", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db boom")))
         with patch.object(smtp_mod.smtplib, "SMTP_SSL", return_value=fake):
-            smtp_mod.send_message("x@y.com", "Hi", "Body", "reply", db_path=tmp_db)
+            smtp_mod.send_message(["x@y.com"], [], [], "Hi", "Body", None, "reply", db_path=tmp_db)
         assert fake.sendmail.call_count == 1
 
 

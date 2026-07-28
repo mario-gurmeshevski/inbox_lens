@@ -13,6 +13,59 @@
   overflow-x: auto;
 }
 
+.settings-nav-sentinel {
+  height: 1px;
+}
+
+.nav-links > a:not(.nav-spacer) {
+  transition: opacity 0.2s ease;
+}
+
+.nav-tabs-clone {
+  display: none;
+  gap: 0.25rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+body.nav-tabs .nav-tabs-clone {
+  display: flex;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.nav-tabs-clone .settings-tab {
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+  padding: 0.4rem 0.85rem;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  background: transparent;
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  font-family: inherit;
+}
+
+.nav-tabs-clone .settings-tab:hover {
+  color: var(--text);
+}
+
+.nav-tabs-clone .settings-tab.is-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+body.nav-tabs .nav-links > a:not(.nav-spacer) {
+  display: none;
+}
+
+body.nav-tabs .settings-tabs {
+  visibility: hidden;
+}
+
 .settings-tab {
   appearance: none;
   background: transparent;

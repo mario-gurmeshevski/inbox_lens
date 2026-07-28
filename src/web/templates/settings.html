@@ -2,6 +2,8 @@
 {% block title %}Settings — Email Reader{% endblock %}
 {% block styles %}
   <link rel="stylesheet" href="/static/settings.css" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/compose.css" />
 {% endblock %}
 {% block content %}
   <h1>Settings</h1>
@@ -205,6 +207,32 @@
       <div class="settings-row">
         <div class="settings-info">
           <div class="settings-label">
+            <i data-lucide="inbox" class="icon"></i>
+            Show sent mails in inbox
+          </div>
+          <p class="settings-desc">
+            When off, your sent replies live only in the Sent view and don't
+            clutter the inbox. Turn on to see them inline with received mail.
+          </p>
+        </div>
+        <form method="post"
+              action="/settings/show-sent-in-inbox"
+              class="settings-toggle-form">
+          <input type="hidden"
+                 name="show_sent_in_inbox"
+                 value="{% if show_sent_in_inbox %}false{% else %}true{% endif %}" />
+          <button type="submit"
+                  class="toggle-switch {% if show_sent_in_inbox %}on{% endif %}"
+                  aria-label="Toggle showing sent mails in inbox">
+            <span class="toggle-knob"></span>
+          </button>
+        </form>
+      </div>
+    </div>
+    <div class="detail-card">
+      <div class="settings-row">
+        <div class="settings-info">
+          <div class="settings-label">
             <i data-lucide="list" class="icon"></i>
             Number of emails
           </div>
@@ -363,6 +391,43 @@
             </div>
           </div>
         </form>
+      </div>
+    </div>
+    <div class="detail-card">
+      <div class="settings-row">
+        <div class="settings-info">
+          <div class="settings-label">
+            <i data-lucide="signature" class="icon"></i>
+            Signature
+          </div>
+          <p class="settings-desc">
+            Appended to every email you compose. Markdown supported.
+            Saves automatically.
+          </p>
+        </div>
+      </div>
+      <div class="settings-network-info">
+        <form hx-post="/settings/signature" hx-trigger="change" class="setup-form">
+          <div class="form-group">
+            <label for="signature-body">Signature</label>
+            <div class="compose-toolbar"
+                 role="toolbar"
+                 aria-label="Formatting"
+                 data-sig-toolbar>
+              <button type="button" class="btn btn-sm" data-md="bold" title="Bold"><b>B</b></button>
+              <button type="button" class="btn btn-sm" data-md="italic" title="Italic"><i>I</i></button>
+              <button type="button" class="btn btn-sm" data-md="link" title="Link">Link</button>
+              <button type="button" class="btn btn-sm" data-md="list" title="List">• List</button>
+            </div>
+            <textarea id="signature-body" name="signature" rows="4">{{ signature }}</textarea>
+          </div>
+        </form>
+        <div class="signature-preview markdown-body"
+             hx-get="/settings/signature/preview"
+             hx-trigger="change from:#signature-body, keyup from:#signature-body changed delay:500ms"
+             hx-vals='js:{text: document.getElementById("signature-body").value}'
+             hx-target="this"
+             hx-swap="innerHTML">{{ signature | markdown }}</div>
       </div>
     </div>
   </section>
@@ -526,5 +591,8 @@
 {% block scripts %}
   <script src="/static/js/settings.js"></script>
   <script src="/static/js/settings-tabs.js"></script>
+  <script src="/static/js/settings-nav.js" defer></script>
   <script src="/static/js/update-panel.js"></script>
+  <script src="/static/js/compose.js"></script>
+  <script src="/static/js/signature.js"></script>
 {% endblock %}

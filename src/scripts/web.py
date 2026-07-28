@@ -73,6 +73,12 @@ async def lifespan(app: FastAPI):
     cache._ensure_secret_key()
     cache._ensure_session_key()
     cache.init_db(DB_PATH)
+    try:
+        removed = cache.prune_stale_drafts(DB_PATH, max_age_days=30)
+        if removed:
+            logger.info("Pruned %d stale draft(s)", removed)
+    except Exception:
+        logger.warning("Stale-draft pruning failed", exc_info=True)
     email_reader.load_keywords(DB_PATH)
 
     if cache.has_email_credentials(DB_PATH):
@@ -827,6 +833,8 @@ def _settings_context(
         "thread_limit": thread_limit,
         "thread_limit_options": _THREAD_LIMIT_VALUES,
         "theme": theme,
+        "signature": cache.get_setting("signature", db_path) or "",
+        "show_sent_in_inbox": bool(cache.get_setting("show_sent_in_inbox", db_path)),
     }
 
 
@@ -952,6 +960,30 @@ async def settings_theme(request: Request):
     theme = str(form.get("theme", "system")).strip()
     _save_validated_setting("theme", theme, _THEMES, "system")
     return _updated_response()
+
+
+@app.post("/settings/show-sent-in-inbox", response_class=HTMLResponse)
+async def settings_show_sent_in_inbox(request: Request):
+    form = await request.form()
+    value = "1" if str(form.get("show_sent_in_inbox", "")).strip() == "true" else ""
+    cache.save_setting("show_sent_in_inbox", value, DB_PATH)
+    return templates.TemplateResponse(request, "settings.html", _settings_context(DB_PATH))
+
+
+@app.post("/settings/signature")
+async def settings_signature(request: Request):
+    form = await request.form()
+    sig = form.get("signature") or ""
+    if len(sig) > 2000:
+        return _toast("Signature too long (max 2000 chars)", "error")
+    cache.save_setting("signature", sig, DB_PATH)
+    return _updated_response()
+
+
+@app.get("/settings/signature/preview", response_class=HTMLResponse)
+def settings_signature_preview(request: Request, text: str = Query("")):
+    rendered = _render_markdown(text)
+    return HTMLResponse(str(rendered))
 
 
 def _level_sort_key(level):
@@ -1207,7 +1239,9 @@ def _dashboard_context(db_path: str) -> dict:
     }
 
 
-def _email_list_context(db_path, status, priority, search, page, page_size=None) -> dict:
+def _email_list_context(
+    db_path, status, priority, search, page, page_size=None, sent_only=False, hide_sent=False
+) -> dict:
     if page_size is None:
         page_size = _get_page_size(db_path)
     emails, total_rows, total_pages = cache.search_emails(
@@ -1217,6 +1251,8 @@ def _email_list_context(db_path, status, priority, search, page, page_size=None)
         search=search or None,
         page=page,
         page_size=page_size,
+        sent_only=sent_only,
+        hide_sent=hide_sent,
     )
     return {
         "emails": emails,
@@ -1226,6 +1262,7 @@ def _email_list_context(db_path, status, priority, search, page, page_size=None)
         "page": page,
         "total_pages": total_pages,
         "total_rows": total_rows,
+        "sent_only": sent_only,
     }
 
 
@@ -1244,8 +1281,24 @@ def email_list(
     search: str = Query("", alias="search"),
     page: int = Query(1, alias="page"),
 ):
+    hide_sent = not bool(cache.get_setting("show_sent_in_inbox", DB_PATH))
     return templates.TemplateResponse(
-        request, "emails.html", _email_list_context(DB_PATH, status, priority, search, page)
+        request, "emails.html", _email_list_context(DB_PATH, status, priority, search, page, hide_sent=hide_sent)
+    )
+
+
+@app.get("/emails/sent", response_class=HTMLResponse)
+def email_list_sent(
+    request: Request,
+    status: str = Query("", alias="status"),
+    priority: str = Query("", alias="priority"),
+    search: str = Query("", alias="search"),
+    page: int = Query(1, alias="page"),
+):
+    return templates.TemplateResponse(
+        request,
+        "emails.html",
+        _email_list_context(DB_PATH, status, priority, search, page, sent_only=True),
     )
 
 
@@ -1276,12 +1329,20 @@ async def delete_email(request: Request, email_hash: str):
     email_data = cache.get_email_by_hash(DB_PATH, email_hash)
 
     if not email_data:
-        return RedirectResponse("/emails", status_code=303)
+        return _toast("Email not found", "error")
 
     message_id = email_data.get("message_id", "")
-    if message_id:
-        email_reader.delete_email(message_id, db_path=DB_PATH)
-    return RedirectResponse("/emails", status_code=303)
+    if not message_id:
+        return _toast("Email missing message ID", "error")
+
+    result = email_reader.delete_email(message_id, db_path=DB_PATH)
+
+    if result.get("deleted"):
+        _notify_refresh()
+        return _toast("Email moved to trash")
+    else:
+        error = result.get("error", "Failed to delete email")
+        return _toast(error, "error")
 
 
 def _notify_refresh():
@@ -1380,42 +1441,73 @@ def list_folders(request: Request):
     return JSONResponse({"folders": email_reader.list_folders(db_path=DB_PATH)})
 
 
-@app.post("/emails/{email_hash}/send")
-async def send_email(request: Request, email_hash: str):
+def _split_recipients(raw: str) -> list[str]:
+    return [addr.strip() for addr in (raw or "").split(",") if addr.strip()]
+
+
+def _validate_recipients(raw: str):
+    addrs = _split_recipients(raw)
+    cleaned = []
+    for addr in addrs:
+        try:
+            candidate = parseaddr(addr)[1] or addr
+            cleaned.append(validate_email(candidate, check_deliverability=False).normalized)
+        except EmailNotValidError:
+            return None, f"Invalid email address: {addr}"
+    return cleaned, None
+
+
+@app.post("/emails/send")
+async def send_email(request: Request):
     form = await request.form()
-    to_addr = (form.get("to") or "").strip()
+    to_raw = (form.get("to") or "").strip()
+    cc_raw = (form.get("cc") or "").strip()
+    bcc_raw = (form.get("bcc") or "").strip()
     subject = (form.get("subject") or "").strip()
     body = (form.get("body") or "").strip()
-    mode = "forward" if (form.get("mode") or "").strip() == "forward" else "reply"
+    mode = (form.get("mode") or "new").strip()
+    if mode not in ("new", "reply", "forward"):
+        mode = "new"
+    original_message_id = (form.get("original_message_id") or "").strip() or None
+    thread_id = (form.get("thread_id") or "").strip() or None
+    draft_id = (form.get("draft_id") or "").strip() or None
+
     limiter_key = cache.get_setting("email_user", DB_PATH) or auth._client_ip(request)
     if auth.send_rate_limiter.is_limited(limiter_key):
         return _toast("You're sending too quickly. Please wait a minute and try again.", "warning")
 
-    if not to_addr or not subject or not body:
-        return _toast("To, subject, and body are required", "error")
-    try:
-        candidate = parseaddr(to_addr)[1] or to_addr
-        clean_recipient = validate_email(candidate, check_deliverability=False).normalized
-    except EmailNotValidError:
-        return _toast("Enter a valid email address", "error")
+    to_list, err = _validate_recipients(to_raw)
+    if err:
+        return _toast(err, "error")
+    if not to_list:
+        return _toast("Enter at least one recipient", "error")
+    cc_list, err = _validate_recipients(cc_raw)
+    if err:
+        return _toast(err, "error")
+    bcc_list, err = _validate_recipients(bcc_raw)
+    if err:
+        return _toast(err, "error")
+
+    if not subject:
+        return _toast("Subject is required", "error")
+    if not body:
+        return _toast("Body is required", "error")
     if len(subject) > 500:
         return _toast("Subject too long (max 500 chars)", "error")
     if len(body) > 50000:
         return _toast("Body too long (max 50,000 chars)", "error")
 
-    email_data = cache.get_email_by_hash(DB_PATH, email_hash)
-    if not email_data:
-        return _toast("Email not found", "error")
-
-    original_message_id = (email_data.get("message_id") or "").strip() or None
-    thread_id = email_data.get("thread_id") or None
+    body_html = str(_render_markdown(body))
     auth.send_rate_limiter.record_failure(limiter_key)
     try:
         await asyncio.to_thread(
             email_reader.send_message,
-            clean_recipient,
+            to_list,
+            cc_list,
+            bcc_list,
             subject,
             body,
+            body_html,
             mode,
             original_message_id=original_message_id,
             thread_id=thread_id,
@@ -1425,7 +1517,12 @@ async def send_email(request: Request, email_hash: str):
         logger.warning("SMTP send failed", exc_info=True)
         return _toast("Failed to send - check your SMTP credentials and recipient", "error")
 
-    return _toast("Reply sent" if mode == "reply" else "Email forwarded")
+    if draft_id:
+        try:
+            cache.delete_draft(draft_id, DB_PATH)
+        except Exception:
+            logger.warning("Failed to delete draft %s after send", draft_id, exc_info=True)
+    return _toast("Email sent")
 
 
 @app.post("/emails/bulk")
@@ -1443,25 +1540,37 @@ async def bulk_email_action(request: Request):
     message_ids = [mid for _, mid in pairs]
     count = len(message_ids)
 
-    def _bulk_remote_delete(_ids):
-        cache.delete_emails_by_hashes(DB_PATH, hashes)
-        _defer(email_reader.bulk_delete_remote, _ids)
-        _notify_refresh()
-        return _toast(f"Removed {count}")
+    async def _bulk_remote_delete(_ids):
+        deleted_ids = await asyncio.to_thread(email_reader.bulk_delete_remote, _ids, DB_PATH)
+        if deleted_ids:
+            deleted_hashes = [h for h, mid in pairs if mid in deleted_ids]
+            cache.delete_emails_by_hashes(DB_PATH, deleted_hashes)
+            _notify_refresh()
+            return _toast(f"Removed {len(deleted_hashes)}")
+        else:
+            return _toast("Failed to delete emails from server", "error")
 
-    def _bulk_remote_archive(_ids):
-        cache.delete_emails_by_hashes(DB_PATH, hashes)
-        _defer(email_reader.bulk_archive_remote, _ids, DB_PATH)
-        _notify_refresh()
-        return _toast(f"Removed {count} from inbox")
+    async def _bulk_remote_archive(_ids):
+        archived_ids = await asyncio.to_thread(email_reader.bulk_archive_remote, _ids, DB_PATH)
+        if archived_ids:
+            archived_hashes = [h for h, mid in pairs if mid in archived_ids]
+            cache.delete_emails_by_hashes(DB_PATH, archived_hashes)
+            _notify_refresh()
+            return _toast(f"Removed {len(archived_hashes)} from inbox")
+        else:
+            return _toast("Failed to archive emails from server", "error")
 
-    def _bulk_remote_move(_ids):
+    async def _bulk_remote_move(_ids):
         if not email_reader._validate_folder_name(folder):
             return _toast("No destination folder provided", "warning")
-        cache.delete_emails_by_hashes(DB_PATH, hashes)
-        _defer(email_reader.bulk_move_remote, _ids, folder)
-        _notify_refresh()
-        return _toast(f"Moved {count} to {folder}")
+        moved_ids = await asyncio.to_thread(email_reader.bulk_move_remote, _ids, folder, DB_PATH)
+        if moved_ids:
+            moved_hashes = [h for h, mid in pairs if mid in moved_ids]
+            cache.delete_emails_by_hashes(DB_PATH, moved_hashes)
+            _notify_refresh()
+            return _toast(f"Moved {len(moved_hashes)} to {folder}")
+        else:
+            return _toast(f"Failed to move emails to {folder}", "error")
 
     flag_actions = {
         "read": ("read", "\\Seen", True),
@@ -1484,7 +1593,7 @@ async def bulk_email_action(request: Request):
     }
     handler = remote_actions.get(action)
     if handler is not None:
-        return handler(message_ids)
+        return await handler(message_ids)
 
     return _toast("Unknown action", "error")
 
@@ -1521,9 +1630,13 @@ def partial_emails(
     priority: str = Query("", alias="priority"),
     search: str = Query("", alias="search"),
     page: int = Query(1, alias="page"),
+    sent: bool = Query(False, alias="sent"),
 ):
+    hide_sent = False if sent else not bool(cache.get_setting("show_sent_in_inbox", DB_PATH))
     return templates.TemplateResponse(
-        request, "partials/email_table.html", _email_list_context(DB_PATH, status, priority, search, page)
+        request,
+        "partials/email_table.html",
+        _email_list_context(DB_PATH, status, priority, search, page, sent_only=sent, hide_sent=hide_sent),
     )
 
 
@@ -1547,6 +1660,29 @@ def partial_email_detail(request: Request, email_hash: str):
             "thread_limit": thread_limit,
         },
     )
+
+
+_SIGNATURE_SEPARATOR = "-- "
+
+
+def _strip_signature_block(body: str) -> str:
+    if not body:
+        return ""
+    for i, line in enumerate(body.splitlines()):
+        if line == _SIGNATURE_SEPARATOR:
+            return "\n".join(body.splitlines()[:i]).rstrip()
+    return body
+
+
+def _with_signature(body: str, db_path: str) -> str:
+    sig = cache.get_setting("signature", db_path)
+    if not sig or not sig.strip():
+        return _strip_signature_block(body)
+    body = _strip_signature_block(body)
+    sig = sig.strip()
+    if body:
+        return f"{body}\n\n{_SIGNATURE_SEPARATOR}\n{sig}"
+    return f"{_SIGNATURE_SEPARATOR}\n{sig}"
 
 
 @app.get("/partials/compose/{email_hash}", response_class=HTMLResponse)
@@ -1577,9 +1713,109 @@ def partial_compose(request: Request, email_hash: str, mode: str = Query("reply"
             "mode": mode,
             "to_addr": to_addr,
             "subject_prefix": prefix,
-            "quoted_body": quoted_body,
+            "quoted_body": _with_signature(quoted_body, DB_PATH),
+            "original_message_id": (email_data.get("message_id") or "").strip() or "",
+            "thread_id": email_data.get("thread_id") or "",
         },
     )
+
+
+@app.get("/partials/compose-new", response_class=HTMLResponse)
+def partial_compose_new(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "partials/compose.html",
+        {
+            "email": {"subject": ""},
+            "email_hash": "",
+            "mode": "new",
+            "to_addr": "",
+            "subject_prefix": "",
+            "quoted_body": _with_signature("", DB_PATH),
+            "original_message_id": "",
+            "thread_id": "",
+        },
+    )
+
+
+@app.get("/partials/compose-draft/{draft_id}", response_class=HTMLResponse)
+def partial_compose_draft(request: Request, draft_id: str):
+    draft = cache.get_draft(draft_id, DB_PATH)
+    if not draft:
+        return HTMLResponse("<p>Draft not found</p>", status_code=404)
+    mode = draft.get("mode") or "new"
+    if mode not in ("new", "reply", "forward"):
+        mode = "new"
+    return templates.TemplateResponse(
+        request,
+        "partials/compose.html",
+        {
+            "email": {"subject": draft.get("subject") or ""},
+            "email_hash": "",
+            "mode": mode,
+            "to_addr": draft.get("to_addr") or "",
+            "subject_prefix": "",
+            "quoted_body": _with_signature(draft.get("body") or "", DB_PATH),
+            "original_message_id": draft.get("in_reply_to") or "",
+            "thread_id": draft.get("thread_id") or "",
+            "draft_subject": draft.get("subject") or "",
+            "draft_cc": draft.get("cc") or "",
+            "draft_bcc": draft.get("bcc") or "",
+            "draft_id": draft.get("id") or "",
+        },
+    )
+
+
+@app.post("/drafts/save")
+async def drafts_save(request: Request):
+    form = await request.form()
+    draft_id = (form.get("draft_id") or "").strip()
+    if not draft_id:
+        return _toast("Missing draft id", "error")
+    mode = (form.get("mode") or "new").strip() or "new"
+    if mode not in ("new", "reply", "forward"):
+        mode = "new"
+    draft = {
+        "id": draft_id,
+        "to_addr": (form.get("to") or "").strip(),
+        "cc": (form.get("cc") or "").strip(),
+        "bcc": (form.get("bcc") or "").strip(),
+        "subject": (form.get("subject") or "").strip(),
+        "body": form.get("body") or "",
+        "mode": mode,
+        "thread_id": (form.get("thread_id") or "").strip() or None,
+        "in_reply_to": (form.get("original_message_id") or "").strip() or None,
+    }
+    if len(draft["subject"]) > 500:
+        return _toast("Subject too long (max 500 chars)", "error")
+    if len(draft["body"]) > 50000:
+        return _toast("Body too long (max 50,000 chars)", "error")
+    try:
+        cache.save_draft(draft, DB_PATH)
+    except Exception:
+        logger.warning("Failed to save draft", exc_info=True)
+        return _toast("Couldn't save draft", "error")
+    return Response(status_code=204, headers={"X-Draft-Saved": "1"})
+
+
+@app.get("/drafts/{draft_id}.json")
+def drafts_get_json(draft_id: str):
+    draft = cache.get_draft(draft_id, DB_PATH)
+    if not draft:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse(draft)
+
+
+@app.post("/drafts/{draft_id}/delete")
+def drafts_delete(draft_id: str):
+    cache.delete_draft(draft_id, DB_PATH)
+    return RedirectResponse(url="/drafts", status_code=303)
+
+
+@app.get("/drafts", response_class=HTMLResponse)
+def drafts_page(request: Request):
+    drafts = cache.list_drafts(DB_PATH)
+    return templates.TemplateResponse(request, "drafts.html", {"drafts": drafts})
 
 
 @app.get("/partials/tailscale-status", response_class=HTMLResponse)

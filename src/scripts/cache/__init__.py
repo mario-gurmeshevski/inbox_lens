@@ -28,9 +28,11 @@ __all__ = [
     "update_flags_batch",
     "mark_sent",
     "reconcile_inbox",
+    "reconcile_sent",
     "get_headers_only_message_ids",
     "update_thread_id",
     "refresh_thread_ids",
+    "refresh_folders",
     "check_hashes_exist",
     "get_total_count",
     "get_email_by_hash",
@@ -46,6 +48,11 @@ __all__ = [
     "save_setting",
     "get_setting",
     "delete_setting",
+    "save_draft",
+    "get_draft",
+    "list_drafts",
+    "delete_draft",
+    "prune_stale_drafts",
     "save_email_credentials",
     "get_email_credentials",
     "has_email_credentials",
@@ -87,9 +94,11 @@ from src.scripts.cache.db import (
     update_flags_batch,
     mark_sent,
     reconcile_inbox,
+    reconcile_sent,
     get_headers_only_message_ids,
     update_thread_id,
     refresh_thread_ids,
+    refresh_folders,
 )
 from src.scripts.cache.queries import (
     check_hashes_exist,
@@ -120,4 +129,11 @@ from src.scripts.cache.crypto import (
     _encrypt,
     _decrypt,
     _ensure_session_key,
+)
+from src.scripts.cache.drafts import (
+    save_draft,
+    get_draft,
+    list_drafts,
+    delete_draft,
+    prune_stale_drafts,
 )

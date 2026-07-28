@@ -1,3 +1,9 @@
+.filter-bar fieldset {
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+
 .toolbar {
   display: flex;
   gap: 0.65rem;

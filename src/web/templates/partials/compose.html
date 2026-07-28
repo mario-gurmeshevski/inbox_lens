@@ -2,28 +2,85 @@
       class="compose-form"
       data-compose-hash="{{ email_hash }}"
       data-compose-mode="{{ mode }}">
-  <h2 id="compose-modal-title" class="section-title">{{ 'Reply' if mode == 'reply' else 'Forward' }}</h2>
+  <h2 id="compose-modal-title" class="section-title">
+    {% if mode == 'reply' %}
+      Reply
+    {% elif mode == 'forward' %}
+      Forward
+    {% else %}
+      New Email
+    {% endif %}
+  </h2>
   <div class="form-group">
     <label for="compose-to">To</label>
     <input id="compose-to"
            name="to"
-           type="email"
+           type="text"
            value="{{ to_addr }}"
            required
            autocomplete="off" />
   </div>
+  <div class="compose-cc-toggle">
+    <button type="button"
+            class="cc-toggle-btn"
+            id="compose-cc-toggle"
+            aria-expanded="false"
+            aria-controls="compose-cc-row">
+      <span class="cc-toggle-icon" aria-hidden="true"></span>
+      Cc / Bcc
+    </button>
+  </div>
+  <div class="compose-cc-row" id="compose-cc-row" hidden>
+    <div class="form-group compose-cc-field">
+      <label for="compose-cc">Cc</label>
+      <input id="compose-cc"
+             name="cc"
+             type="text"
+             value="{{ draft_cc | default('', true) }}"
+             autocomplete="off" />
+    </div>
+    <div class="form-group compose-cc-field">
+      <label for="compose-bcc">Bcc</label>
+      <input id="compose-bcc"
+             name="bcc"
+             type="text"
+             value="{{ draft_bcc | default('', true) }}"
+             autocomplete="off" />
+    </div>
+  </div>
   <div class="form-group">
     <label for="compose-subject">Subject</label>
+    {% set subject_value = draft_subject | default('') %}
     <input id="compose-subject"
            name="subject"
            type="text"
-           value="{{ subject_prefix }}: {{ email.subject or '(no subject)' }}"
+           value="{% if subject_value %}{{ subject_value }}{% elif mode == 'new' %}{% else %}{{ subject_prefix }}: {{ email.subject or '(no subject)' }}{% endif %}"
            required />
   </div>
   <div class="form-group">
     <label for="compose-body">Body</label>
+    <div class="compose-toolbar" role="toolbar" aria-label="Formatting">
+      <button type="button" class="btn btn-sm" data-md="bold" title="Bold (**)"><b>B</b></button>
+      <button type="button" class="btn btn-sm" data-md="italic" title="Italic (*)"><i>I</i></button>
+      <button type="button" class="btn btn-sm" data-md="link" title="Link">Link</button>
+      <button type="button" class="btn btn-sm" data-md="list" title="Bulleted list">• List</button>
+      <button type="button" class="btn btn-sm" data-md="quote" title="Quote">&ldquo; Quote</button>
+      <button type="button"
+              class="btn btn-sm"
+              data-md="code"
+              title="Inline code (`)">{ } Code</button>
+    </div>
     <textarea id="compose-body" name="body" rows="10" required>{{ quoted_body }}</textarea>
   </div>
+  <input type="hidden" name="mode" value="{{ mode }}" />
+  <input type="hidden"
+         name="original_message_id"
+         value="{{ original_message_id }}" />
+  <input type="hidden" name="thread_id" value="{{ thread_id }}" />
+  <input type="hidden"
+         name="draft_id"
+         value="{{ draft_id | default('', true) }}"
+         id="compose-draft-id" />
   <div class="compose-actions">
     <button type="button"
             class="btn btn-lg btn-danger"

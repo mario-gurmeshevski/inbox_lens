@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Drafts{% endblock %}
+{% block styles %}
+  <link rel="stylesheet" href="/static/emails.css" />
+  <link rel="stylesheet" href="/static/compose.css" />
+{% endblock %}
+{% block scripts %}
+  <script src="/static/js/compose.js" defer></script>
+{% endblock %}
+{% block content %}
+  <h1>Drafts <span class="total-count">({{ drafts|length }})</span></h1>
+  {% if not drafts %}
+    <p class="empty-state">No drafts. Start a new email from the emails page.</p>
+  {% else %}
+    <ul class="draft-list">
+      {% for d in drafts %}
+        <li class="draft-item" id="draft-{{ d.id }}">
+          <div class="draft-meta">
+            <span class="draft-subject">{{ d.subject or "(no subject)" }}</span>
+            <span class="draft-to">To: {{ d.to_addr or "—" }}</span>
+            <span class="draft-date">Edited {{ d.updated_at }}</span>
+          </div>
+          <div class="draft-actions">
+            <button type="button"
+                    class="btn btn-sm"
+                    data-draft-resume="{{ d.id }}"
+                    aria-label="Resume draft">Resume</button>
+            <form method="post"
+                  action="/drafts/{{ d.id }}/delete"
+                  style="display:inline">
+              <button type="submit" class="btn btn-sm btn-danger" aria-label="Delete draft">Delete</button>
+            </form>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+{% endblock %}

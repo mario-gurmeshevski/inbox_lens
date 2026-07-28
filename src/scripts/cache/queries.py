@@ -29,7 +29,7 @@ conversations AS (
 """
 
 
-def _conversation_where(status, priority, search):
+def _conversation_where(status, priority, search, sent_only=False, hide_sent=False):
     conditions = []
     params: list = []
     if status == STATUS_FETCHED:
@@ -46,6 +46,10 @@ def _conversation_where(status, priority, search):
     if search:
         conditions.append("(subject LIKE ? OR sender LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%"])
+    if sent_only:
+        conditions.append("is_sent = 1")
+    if hide_sent:
+        conditions.append("is_sent = 0")
     return conditions, params
 
 
@@ -131,22 +135,35 @@ def search_emails(
     search: str | None = None,
     page: int = 1,
     page_size: int = 25,
+    sent_only: bool = False,
+    hide_sent: bool = False,
 ) -> tuple[list[dict], int, int]:
-    extra_conds, params = _conversation_where(status, priority, search)
+    extra_conds, params = _conversation_where(status, priority, search, sent_only=sent_only, hide_sent=hide_sent)
     extra = (" AND " + " AND ".join(extra_conds)) if extra_conds else ""
+    offset = (page - 1) * page_size
 
     with _connect(db_path) as conn:
-        total_rows = conn.execute(
-            f"WITH {_CONVERSATION_BASE_SQL} SELECT COUNT(*) FROM conversations WHERE _rn = 1{extra}",
-            params,
-        ).fetchone()[0]
-        offset = (page - 1) * page_size
-        rows = conn.execute(
-            f"WITH {_CONVERSATION_BASE_SQL} "
-            f"SELECT {_LIST_COLUMNS}, reply_count FROM conversations "
-            f"WHERE _rn = 1{extra} ORDER BY date_parsed DESC LIMIT ? OFFSET ?",
-            params + [page_size, offset],
-        ).fetchall()
+        if sent_only:
+            total_rows = conn.execute(
+                f"SELECT COUNT(*) FROM emails WHERE 1=1{extra}",
+                params,
+            ).fetchone()[0]
+            rows = conn.execute(
+                f"SELECT {_LIST_COLUMNS} FROM emails WHERE 1=1{extra} ORDER BY date_parsed DESC LIMIT ? OFFSET ?",
+                params + [page_size, offset],
+            ).fetchall()
+            rows = [{"reply_count": 1, **r} for r in rows]
+        else:
+            total_rows = conn.execute(
+                f"WITH {_CONVERSATION_BASE_SQL} SELECT COUNT(*) FROM conversations WHERE _rn = 1{extra}",
+                params,
+            ).fetchone()[0]
+            rows = conn.execute(
+                f"WITH {_CONVERSATION_BASE_SQL} "
+                f"SELECT {_LIST_COLUMNS}, reply_count FROM conversations "
+                f"WHERE _rn = 1{extra} ORDER BY date_parsed DESC LIMIT ? OFFSET ?",
+                params + [page_size, offset],
+            ).fetchall()
 
     emails = []
     for row in rows:

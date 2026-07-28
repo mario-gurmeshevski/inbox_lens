@@ -4,6 +4,7 @@ import sqlite3
 import pytest
 
 from src.scripts import cache
+from src.scripts.cache import db as db_mod
 from src.tests._helpers import save_fetched as _save_fetched, save_fetched_batch as _save_fetched_batch
 
 
@@ -574,6 +575,64 @@ class TestSearchEmails:
         emails2, total2, _ = cache.search_emails(tmp_db)
         assert total2 == 10
 
+    def test_sent_only_filters_to_sent(self, tmp_db):
+        self._seed_search_data(tmp_db)
+        # Mark one of the seeded messages as sent.
+        sent_hash = cache._hash_message_id("<se0@e.com>")
+        cache.mark_sent([sent_hash], tmp_db)
+        emails, total, _ = cache.search_emails(tmp_db, sent_only=True)
+        # Only the sent message appears, not the other 9 inbox messages.
+        assert total == 1
+        assert emails[0]["message_id"] == "<se0@e.com>"
+
+    def test_sent_only_empty_when_none_sent(self, tmp_db):
+        self._seed_search_data(tmp_db)
+        emails, total, _ = cache.search_emails(tmp_db, sent_only=True)
+        assert total == 0
+        assert emails == []
+
+    def test_sent_only_lists_every_message_no_thread_dedup(self, tmp_db):
+        cache.save_headers_batch(
+            [
+                {
+                    "message_id": "<s1@e.com>",
+                    "from": "me@e.com",
+                    "subject": "Re: thread",
+                    "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                    "thread_id": "T1",
+                },
+                {
+                    "message_id": "<s2@e.com>",
+                    "from": "me@e.com",
+                    "subject": "Re: thread",
+                    "date": "Mon, 02 Jan 2024 10:00:00 +0000",
+                    "thread_id": "T1",
+                },
+            ],
+            tmp_db,
+        )
+        cache.mark_sent([cache._hash_message_id("<s1@e.com>"), cache._hash_message_id("<s2@e.com>")], tmp_db)
+        emails, total, _ = cache.search_emails(tmp_db, sent_only=True)
+        assert total == 2
+        ids = {e["message_id"] for e in emails}
+        assert ids == {"<s1@e.com>", "<s2@e.com>"}
+
+    def test_hide_sent_removes_sent_from_inbox(self, tmp_db):
+        self._seed_search_data(tmp_db)  # 10 inbox mails
+        sent_hash = cache._hash_message_id("<se0@e.com>")
+        cache.mark_sent([sent_hash], tmp_db)
+        # hide_sent drops the sent message but keeps the other 9 inbox messages.
+        emails, total, _ = cache.search_emails(tmp_db, hide_sent=True)
+        assert total == 9
+        assert all(e["message_id"] != "<se0@e.com>" for e in emails)
+
+    def test_hide_sent_off_keeps_sent_in_list(self, tmp_db):
+        self._seed_search_data(tmp_db)
+        sent_hash = cache._hash_message_id("<se0@e.com>")
+        cache.mark_sent([sent_hash], tmp_db)
+        emails, total, _ = cache.search_emails(tmp_db, hide_sent=False)
+        assert total == 10
+
     def test_sent_emails_remain_in_recent(self, tmp_db):
         self._seed_search_data(tmp_db)
         before = cache.get_recent_emails(tmp_db, limit=10)
@@ -760,6 +819,68 @@ class TestReconcileInbox:
         )
         removed = cache.reconcile_inbox(tmp_db, {cache._hash_message_id("<a@e.com>")}, protected_hashes=set())
         assert removed == 0
+
+    def test_empty_server_hashes_returns_zero_without_force(self, tmp_db):
+        # Defensive short-circuit: an empty server set (e.g. a transient empty
+        # fetch) must never delete cached rows, even with searched_count=0
+        # which would bypass the min_ratio guard.
+        _save_fetched(
+            {
+                "message_id": "<keep@e.com>",
+                "from": "x",
+                "subject": "Keep",
+                "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                "body": "keep",
+            },
+            tmp_db,
+        )
+        hkeep = cache._hash_message_id("<keep@e.com>")
+        removed = cache.reconcile_inbox(tmp_db, set(), protected_hashes=set(), searched_count=0)
+        assert removed == 0
+        assert cache.get_email_by_hash(tmp_db, hkeep) is not None
+
+
+class TestReconcileSent:
+    def _save_sent(self, tmp_db, message_id):
+        _save_fetched(
+            {
+                "message_id": message_id,
+                "from": "me",
+                "subject": "Sent",
+                "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                "body": "sent body",
+            },
+            tmp_db,
+        )
+        cache.mark_sent([cache._hash_message_id(message_id)], tmp_db)
+
+    def test_empty_server_hashes_returns_zero_without_force(self, tmp_db):
+        self._save_sent(tmp_db, "<sent@e.com>")
+        h = cache._hash_message_id("<sent@e.com>")
+        removed = cache.reconcile_sent(tmp_db, set(), searched_count=0)
+        assert removed == 0
+        assert cache.get_email_by_hash(tmp_db, h) is not None
+
+    def test_removes_ghost_sent_rows(self, tmp_db):
+        self._save_sent(tmp_db, "<keep@e.com>")
+        self._save_sent(tmp_db, "<ghost@e.com>")
+        hkeep = cache._hash_message_id("<keep@e.com>")
+        removed = cache.reconcile_sent(tmp_db, {hkeep}, searched_count=1)
+        assert removed == 1
+        assert cache.get_email_by_hash(tmp_db, hkeep) is not None
+        assert cache.get_email_by_hash(tmp_db, cache._hash_message_id("<ghost@e.com>")) is None
+
+    def test_force_bypasses_guards(self, tmp_db):
+        self._save_sent(tmp_db, "<a@e.com>")
+        removed = cache.reconcile_sent(tmp_db, set(), force=True)
+        assert removed == 1
+        assert cache.get_email_by_hash(tmp_db, cache._hash_message_id("<a@e.com>")) is None
+
+    def test_skips_when_fetch_ratio_below_threshold(self, tmp_db):
+        self._save_sent(tmp_db, "<ghost@e.com>")
+        removed = cache.reconcile_sent(tmp_db, set(), searched_count=100)
+        assert removed == 0
+        assert cache.get_email_by_hash(tmp_db, cache._hash_message_id("<ghost@e.com>")) is not None
 
 
 class TestRowToDict:
@@ -1578,3 +1699,189 @@ class TestGmThridAuthority:
         d = cache.get_email_by_hash(tmp_db, h)
         assert d["thread_id"] == gm_tid
         assert d["gm_thrid"] == "1809095669921875987"
+
+
+class TestRefreshFolders:
+    def _seed(self, db_path, mid, folder=None, is_sent=False):
+        cache.save_headers_batch(
+            [
+                {
+                    "message_id": mid,
+                    "from": "a@e.com",
+                    "subject": "X",
+                    "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                    "folder": folder,
+                }
+            ],
+            db_path,
+        )
+        if is_sent:
+            cache.mark_sent([cache._hash_message_id(mid)], db_path)
+
+    def test_corrects_sent_placeholder_to_real_folder(self, tmp_db):
+        self._seed(tmp_db, "<s1@e.com>", folder="Sent", is_sent=True)
+        h = cache._hash_message_id("<s1@e.com>")
+        changed = cache.refresh_folders("[Gmail]/Sent Mail", [h], tmp_db)
+        assert changed == 1
+        assert cache.get_email_by_hash(tmp_db, h)["folder"] == "[Gmail]/Sent Mail"
+
+    def test_corrects_null_folder(self, tmp_db):
+        self._seed(tmp_db, "<s2@e.com>", folder=None)
+        h = cache._hash_message_id("<s2@e.com>")
+        changed = cache.refresh_folders("INBOX", [h], tmp_db)
+        assert changed == 1
+        assert cache.get_email_by_hash(tmp_db, h)["folder"] == "INBOX"
+
+    def test_does_not_overwrite_correct_folder(self, tmp_db):
+        self._seed(tmp_db, "<s3@e.com>", folder="Projects")
+        h = cache._hash_message_id("<s3@e.com>")
+        changed = cache.refresh_folders("[Gmail]/Sent Mail", [h], tmp_db)
+        assert changed == 0
+        assert cache.get_email_by_hash(tmp_db, h)["folder"] == "Projects"
+
+    def test_empty_inputs_noop(self, tmp_db):
+        assert cache.refresh_folders("", ["x"], tmp_db) == 0
+        assert cache.refresh_folders("[Gmail]/Sent Mail", [], tmp_db) == 0
+
+
+class TestMigrationV3:
+    def test_v2_db_upgrades_to_v3(self, tmp_path):
+        db_path = str(tmp_path / "old.db")
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE emails (
+                message_id_hash TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                sender TEXT,
+                subject TEXT,
+                date TEXT,
+                date_parsed TEXT,
+                body TEXT,
+                status TEXT DEFAULT 'fetched',
+                category TEXT,
+                keyword_matches TEXT,
+                thread_id TEXT,
+                in_reply_to TEXT,
+                is_read INTEGER DEFAULT 0,
+                is_starred INTEGER DEFAULT 0,
+                is_sent INTEGER DEFAULT 0,
+                gm_thrid TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            PRAGMA user_version = 2;
+            """
+        )
+        conn.execute(
+            "INSERT INTO emails (message_id_hash, message_id, sender, subject, thread_id) "
+            "VALUES ('h1', '<m@x.com>', 'a@b.com', 'S', 'h1')"
+        )
+        conn.commit()
+        conn.close()
+
+        cache.init_db(db_path)  # runs _migrate
+
+        with cache._connect(db_path) as c:
+            assert c.execute("PRAGMA user_version").fetchone()[0] == db_mod._SCHEMA_VERSION
+            cols = {row["name"] for row in c.execute("PRAGMA table_info(emails)").fetchall()}
+            assert "cc" in cols
+            tabs = {row["name"] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            assert "drafts" in tabs
+            row = c.execute("SELECT subject FROM emails WHERE message_id_hash='h1'").fetchone()
+            assert row["subject"] == "S"
+
+    def test_higher_version_db_still_gets_missing_columns(self, tmp_path):
+        db_path = str(tmp_path / "drifted.db")
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE emails (
+                message_id_hash TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                sender TEXT,
+                subject TEXT,
+                date TEXT,
+                date_parsed TEXT,
+                body TEXT,
+                status TEXT DEFAULT 'fetched',
+                category TEXT,
+                keyword_matches TEXT,
+                thread_id TEXT,
+                in_reply_to TEXT,
+                is_read INTEGER DEFAULT 0,
+                is_starred INTEGER DEFAULT 0,
+                is_sent INTEGER DEFAULT 0,
+                content_hash TEXT,
+                gm_thrid TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            PRAGMA user_version = 7;
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        cache.init_db(db_path)  # runs _migrate
+
+        with cache._connect(db_path) as c:
+            cols = {row["name"] for row in c.execute("PRAGMA table_info(emails)").fetchall()}
+            assert "cc" in cols, "cc column must be added even when version is ahead"
+            assert c.execute("PRAGMA user_version").fetchone()[0] == 7
+            assert "content_hash" in cols
+            tabs = {row["name"] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            assert "drafts" in tabs
+
+    def test_init_db_idempotent_does_not_touch_populated_thread_ids(self, tmp_path):
+        db_path = str(tmp_path / "stable.db")
+        cache.init_db(db_path)
+        sentinel = "sentinel-thread-id-123"
+        with cache._connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO emails (message_id_hash, message_id, sender, subject, thread_id) "
+                "VALUES ('h1', '<m@x.com>', 'a@b.com', 'S', ?)",
+                (sentinel,),
+            )
+            conn.commit()
+
+        cache.init_db(db_path)
+
+        with cache._connect(db_path) as c:
+            row = c.execute("SELECT thread_id FROM emails WHERE message_id_hash = 'h1'").fetchone()
+            assert row["thread_id"] == sentinel
+            assert c.execute("PRAGMA user_version").fetchone()[0] == db_mod._SCHEMA_VERSION
+
+    def test_folder_column_added_and_backfilled_from_is_sent(self, tmp_path):
+        db_path = str(tmp_path / "prefolder.db")
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE emails (
+                message_id_hash TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                sender TEXT, subject TEXT, date TEXT, date_parsed TEXT, body TEXT,
+                status TEXT DEFAULT 'fetched', category TEXT, keyword_matches TEXT,
+                thread_id TEXT, in_reply_to TEXT, is_read INTEGER DEFAULT 0,
+                is_starred INTEGER DEFAULT 0, is_sent INTEGER DEFAULT 0,
+                gm_thrid TEXT, cc TEXT, created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            PRAGMA user_version = 3;
+            """
+        )
+        conn.execute("INSERT INTO emails (message_id_hash, message_id, is_sent) VALUES ('h-inbox', '<inbox@e.com>', 0)")
+        conn.execute("INSERT INTO emails (message_id_hash, message_id, is_sent) VALUES ('h-sent', '<sent@e.com>', 1)")
+        conn.commit()
+        conn.close()
+
+        cache.init_db(db_path)
+
+        with cache._connect(db_path) as c:
+            cols = {row["name"] for row in c.execute("PRAGMA table_info(emails)").fetchall()}
+            assert "folder" in cols
+            inbox_folder = c.execute("SELECT folder FROM emails WHERE message_id_hash = 'h-inbox'").fetchone()["folder"]
+            sent_folder = c.execute("SELECT folder FROM emails WHERE message_id_hash = 'h-sent'").fetchone()["folder"]
+            assert inbox_folder == "INBOX"
+            assert sent_folder is None
+            assert c.execute("PRAGMA user_version").fetchone()[0] == db_mod._SCHEMA_VERSION

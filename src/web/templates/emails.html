@@ -3,16 +3,24 @@
 {% block styles
   %}
   <link rel="stylesheet" href="/static/emails.css" />
+  <link rel="stylesheet" href="/static/compose.css" />
 {% endblock %}
 {% block scripts %}
   <script src="/static/js/emails.js" defer></script>
+  <script src="/static/js/compose.js" defer></script>
 {% endblock %}
 {% block content %}
   <h1>
-    Emails
+    {% if sent_only %}
+      Sent
+    {% else %}
+      Emails
+    {% endif %}
     <span class="total-count">({{ total_rows }} total)</span>
   </h1>
-  <form class="toolbar filter-bar" method="get" action="/emails">
+  <form class="toolbar filter-bar"
+        method="get"
+        action="{% if sent_only %}/emails/sent{% else %}/emails{% endif %}">
     <fieldset>
       <legend class="visually-hidden">Filter emails</legend>
       <select name="status" id="filter-status" aria-label="Filter by email status">
@@ -40,7 +48,9 @@
         <i data-lucide="search" class="icon-sm"></i>
         Filter
       </button>
-      <a href="/emails" class="btn btn-sm" aria-label="Clear all filters">
+      <a href="{% if sent_only %}/emails/sent{% else %}/emails{% endif %}"
+         class="btn btn-sm"
+         aria-label="Clear all filters">
         <i data-lucide="x" class="icon-sm"></i>
         Clear
       </a>
@@ -113,23 +123,27 @@
     </div>
   </div>
   {# Build the query string once, URL-encoded, so search terms containing
-     &, =, #, +, etc. don't break the hx-get / pagination hrefs below. #}
-  {% set q = urlencode({"status": status, "priority": priority, "search": search, "page": page}) %}
-  {% set q_prev = urlencode({"status": status, "priority": priority, "search": search, "page": page - 1}) %}
-  {% set q_next = urlencode({"status": status, "priority": priority, "search": search, "page": page + 1}) %}
+     &, =, #, +, etc. don't break the hx-get / pagination hrefs below.
+     Carry `sent` so the Sent view stays scoped across refresh/pagination. #}
+  {% set q = urlencode({"status": status, "priority": priority, "search": search, "page": page, "sent": "1" if sent_only else ""}) %}
+  {% set q_prev = urlencode({"status": status, "priority": priority, "search": search, "page": page - 1, "sent": "1" if sent_only else ""}) %}
+  {% set q_next = urlencode({"status": status, "priority": priority, "search": search, "page": page + 1, "sent": "1" if sent_only else ""}) %}
   <div id="email-table"
        hx-get="/partials/emails?{{ q }}"
        hx-trigger="sse:refresh"
        hx-swap="innerHTML">{% include "partials/email_table.html" %}</div>
   {% if total_pages > 1 %}
+    {% set list_endpoint = 'email_list_sent' if sent_only else 'email_list' %}
     <div class="pagination">
-      {% if page > 1 %}
-        <a href="{{ url_for('email_list') }}?{{ q_prev }}">&laquo; Prev</a>
-      {% endif %}
+      {% if page > 1 %}<a href="{{ url_for(list_endpoint) }}?{{ q_prev }}">&laquo; Prev</a>{% endif %}
       <span class="current">Page {{ page }} of {{ total_pages }}</span>
-      {% if page < total_pages %}
-        <a href="{{ url_for('email_list') }}?{{ q_next }}">Next &raquo;</a>
-      {% endif %}
+      {% if page < total_pages %}<a href="{{ url_for(list_endpoint) }}?{{ q_next }}">Next &raquo;</a>{% endif %}
     </div>
   {% endif %}
+  <button type="button"
+          class="compose-fab"
+          data-compose-open="new"
+          aria-label="Compose new email">
+    <i data-lucide="pencil" class="icon-lg"></i>
+  </button>
 {% endblock %}

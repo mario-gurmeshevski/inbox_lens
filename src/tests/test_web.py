@@ -3197,22 +3197,30 @@ class TestSignature:
         assert "OldSig" not in resp.text
         assert "My reply" in resp.text
 
-    def test_with_signature_is_idempotent(self):
+    def test_with_signature_is_idempotent(self, tmp_path, monkeypatch):
         from src.scripts import web as _web
 
-        _web.cache.save_setting("signature", "Sig", _web.DB_PATH)
-        once = _web._with_signature("Body", _web.DB_PATH)
-        twice = _web._with_signature(once, _web.DB_PATH)
+        db_path = str(tmp_path / "test_web.db")
+        cache.init_db(db_path)
+        monkeypatch.setattr(_web, "DB_PATH", db_path)
+
+        _web.cache.save_setting("signature", "Sig", db_path)
+        once = _web._with_signature("Body", db_path)
+        twice = _web._with_signature(once, db_path)
         assert once == twice
         assert once.count("-- ") == 1
         assert "Sig" in once
         assert "Body" in once
 
-    def test_with_signature_strips_block_when_setting_cleared(self):
+    def test_with_signature_strips_block_when_setting_cleared(self, tmp_path, monkeypatch):
         from src.scripts import web as _web
 
-        _web.cache.save_setting("signature", "", _web.DB_PATH)
-        result = _web._with_signature("Body\n\n-- \nStale", _web.DB_PATH)
+        db_path = str(tmp_path / "test_web.db")
+        cache.init_db(db_path)
+        monkeypatch.setattr(_web, "DB_PATH", db_path)
+
+        _web.cache.save_setting("signature", "", db_path)
+        result = _web._with_signature("Body\n\n-- \nStale", db_path)
         assert "-- " not in result
         assert "Stale" not in result
         assert "Body" in result

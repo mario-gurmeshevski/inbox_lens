@@ -122,6 +122,8 @@
   cursor: pointer;
   outline: none;
   transition: var(--transition);
+  border: none;
+  background: var(--bg-surface);
 }
 
 .word:hover {

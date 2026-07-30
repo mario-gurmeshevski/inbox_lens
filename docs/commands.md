@@ -11,6 +11,8 @@
 | `make up`               | Build and start Docker container (default mode, port 8000)   |
 | `make up-ts`            | Build and start Docker with Tailscale sidecar (tailnet only) |
 | `make down`             | Full teardown: stop containers, remove images + volumes      |
+| `make prune`            | Remove unused images + build cache + stopped containers (no volumes) |
+| `make prune-auto`       | Remove dangling images + build cache only (runs after `up`/`up-ts`) |
 | `make stop`             | Stop containers without removing them (preserves data)       |
 | `make start`            | Restart containers previously stopped with `make stop`       |
 | `make restart`          | Restart running containers in place (preserves data)         |
@@ -28,6 +30,8 @@
 | `make tailscale-logout` | Log out of the tailnet                                       |
 | `make purge`            | Logout Tailscale, remove Docker, delete data files           |
 
+> **Auto-cleanup:** every successful `make up` / `make up-ts` build automatically runs `make prune-auto`, removing dangling images (the orphaned previous build) and unused build cache so the host doesn't bloat over time. It never touches volumes, running containers, or tagged images you keep around. For a deeper clean (all unused images + stopped containers), run `make prune` manually.
+
 ## For Windows
 
 | Target                            | Description                                                  |
@@ -39,6 +43,8 @@
 | `./commands.ps1 up`               | Build and start Docker container (default mode, port 8000)   |
 | `./commands.ps1 up-ts`            | Build and start Docker with Tailscale sidecar (tailnet only) |
 | `./commands.ps1 down`             | Full teardown: stop containers, remove images + volumes      |
+| `./commands.ps1 prune`            | Remove unused images + build cache + stopped containers (no volumes) |
+| `./commands.ps1 prune-auto`       | Remove dangling images + build cache only (runs after `up`/`up-ts`) |
 | `./commands.ps1 stop`             | Stop containers without removing them (preserves data)       |
 | `./commands.ps1 start`            | Restart containers previously stopped with `stop`            |
 | `./commands.ps1 restart`          | Restart running containers in place (preserves data)         |

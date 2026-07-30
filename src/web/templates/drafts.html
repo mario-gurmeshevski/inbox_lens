@@ -5,10 +5,41 @@
   <link rel="stylesheet" href="/static/compose.css" />
 {% endblock %}
 {% block scripts %}
+  <script src="/static/js/emails.js" defer></script>
   <script src="/static/js/compose.js" defer></script>
 {% endblock %}
 {% block content %}
-  <h1>Drafts <span class="total-count">({{ drafts|length }})</span></h1>
+  <header class="emails-header">
+    <h1 class="folder-dropdown">
+      <button type="button"
+              class="folder-dropdown-toggle"
+              aria-haspopup="true"
+              aria-expanded="false"
+              aria-label="Select email folder"
+              data-folder-dropdown-toggle>
+        Drafts
+        <i data-lucide="chevron-down" class="icon-sm folder-chevron"></i>
+      </button>
+      <span class="total-count">({{ drafts|length }} total)</span>
+      <ul class="folder-dropdown-menu"
+          role="menu"
+          aria-label="Email folders"
+          data-folder-dropdown-menu>
+        <li role="menuitem">
+          <a href="/emails" class="">Inbox</a>
+        </li>
+        <li role="menuitem">
+          <a href="/emails/sent" class="">Sent</a>
+        </li>
+        <li role="menuitem">
+          <a href="/drafts" class="active" aria-current="page">Drafts</a>
+        </li>
+        <li role="menuitem">
+          <a href="/outbox" class="">Outbox</a>
+        </li>
+      </ul>
+    </h1>
+  </header>
   {% if not drafts %}
     <p class="empty-state">No drafts. Start a new email from the emails page.</p>
   {% else %}

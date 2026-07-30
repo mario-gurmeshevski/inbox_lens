@@ -16,7 +16,11 @@
 
 - **Signature** — set a persistent signature (Markdown supported) under **Settings → Signature**; it's appended to every compose and re-synced to the current setting when a draft is resumed, so changing your signature updates existing drafts too
 
-- **Sent view** — outbound mail lives in a dedicated **Sent** inbox (`/emails/sent`) that lists each message individually (no conversation collapsing). By default sent mail is hidden from the main inbox; **Settings → Show sent mails in inbox** toggles them back inline
+- **Sent view** — outbound mail lives in a dedicated **Sent** inbox (`/emails/sent`) that lists each message individually (no conversation collapsing). By default sent mail is hidden from the main inbox; **Settings → Show sent mails in inbox** toggles them back inline. Sent-folder sync now also refreshes read/starred flags from the server, and resolves the Sent folder by name (not just the `\Sent` attribute) for better compatibility with non-Gmail providers
+
+- **Outbox** — when a send fails (SMTP unreachable, network error), the message is saved to an **Outbox** queue (`/outbox`) and retried automatically in the background with backoff (1m, 5m, 15m, 1h, 4h), up to 6 attempts. From the Outbox page you can retry now, edit and resend, or delete. Failed sends are never silently dropped
+
+- **SMTP settings & test** — override the SMTP host, port, and security mode (SSL/TLS, STARTTLS, or None) under **Settings → Outbound**, and verify the connection with a **Test connection** button before relying on it. Defaults come from your `SMTP_SERVER`/`SMTP_PORT` environment variables
 
 - **Move to folder** — a folder picker populated from your IMAP account's mailbox list; folder names are validated before being sent to the IMAP server. Sent messages are tracked in their real IMAP folder, so delete/archive/move/star work correctly on outbound mail
 

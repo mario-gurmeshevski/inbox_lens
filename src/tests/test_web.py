@@ -263,7 +263,8 @@ class TestWebEndpoints:
             client = self._make_client()
             resp = client.get("/emails")
         assert 'href="/emails/sent"' in resp.text
-        assert 'nav-label">Sent' in resp.text
+        assert "folder-dropdown" in resp.text
+        assert "Sent" in resp.text
 
     def test_inbox_hides_sent_by_default(self):
         self._seed_emails(1)
@@ -334,6 +335,106 @@ class TestWebEndpoints:
             client = self._make_client()
             resp = client.post("/settings/show-sent-in-inbox", data={"show_sent_in_inbox": "false"})
         assert cache.get_setting("show_sent_in_inbox", self.db_path) == ""
+
+    def test_save_smtp_settings(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post(
+                "/settings/smtp",
+                data={"smtp_server": "mail.example.com", "smtp_port": "587", "smtp_security": "starttls"},
+            )
+        assert resp.status_code == 204
+        assert resp.headers.get("X-Toast-Tone") == "success"
+        assert cache.get_setting("smtp_server", self.db_path) == "mail.example.com"
+        assert cache.get_setting("smtp_port", self.db_path) == "587"
+        assert cache.get_setting("smtp_security", self.db_path) == "starttls"
+
+    def test_save_smtp_settings_rejects_invalid_security(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post(
+                "/settings/smtp",
+                data={"smtp_server": "h", "smtp_port": "465", "smtp_security": "bogus"},
+            )
+        assert resp.status_code == 204
+        assert cache.get_setting("smtp_security", self.db_path) == "ssl"
+
+    def test_settings_page_exposes_smtp_values(self):
+        cache.save_setting("smtp_server", "mail.example.com", self.db_path)
+        cache.save_setting("smtp_port", "587", self.db_path)
+        cache.save_setting("smtp_security", "starttls", self.db_path)
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/settings")
+        assert resp.status_code == 200
+        assert "mail.example.com" in resp.text
+        assert 'value="starttls"' in resp.text
+
+    def test_smtp_test_success_toast(self, monkeypatch):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            monkeypatch.setattr(
+                email_reader,
+                "test_smtp_connection",
+                lambda server, port, security, db_path=None: {
+                    "success": True,
+                    "server": f"{server}:{port}",
+                    "security": security,
+                },
+            )
+            resp = client.post(
+                "/settings/smtp/test",
+                data={"smtp_server": "mail.example.com", "smtp_port": "465", "smtp_security": "ssl"},
+            )
+        assert resp.status_code == 204
+        assert resp.headers.get("X-Toast-Tone") == "success"
+        assert "Connected to SMTP" in resp.headers.get("X-Toast", "")
+
+    def test_smtp_test_failure_toast(self, monkeypatch):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            monkeypatch.setattr(
+                email_reader,
+                "test_smtp_connection",
+                lambda server, port, security, db_path=None: {"success": False, "error": "boom"},
+            )
+            resp = client.post(
+                "/settings/smtp/test",
+                data={"smtp_server": "mail.example.com", "smtp_port": "465", "smtp_security": "ssl"},
+            )
+        assert resp.status_code == 204
+        assert resp.headers.get("X-Toast-Tone") == "error"
+        assert resp.headers.get("X-Toast") == "boom"
+
+    def test_smtp_test_requires_host(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post(
+                "/settings/smtp/test",
+                data={"smtp_server": "", "smtp_port": "465", "smtp_security": "ssl"},
+            )
+        assert resp.status_code == 204
+        assert resp.headers.get("X-Toast-Tone") == "error"
+
+    def test_smtp_test_cooldown(self, monkeypatch):
+        monkeypatch.setattr(
+            email_reader,
+            "test_smtp_connection",
+            lambda *a, **k: {"success": True, "server": "x", "security": "ssl"},
+        )
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            first = client.post(
+                "/settings/smtp/test",
+                data={"smtp_server": "h", "smtp_port": "465", "smtp_security": "ssl"},
+            )
+            second = client.post(
+                "/settings/smtp/test",
+                data={"smtp_server": "h", "smtp_port": "465", "smtp_security": "ssl"},
+            )
+        assert first.headers.get("X-Toast-Tone") == "success"
+        assert second.headers.get("X-Toast-Tone") == "warning"
+        assert "wait" in second.headers.get("X-Toast", "").lower()
 
     def test_email_detail_found(self):
         self._seed_emails(1)
@@ -1185,8 +1286,10 @@ class TestWebExtraEndpoints:
             patch("src.scripts.email_reader.test_connection", return_value={"success": True, "inbox_count": 0}),
             patch("src.scripts.idle_monitor.IdleMonitor") as MockMonitor,
             patch("src.scripts.idle_monitor.run_initial_fetch"),
+            patch("src.scripts.outbox_worker.OutboxWorker") as MockOutbox,
         ):
             mock_instance = MockMonitor.return_value
+            mock_outbox = MockOutbox.return_value
             client = self._make_client()
             resp = client.post(
                 "/setup",
@@ -1197,6 +1300,7 @@ class TestWebExtraEndpoints:
         assert resp.headers["location"] == "/"
         assert cache.has_email_credentials(self.db_path)
         mock_instance.start.assert_called_once()
+        mock_outbox.start.assert_called_once()
 
     def test_setup_submit_resets_folder_caches(self):
         with (
@@ -1205,6 +1309,7 @@ class TestWebExtraEndpoints:
             patch("src.scripts.email_reader.test_connection", return_value={"success": True, "inbox_count": 0}),
             patch("src.scripts.idle_monitor.IdleMonitor"),
             patch("src.scripts.idle_monitor.run_initial_fetch"),
+            patch("src.scripts.outbox_worker.OutboxWorker"),
             patch("src.scripts.email_reader.reset_folder_caches") as mock_reset,
         ):
             client = self._make_client()
@@ -2662,7 +2767,7 @@ class TestComposeSend:
         assert resp.status_code == 204
         assert cache.get_draft("d1", _web.DB_PATH) is None
 
-    def test_draft_retained_on_smtp_failure(self, web_client, monkeypatch):
+    def test_send_failure_enqueues_to_outbox_and_drops_draft(self, web_client, monkeypatch):
         from src.scripts import web as _web
 
         cache.save_draft(
@@ -2696,8 +2801,34 @@ class TestComposeSend:
                 "draft_id": "d2",
             },
         )
+        assert resp.headers.get("X-Toast-Tone") == "warning"
+        assert "Outbox" in resp.headers.get("X-Toast", "")
+        assert cache.get_draft("d2", _web.DB_PATH) is None
+        outbox_rows = cache.list_outbox(_web.DB_PATH)
+        assert len(outbox_rows) == 1
+        row = outbox_rows[0]
+        assert row["to_addr"] == "a@x.com"
+        assert row["subject"] == "S"
+        assert row["status"] == "pending"
+        assert row["draft_id"] == "d2"
+
+    def test_send_failure_enqueue_fallback_toast(self, web_client, monkeypatch):
+        from src.scripts import web as _web
+
+        def boom_send(*a, **k):
+            raise RuntimeError("smtp down")
+
+        def boom_enqueue(*a, **k):
+            raise RuntimeError("db gone")
+
+        monkeypatch.setattr(email_reader, "send_message", boom_send)
+        monkeypatch.setattr(cache, "enqueue", boom_enqueue)
+        resp = web_client.post(
+            "/emails/send",
+            data={"to": "a@x.com", "cc": "", "bcc": "", "subject": "S", "body": "B", "mode": "new"},
+        )
         assert resp.headers.get("X-Toast-Tone") == "error"
-        assert cache.get_draft("d2", _web.DB_PATH) is not None
+        assert cache.list_outbox(_web.DB_PATH) == []
 
     def test_rate_limited(self, web_client, monkeypatch):
         from src.scripts import auth as _auth
@@ -2921,7 +3052,8 @@ class TestDrafts:
         resp = web_client.get("/emails")
         assert resp.status_code == 200
         assert 'href="/drafts"' in resp.text
-        assert 'nav-label">Drafts' in resp.text
+        assert "folder-dropdown" in resp.text
+        assert "Drafts" in resp.text
 
 
 class TestComposeModalShell:
@@ -3249,3 +3381,140 @@ class TestDraftPruning:
         removed = cache.prune_stale_drafts(db_path, max_age_days=30)
         assert removed == 1
         assert cache.get_draft("old", db_path) is None
+
+
+class TestOutbox:
+    def _enqueue(self, db_path, **overrides):
+        payload = {
+            "to_addr": "a@x.com",
+            "cc": "",
+            "bcc": "",
+            "subject": "Queued",
+            "body": "B",
+            "body_html": "<p>B</p>",
+            "mode": "new",
+            "original_message_id": None,
+            "thread_id": None,
+            "draft_id": None,
+        }
+        payload.update(overrides)
+        return cache.enqueue(payload, db_path)
+
+    def test_outbox_page_lists_pending(self, web_client):
+        from src.scripts import web as _web
+
+        self._enqueue(_web.DB_PATH, subject="Hello Outbox")
+        resp = web_client.get("/outbox")
+        assert resp.status_code == 200
+        assert "Hello Outbox" in resp.text
+        assert "pending" in resp.text
+
+    def test_outbox_page_empty_state(self, web_client):
+        resp = web_client.get("/outbox")
+        assert resp.status_code == 200
+        assert "Outbox is empty" in resp.text
+
+    def test_outbox_retry_requeues_failed(self, web_client):
+        from src.scripts import web as _web
+
+        oid = self._enqueue(_web.DB_PATH)
+        cache.mark_outbox_failed(oid, "boom", None, _web.DB_PATH)
+        assert cache.get_outbox(oid, _web.DB_PATH)["status"] == "failed"
+        resp = web_client.post(f"/outbox/{oid}/retry")
+        assert resp.status_code == 204
+        assert resp.headers.get("X-Toast-Tone") == "success"
+        row = cache.get_outbox(oid, _web.DB_PATH)
+        assert row["status"] == "pending"
+        assert row["next_attempt_at"] is None
+
+    def test_outbox_retry_missing(self, web_client):
+        resp = web_client.post("/outbox/nope/retry")
+        assert resp.status_code == 204
+        assert resp.headers.get("X-Toast-Tone") == "error"
+
+    def test_outbox_delete(self, web_client):
+        from src.scripts import web as _web
+
+        oid = self._enqueue(_web.DB_PATH)
+        resp = web_client.post(f"/outbox/{oid}/delete", follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/outbox"
+        assert cache.get_outbox(oid, _web.DB_PATH) is None
+
+    def test_outbox_compose_partial_moves_to_draft_and_renders(self, web_client):
+        from src.scripts import web as _web
+
+        oid = self._enqueue(_web.DB_PATH, subject="Edit me", to_addr="to@x.com", cc="c@x.com")
+        resp = web_client.get(f"/partials/compose-outbox/{oid}")
+        assert resp.status_code == 200
+        assert "Edit me" in resp.text
+        assert "to@x.com" in resp.text
+        assert cache.get_outbox(oid, _web.DB_PATH) is None
+        draft = cache.get_draft(oid, _web.DB_PATH)
+        assert draft is not None
+        assert draft["subject"] == "Edit me"
+        assert draft["to_addr"] == "to@x.com"
+        assert draft["cc"] == "c@x.com"
+
+    def test_outbox_compose_partial_missing(self, web_client):
+        resp = web_client.get("/partials/compose-outbox/nope")
+        assert resp.status_code == 404
+
+    def test_outbox_page_shows_status_and_attempts(self, web_client):
+        from src.scripts import web as _web
+
+        oid = self._enqueue(_web.DB_PATH)
+        cache.mark_outbox_failed(oid, "smtp unreachable", None, _web.DB_PATH)
+        resp = web_client.get("/outbox")
+        assert resp.status_code == 200
+        assert "failed" in resp.text
+        assert "1 attempt" in resp.text
+        assert "smtp unreachable" in resp.text
+
+    def test_edited_outbox_send_success_drops_draft(self, web_client, monkeypatch):
+        from src.scripts import web as _web
+
+        oid = self._enqueue(_web.DB_PATH, subject="Retry me", to_addr="to@x.com")
+        web_client.get(f"/partials/compose-outbox/{oid}")
+        assert cache.get_draft(oid, _web.DB_PATH) is not None
+        monkeypatch.setattr(email_reader, "send_message", lambda *a, **k: None)
+        resp = web_client.post(
+            "/emails/send",
+            data={
+                "to": "to@x.com",
+                "cc": "",
+                "bcc": "",
+                "subject": "Retry me",
+                "body": "Body",
+                "mode": "new",
+                "draft_id": oid,
+            },
+        )
+        assert resp.headers.get("X-Toast-Tone") == "success"
+        assert cache.get_draft(oid, _web.DB_PATH) is None
+        assert cache.get_outbox(oid, _web.DB_PATH) is None
+
+    def test_edited_outbox_resend_failure_creates_new_row(self, web_client, monkeypatch):
+        from src.scripts import web as _web
+
+        oid = self._enqueue(_web.DB_PATH, subject="Will fail again", to_addr="to@x.com")
+        web_client.get(f"/partials/compose-outbox/{oid}")
+        monkeypatch.setattr(email_reader, "send_message", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
+        resp = web_client.post(
+            "/emails/send",
+            data={
+                "to": "to@x.com",
+                "cc": "",
+                "bcc": "",
+                "subject": "Will fail again",
+                "body": "Body",
+                "mode": "new",
+                "draft_id": oid,
+            },
+        )
+        assert resp.headers.get("X-Toast-Tone") == "warning"
+        assert cache.get_outbox(oid, _web.DB_PATH) is None
+        rows = cache.list_outbox(_web.DB_PATH)
+        assert len(rows) == 1
+        assert rows[0]["id"] != oid
+        assert rows[0]["subject"] == "Will fail again"

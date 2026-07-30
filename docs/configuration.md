@@ -15,6 +15,25 @@
 
 The database (which holds keyword configuration), encryption key, and session secret live under `src/data/` (`/app/src/data/` in Docker) and are fixed to that location — they are not configurable via `.env`. Email credentials are configured at runtime via the web setup page — not in `.env`.
 
+## SMTP (outbound)
+
+`SMTP_SERVER` and `SMTP_PORT` are **defaults only**. You can override the host, port, and connection security at runtime from **Settings → Outbound**, where the values are stored in the database and take precedence over the env vars. The security mode options are:
+
+- **SSL/TLS** — implicit TLS, typically port 465 (the default)
+- **STARTTLS** — upgrades a plain connection, typically port 587
+- **None** — unencrypted (local testing only)
+
+SMTP authentication always reuses the IMAP account's email and password (single-account app). For providers like Gmail, use an **App Password** rather than your account password. Use the **Test connection** button on the same panel to verify a configuration before saving.
+
+### Outbox (failed-send retry)
+
+When a send cannot reach SMTP (network down, auth failure, etc.), the message is saved to the outbox queue and retried automatically by a background worker with backoff — 1m, 5m, 15m, 1h, 4h — up to 6 attempts. After that it is marked failed and waits on the **Outbox** page (`/outbox`) for a manual retry, edit, or delete. Failed sends are never silently lost. The worker only starts once email credentials are configured, so the queue is never active before setup is complete.
+
+### Outbound limits
+
+- **Send rate limit** — the compose endpoint allows up to **10 sends/minute** per account (keyed on the email user, or client IP when unset)
+- **Test-connection cooldown** — **Test connection** is limited to once every **20 seconds** to avoid hammering the server, and only performs a login — it sends no probe email
+
 ## Priority keywords
 
 Define priority levels as numeric keys, each containing a list of words or phrases to scan for. Emails are scanned against the subject and full body text. Keywords are managed from the dashboard at **Keywords** (`/keywords`) and stored in the database; the JSON shape below is what **Import** / **Export** use:

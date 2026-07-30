@@ -1,0 +1,106 @@
+/* Outbox queue list ----------------------------------------------------- */
+.outbox-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.outbox-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.outbox-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.outbox-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.outbox-subject {
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.outbox-to,
+.outbox-cc {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.outbox-attempts {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.outbox-error {
+  font-size: 0.78rem;
+  color: var(--danger);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.outbox-status {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-radius: var(--radius-pill);
+  background: var(--border);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.outbox-status-pending {
+  background: rgba(59, 130, 246, 0.15);
+  color: #2563eb;
+}
+
+.outbox-status-failed {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--danger);
+}
+
+.outbox-status-sending {
+  background: rgba(245, 158, 11, 0.15);
+  color: #b45309;
+}
+
+.outbox-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .outbox-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .outbox-actions {
+    justify-content: flex-end;
+  }
+}

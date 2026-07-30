@@ -4,8 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{% block title %}Email Reader{% endblock %}</title>
+    <link rel="icon" type="image/svg+xml" href="/static/imgs/icon.svg" />
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-    <script src="https://unpkg.com/htmx.org/dist/ext/sse.js"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
     <link rel="stylesheet" href="/static/theme.css" />
     <link rel="stylesheet" href="/static/style.css" />
@@ -13,13 +14,21 @@
     <script src="/static/js/theme-init.js"></script>
     {% block styles %}{% endblock %}
   </head>
-  <body>
+  <body hx-ext="sse" sse-connect="/api/events">
     {% include "partials/toast.html" %}
     <nav>
       <a href="/" class="brand">
         <i data-lucide="mail" class="icon-lg"></i>
         Email Reader
       </a>
+      <button type="button"
+              class="nav-hamburger"
+              aria-label="Open navigation menu"
+              aria-expanded="false"
+              aria-controls="mobile-menu"
+              data-mobile-menu-toggle>
+        <i data-lucide="menu" class="icon"></i>
+      </button>
       <div class="nav-links">
         <a href="/"
            class="{% if request.url.path == '/' %}active{% endif %}"
@@ -28,7 +37,7 @@
           <span class="nav-label">Dashboard</span>
         </a>
         <a href="/emails"
-           class="{% if '/emails' in request.url.path and request.url.path != '/emails/sent' %}active{% endif %}"
+           class="{% if request.url.path in ['/emails', '/emails/sent', '/drafts', '/outbox'] %}active{% endif %}"
            {% if request.url.path == '/emails' %}aria-current="page"{% endif %}>
           <i data-lucide="inbox" class="icon"></i>
           <span class="nav-label">Emails</span>
@@ -78,13 +87,78 @@
         {% endif %}
       </div>
     </nav>
-    <div class="container" hx-ext="sse" sse-connect="/api/events">
+    <div class="mobile-menu-backdrop" data-mobile-menu-close hidden></div>
+    <div id="mobile-menu"
+         class="mobile-menu"
+         hidden
+         role="navigation"
+         aria-label="Mobile navigation">
+      <div class="mobile-menu-header">
+        <span class="mobile-menu-title">Navigation</span>
+        <button type="button"
+                class="mobile-menu-close"
+                aria-label="Close navigation menu"
+                data-mobile-menu-close>
+          <i data-lucide="x" class="icon-md"></i>
+        </button>
+      </div>
+      <div class="mobile-menu-links">
+        <a href="/"
+           class="{% if request.url.path == '/' %}active{% endif %}"
+           {% if request.url.path == '/' %}aria-current="page"{% endif %}>
+          <i data-lucide="layout-dashboard" class="icon"></i>
+          <span>Dashboard</span>
+        </a>
+        <a href="/emails"
+           class="{% if request.url.path in ['/emails', '/emails/sent', '/drafts', '/outbox'] %}active{% endif %}"
+           {% if request.url.path == '/emails' %}aria-current="page"{% endif %}>
+          <i data-lucide="inbox" class="icon"></i>
+          <span>Emails</span>
+        </a>
+        <a href="/keywords"
+           class="{% if '/keywords' in request.url.path %}active{% endif %}"
+           {% if '/keywords' in request.url.path %}aria-current="page"{% endif %}>
+          <i data-lucide="tags" class="icon"></i>
+          <span>Keywords</span>
+        </a>
+        <a href="/settings"
+           class="{% if request.url.path == '/settings' %}active{% endif %}"
+           {% if request.url.path == '/settings' %}aria-current="page"{% endif %}>
+          <i data-lucide="settings" class="icon"></i>
+          <span>Settings</span>
+        </a>
+      </div>
+      <div class="mobile-menu-footer">
+        <button type="button"
+                class="mobile-menu-btn"
+                aria-label="Account"
+                hx-get="/partials/account"
+                hx-target="#account-modal-body"
+                hx-swap="innerHTML"
+                data-modal-open="account-modal"
+                data-mobile-menu-close>
+          <i data-lucide="user" class="icon"></i>
+          <span>Account</span>
+        </button>
+        {% if request.session.get("authed") %}
+          <form method="post" action="/logout" class="inline-form">
+            <button type="submit"
+                    class="mobile-menu-btn"
+                    aria-label="Log out"
+                    data-mobile-menu-close>
+              <i data-lucide="log-out" class="icon"></i>
+              <span>Log out</span>
+            </button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+    <div class="container">
       <div id="update-banner"
            hx-get="/partials/update-banner"
-           hx-trigger="load, sse:update_available from:/api/events"
+           hx-trigger="load, sse:update_available"
            hx-swap="outerHTML"></div>
-      {% block content %}
-      {% endblock %}
+      {% block content %}{% endblock %}
     </div>
     <div id="account-modal" class="account-modal" hidden>
       <div class="account-modal-backdrop" data-modal-close="account-modal"></div>
@@ -152,7 +226,8 @@
         <div id="compose-modal-body"></div>
       </div>
     </div>
-    {% block scripts %}{% endblock %}
+    {% block scripts %}
+    {% endblock %}
     <script src="/static/js/toast.js"></script>
     <script src="/static/js/base.js"></script>
   </body>

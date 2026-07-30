@@ -1426,6 +1426,28 @@ class TestFindSentFolder:
         fake_mail.list.return_value = ("OK", [b'(\\HasNoChildren) "/" "INBOX"'])
         assert email_reader.find_sent_folder(fake_mail) == "[Gmail]/Sent Mail"
 
+    def test_name_fallback_sent_items(self, fake_mail):
+        r"""Without the \Sent attribute, a 'Sent Items' folder is matched by name."""
+        fake_mail.list.return_value = (
+            "OK",
+            [b'(\\HasNoChildren) "/" "INBOX"', b'(\\HasNoChildren) "/" "Sent Items"'],
+        )
+        assert email_reader.find_sent_folder(fake_mail) == "Sent Items"
+
+    def test_name_fallback_uses_exact_match_over_leaf(self, fake_mail):
+        fake_mail.list.return_value = (
+            "OK",
+            [b'(\\HasNoChildren) "/" "INBOX"', b'(\\HasNoChildren) "/" "Sent Messages"'],
+        )
+        assert email_reader.find_sent_folder(fake_mail) == "Sent Messages"
+
+    def test_name_fallback_skips_unrelated_folders(self, fake_mail):
+        fake_mail.list.return_value = (
+            "OK",
+            [b'(\\HasNoChildren) "/" "Consent Forms"'],
+        )
+        assert email_reader.find_sent_folder(fake_mail) == "[Gmail]/Sent Mail"
+
 
 class TestSyncSentReplies:
     def _make_sent_raw(self, mid, in_reply_to=None):
@@ -1514,6 +1536,71 @@ class TestSyncSentReplies:
     def test_no_credentials_returns_zeros(self, monkeypatch, tmp_db):
         monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: False)
         assert email_reader.sync_sent_replies(db_path=tmp_db) == {"synced": 0, "skipped": 0, "reconciled": 0}
+
+    def test_new_sent_message_carries_starred_flag(self, monkeypatch, tmp_db, fake_credentials):
+        raw = (
+            "From: me@e.com\r\nSubject: Re: Hello\r\nDate: Tue, 02 Jan 2024 10:00:00 +0000\r\n"
+            "Message-ID: <starred@e.com>\r\n\r\nbody\r\n"
+        ).encode()
+
+        fake = MagicMock()
+        fake.list.return_value = ("OK", [b'(\\Sent) "/" "Sent"'])
+        fake.select.return_value = ("OK", [b""])
+        fake.uid.side_effect = [
+            ("OK", [b"1"]),
+            ("OK", [(b"UID 1 FLAGS (\\Flagged)", raw)]),
+            ("OK", [b"1"]),
+            ("OK", [(b"UID 1", raw)]),
+        ]
+        fake_imap_session(monkeypatch, imap_mod, fake)
+
+        result = email_reader.sync_sent_replies(db_path=tmp_db)
+        assert result["synced"] == 1
+
+        sent = cache.get_email_by_hash(tmp_db, cache._hash_message_id("<starred@e.com>"))
+        assert sent["is_sent"] == 1
+        assert sent["is_starred"] == 1
+        assert sent["is_read"] == 0
+
+    def test_existing_sent_message_flags_refreshed_from_server(self, monkeypatch, tmp_db, fake_credentials):
+        from src.tests._helpers import save_fetched
+
+        save_fetched(
+            {
+                "message_id": "<existing-sent@e.com>",
+                "from": "me@e.com",
+                "subject": "Re: Hello",
+                "date": "Tue, 02 Jan 2024 10:00:00 +0000",
+                "body": "reply",
+                "in_reply_to": "<orig@e.com>",
+            },
+            tmp_db,
+        )
+        existing = cache.get_email_by_hash(tmp_db, cache._hash_message_id("<existing-sent@e.com>"))
+        assert existing["is_read"] == 0
+        assert existing["is_starred"] == 0
+
+        raw = (
+            "From: me@e.com\r\nSubject: Re: Hello\r\nDate: Tue, 02 Jan 2024 10:00:00 +0000\r\n"
+            "Message-ID: <existing-sent@e.com>\r\n\r\nreply\r\n"
+        ).encode()
+
+        fake = MagicMock()
+        fake.list.return_value = ("OK", [b'(\\Sent) "/" "Sent"'])
+        fake.select.return_value = ("OK", [b""])
+        fake.uid.side_effect = [
+            ("OK", [b"1"]),
+            ("OK", [(b"UID 1 FLAGS (\\Seen \\Flagged)", raw)]),
+        ]
+        fake_imap_session(monkeypatch, imap_mod, fake)
+
+        result = email_reader.sync_sent_replies(db_path=tmp_db)
+        assert result["synced"] == 0
+        assert result["skipped"] == 1
+
+        refreshed = cache.get_email_by_hash(tmp_db, cache._hash_message_id("<existing-sent@e.com>"))
+        assert refreshed["is_read"] == 1
+        assert refreshed["is_starred"] == 1
 
     def test_empty_sent_folder_returns_zeros(self, monkeypatch, tmp_db, fake_credentials):
         fake = MagicMock()

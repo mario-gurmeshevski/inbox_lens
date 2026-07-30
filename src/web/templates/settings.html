@@ -167,6 +167,66 @@
         </div>
       {% endif %}
     </div>
+    <div class="detail-card">
+      <div class="settings-row">
+        <div class="settings-info">
+          <div class="settings-label">
+            <i data-lucide="send" class="icon"></i>
+            Outbound (SMTP)
+          </div>
+          <p class="settings-desc">
+            Server used to send mail. Host and port default to your
+            <code>SMTP_SERVER</code>/<code>SMTP_PORT</code> environment variables;
+            saving here overrides them. Login uses your account's email and
+            password (shared with IMAP — use an App Password for Gmail).
+          </p>
+        </div>
+      </div>
+      <form id="smtp-settings-form" class="settings-form" autocomplete="off">
+        <div class="settings-fields">
+          <label class="field">
+            <span class="field-label">SMTP host</span>
+            <input type="text"
+                   name="smtp_server"
+                   id="smtp_server"
+                   class="input"
+                   value="{{ smtp_server }}"
+                   placeholder="smtp.gmail.com" />
+          </label>
+          <label class="field field-sm">
+            <span class="field-label">Port</span>
+            <input type="number"
+                   name="smtp_port"
+                   id="smtp_port"
+                   class="input"
+                   value="{{ smtp_port }}"
+                   min="1"
+                   max="65535"
+                   placeholder="465" />
+          </label>
+          <label class="field field-sm">
+            <span class="field-label">Security</span>
+            <select name="smtp_security" id="smtp_security" class="input">
+              <option value="ssl" {% if smtp_security == "ssl" %}selected{% endif %}>SSL/TLS (465)</option>
+              <option value="starttls"
+                      {% if smtp_security == "starttls" %}selected{% endif %}>STARTTLS (587)</option>
+              <option value="none" {% if smtp_security == "none" %}selected{% endif %}>None</option>
+            </select>
+            <small class="settings-hint" id="smtp-security-warning" hidden>
+              Plaintext mode sends credentials unencrypted — not recommended.
+            </small>
+          </label>
+        </div>
+        <div class="settings-actions">
+          <button type="button" class="btn" id="smtp-save-btn">Save</button>
+          <button type="button" class="btn btn-secondary" id="smtp-test-btn">Test connection</button>
+          <span class="settings-inline-status"
+                id="smtp-test-status"
+                role="status"
+                aria-live="polite"></span>
+        </div>
+      </form>
+    </div>
   </section>
   <section class="settings-tab-panel"
            data-tab-panel="preferences"
@@ -595,4 +655,5 @@
   <script src="/static/js/update-panel.js"></script>
   <script src="/static/js/compose.js"></script>
   <script src="/static/js/signature.js"></script>
+  <script src="/static/js/smtp_settings.js"></script>
 {% endblock %}

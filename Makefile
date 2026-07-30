@@ -1,4 +1,4 @@
-.PHONY: install uninstall dev-install web test test-cov lint format unused pre-commit clean reset up up-ts down stop start restart tailscale-up tailscale-status tailscale-ip tailscale-logout purge
+.PHONY: install uninstall dev-install web test test-cov lint format unused pre-commit clean reset up up-ts down stop start restart tailscale-up tailscale-status tailscale-ip tailscale-logout prune prune-auto purge
 
 PYTHON ?= python3
 VENV := .venv
@@ -65,13 +65,21 @@ up:
 	@HOST_IP=$$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{for(i=1;i<=NF;i++)if($$i=="src")print $$(i+1)}' | head -1); \
 	test -n "$$HOST_IP" || HOST_IP=$$(ifconfig 2>/dev/null | grep "inet " | grep -v 127.0.0.1 | head -1 | awk '{print $$2}'); \
 	echo "Host IP: $${HOST_IP:-not found}"; \
-	HOST_IP="$$HOST_IP" docker compose up --build $(ARGS)
+	HOST_IP="$$HOST_IP" docker compose up --build $(ARGS) && $(MAKE) --no-print-directory prune-auto
 
 up-ts:
-	docker compose $(COMPOSE_FILES_TS) up --build $(ARGS)
+	docker compose $(COMPOSE_FILES_TS) up --build $(ARGS) && $(MAKE) --no-print-directory prune-auto
 
 down:
 	docker compose down --rmi local --volumes --remove-orphans
+
+prune-auto:
+	-@docker image prune -f || true
+	-@docker builder prune -f || true
+
+prune: prune-auto
+	-@docker image prune -a -f || true
+	-@docker container prune -f || true
 
 stop:
 	docker compose $(COMPOSE_FILES_TS) stop

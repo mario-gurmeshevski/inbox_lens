@@ -1,6 +1,9 @@
 (function () {
   "use strict";
 
+  // Folder dropdown state
+  let folderDropdownOpen = false;
+
   const selected = new Set();
   let moveTarget = null; // "bulk" or a single email_hash
 
@@ -238,12 +241,69 @@
     refresh();
   }
 
+  function initFolderDropdown() {
+    const toggle = document.querySelector("[data-folder-dropdown-toggle]");
+    const menu = document.querySelector("[data-folder-dropdown-menu]");
+
+    if (!toggle || !menu) return;
+
+    toggle.addEventListener("click", function (e) {
+      e.stopPropagation();
+      toggleFolderDropdown();
+    });
+
+    document.addEventListener("click", function (e) {
+      if (folderDropdownOpen && !toggle.contains(e.target) && !menu.contains(e.target)) {
+        closeFolderDropdown();
+      }
+    });
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && folderDropdownOpen) {
+        closeFolderDropdown();
+      }
+    });
+
+    menu.addEventListener("click", function (e) {
+      const link = e.target.closest("a");
+      if (link) {
+        closeFolderDropdown();
+      }
+    });
+  }
+
+  function toggleFolderDropdown() {
+    const toggle = document.querySelector("[data-folder-dropdown-toggle]");
+    const menu = document.querySelector("[data-folder-dropdown-menu]");
+    if (!toggle || !menu) return;
+
+    folderDropdownOpen = !folderDropdownOpen;
+    toggle.setAttribute("aria-expanded", folderDropdownOpen);
+    if (folderDropdownOpen) {
+      menu.classList.add("open");
+    } else {
+      menu.classList.remove("open");
+    }
+  }
+
+  function closeFolderDropdown() {
+    const toggle = document.querySelector("[data-folder-dropdown-toggle]");
+    const menu = document.querySelector("[data-folder-dropdown-menu]");
+    if (!toggle || !menu) return;
+
+    folderDropdownOpen = false;
+    toggle.setAttribute("aria-expanded", "false");
+    menu.classList.remove("open");
+  }
+
   window.openFolderModal = openFolderModal;
   window.closeFolderModal = closeFolderModal;
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);
+    document.addEventListener("DOMContentLoaded", initFolderDropdown);
   } else {
     init();
+    initFolderDropdown();
   }
 })();

@@ -220,6 +220,29 @@
       });
   }
 
+  function loadOutbox(outboxId) {
+    fetch("/partials/compose-outbox/" + encodeURIComponent(outboxId), {
+      headers: { Accept: "text/html" },
+    })
+      .then(function (resp) {
+        if (!resp.ok) throw new Error("Failed to load outbox message");
+        return resp.text();
+      })
+      .then(function (html) {
+        openComposeModal(html);
+        const form = document.getElementById("compose-form");
+        if (form) {
+          const cc = form.elements["cc"];
+          const bcc = form.elements["bcc"];
+          if ((cc && cc.value) || (bcc && bcc.value)) wireCcToggle();
+        }
+        placeCursor();
+      })
+      .catch(function () {
+        if (typeof window.showToast === "function") window.showToast("Could not load outbox message", "error");
+      });
+  }
+
   function submitCompose(form) {
     const sendBtn = document.getElementById("compose-send-btn");
     if (sendBtn) sendBtn.disabled = true;
@@ -273,6 +296,14 @@
     if (resumeBtn) {
       e.preventDefault();
       loadDraft(resumeBtn.getAttribute("data-draft-resume"));
+    }
+  });
+
+  document.addEventListener("click", function (e) {
+    const editBtn = e.target.closest("[data-outbox-edit]");
+    if (editBtn) {
+      e.preventDefault();
+      loadOutbox(editBtn.getAttribute("data-outbox-edit"));
     }
   });
 

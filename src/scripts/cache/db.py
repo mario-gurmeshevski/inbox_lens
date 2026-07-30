@@ -63,6 +63,28 @@ CREATE TABLE IF NOT EXISTS drafts (
     updated_at   TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_drafts_updated ON drafts(updated_at);
+
+CREATE TABLE IF NOT EXISTS outbox (
+    id                 TEXT PRIMARY KEY,
+    to_addr            TEXT,
+    cc                 TEXT,
+    bcc                TEXT,
+    subject            TEXT,
+    body               TEXT,
+    body_html          TEXT,
+    mode               TEXT,
+    original_message_id TEXT,
+    thread_id          TEXT,
+    draft_id           TEXT,
+    status             TEXT DEFAULT 'pending',
+    attempts           INTEGER DEFAULT 0,
+    last_error         TEXT,
+    next_attempt_at    TEXT,
+    created_at         TEXT DEFAULT (datetime('now')),
+    updated_at         TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status);
+CREATE INDEX IF NOT EXISTS idx_outbox_next ON outbox(status, next_attempt_at);
 """
 
 
@@ -145,7 +167,7 @@ def _connect(db_path: str):
         raise
 
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 
 def _migrate(db_path: str) -> None:
@@ -181,6 +203,29 @@ def _migrate(db_path: str) -> None:
             ")"
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_drafts_updated ON drafts(updated_at)")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS outbox (\n"
+            "    id                 TEXT PRIMARY KEY,\n"
+            "    to_addr            TEXT,\n"
+            "    cc                 TEXT,\n"
+            "    bcc                TEXT,\n"
+            "    subject            TEXT,\n"
+            "    body               TEXT,\n"
+            "    body_html          TEXT,\n"
+            "    mode               TEXT,\n"
+            "    original_message_id TEXT,\n"
+            "    thread_id          TEXT,\n"
+            "    draft_id           TEXT,\n"
+            "    status             TEXT DEFAULT 'pending',\n"
+            "    attempts           INTEGER DEFAULT 0,\n"
+            "    last_error         TEXT,\n"
+            "    next_attempt_at    TEXT,\n"
+            "    created_at         TEXT DEFAULT (datetime('now')),\n"
+            "    updated_at         TEXT DEFAULT (datetime('now'))\n"
+            ")"
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_outbox_next ON outbox(status, next_attempt_at)")
         needs_backfill = conn.execute("SELECT 1 FROM emails WHERE thread_id IS NULL LIMIT 1").fetchone()
         if needs_backfill:
             conn.execute("UPDATE emails SET thread_id = message_id_hash WHERE thread_id IS NULL")

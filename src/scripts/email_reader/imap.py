@@ -532,9 +532,7 @@ def sync_sent_replies(db_path=None) -> dict:
                     continue
                 h = cache._hash_message_id(mid)
                 all_sent_hashes.append(h)
-                all_flag_updates.append(
-                    (header.get("is_read", False), header.get("is_starred", False), h)
-                )
+                all_flag_updates.append((header.get("is_read", False), header.get("is_starred", False), h))
                 if cache.check_hashes_exist(db_path, [h]):
                     skipped += 1
                     thread_id = header.get("thread_id") or h

@@ -180,9 +180,7 @@ class TestReexport:
         assert cache.delete_outbox(oid, tmp_db) is True
 
     def test_cache_mark_sent_is_the_emails_version_not_outbox(self, tmp_db):
-        cache.save_headers_batch(
-            [{"message_id": "<m@e.com>", "from": "a@b.com", "subject": "S", "date": ""}], tmp_db
-        )
+        cache.save_headers_batch([{"message_id": "<m@e.com>", "from": "a@b.com", "subject": "S", "date": ""}], tmp_db)
         h = cache._hash_message_id("<m@e.com>")
         cache.mark_sent([h], tmp_db)
         assert not hasattr(cache.outbox, "mark_sent")
@@ -219,9 +217,7 @@ class TestMigration:
             conn.execute("PRAGMA user_version = 3")
         cache.init_db(db_path)
         with _connect(db_path) as conn:
-            tables = {
-                row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-            }
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
             assert "outbox" in tables
             assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
         oid = outbox.enqueue(_payload(), db_path)

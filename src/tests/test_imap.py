@@ -1564,6 +1564,7 @@ class TestSyncSentReplies:
 
     def test_existing_sent_message_flags_refreshed_from_server(self, monkeypatch, tmp_db, fake_credentials):
         from src.tests._helpers import save_fetched
+
         save_fetched(
             {
                 "message_id": "<existing-sent@e.com>",

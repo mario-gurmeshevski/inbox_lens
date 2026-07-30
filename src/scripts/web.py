@@ -915,9 +915,7 @@ async def settings_smtp_test(request: Request):
     except Exception:
         return _toast("Invalid SMTP port.", "error")
     try:
-        result = await asyncio.to_thread(
-            email_reader.test_smtp_connection, server, port, security, DB_PATH
-        )
+        result = await asyncio.to_thread(email_reader.test_smtp_connection, server, port, security, DB_PATH)
     except Exception:
         logger.warning("SMTP connection test failed", exc_info=True)
         return _toast("Could not test SMTP connection.", "error")

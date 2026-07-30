@@ -263,8 +263,8 @@ class TestWebEndpoints:
             client = self._make_client()
             resp = client.get("/emails")
         assert 'href="/emails/sent"' in resp.text
-        assert 'folder-dropdown' in resp.text
-        assert 'Sent' in resp.text
+        assert "folder-dropdown" in resp.text
+        assert "Sent" in resp.text
 
     def test_inbox_hides_sent_by_default(self):
         self._seed_emails(1)
@@ -3052,8 +3052,8 @@ class TestDrafts:
         resp = web_client.get("/emails")
         assert resp.status_code == 200
         assert 'href="/drafts"' in resp.text
-        assert 'folder-dropdown' in resp.text
-        assert 'Drafts' in resp.text
+        assert "folder-dropdown" in resp.text
+        assert "Drafts" in resp.text
 
 
 class TestComposeModalShell:
@@ -3518,4 +3518,3 @@ class TestOutbox:
         assert len(rows) == 1
         assert rows[0]["id"] != oid
         assert rows[0]["subject"] == "Will fail again"
-

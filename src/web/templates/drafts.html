@@ -21,31 +21,21 @@
         <i data-lucide="chevron-down" class="icon-sm folder-chevron"></i>
       </button>
       <span class="total-count">({{ drafts|length }} total)</span>
-      <ul class="folder-dropdown-menu" role="menu" aria-label="Email folders" data-folder-dropdown-menu>
+      <ul class="folder-dropdown-menu"
+          role="menu"
+          aria-label="Email folders"
+          data-folder-dropdown-menu>
         <li role="menuitem">
-          <a href="/emails"
-             class="">
-            Inbox
-          </a>
+          <a href="/emails" class="">Inbox</a>
         </li>
         <li role="menuitem">
-          <a href="/emails/sent"
-             class="">
-            Sent
-          </a>
+          <a href="/emails/sent" class="">Sent</a>
         </li>
         <li role="menuitem">
-          <a href="/drafts"
-             class="active"
-             aria-current="page">
-            Drafts
-          </a>
+          <a href="/drafts" class="active" aria-current="page">Drafts</a>
         </li>
         <li role="menuitem">
-          <a href="/outbox"
-             class="">
-            Outbox
-          </a>
+          <a href="/outbox" class="">Outbox</a>
         </li>
       </ul>
     </h1>

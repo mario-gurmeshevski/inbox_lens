@@ -96,9 +96,7 @@ class TestAttemptSuccess:
             captured.update(to=to_addrs, cc=cc_addrs, bcc=bcc_addrs, subject=subject, mode=mode)
 
         monkeypatch.setattr(email_reader, "send_message", fake_send)
-        oid = cache.enqueue(
-            _payload(to_addr="a@x.com, b@x.com", cc="c@x.com", subject="Hi", mode="reply"), tmp_db
-        )
+        oid = cache.enqueue(_payload(to_addr="a@x.com, b@x.com", cc="c@x.com", subject="Hi", mode="reply"), tmp_db)
         row = cache.get_outbox(oid, tmp_db)
         ow.OutboxWorker(db_path=tmp_db)._attempt(row)
         assert captured["to"] == ["a@x.com", "b@x.com"]
@@ -123,9 +121,7 @@ class TestAttemptFailure:
         updated = cache.get_outbox(oid, tmp_db)
         assert updated["status"] == "pending"
         assert updated["attempts"] == 1
-        next_at = datetime.strptime(updated["next_attempt_at"], "%Y-%m-%d %H:%M:%S").replace(
-            tzinfo=timezone.utc
-        )
+        next_at = datetime.strptime(updated["next_attempt_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
         now = datetime.now(timezone.utc)
         assert now + timedelta(seconds=50) <= next_at <= now + timedelta(seconds=70)
         assert "smtp down" in updated["last_error"]
@@ -178,9 +174,7 @@ class TestProcessBatch:
     def test_no_due_rows_is_noop(self, tmp_db, monkeypatch):
         monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
         called = {"n": 0}
-        monkeypatch.setattr(
-            email_reader, "send_message", lambda *a, **k: called.__setitem__("n", called["n"] + 1)
-        )
+        monkeypatch.setattr(email_reader, "send_message", lambda *a, **k: called.__setitem__("n", called["n"] + 1))
         ow.OutboxWorker(db_path=tmp_db)._process_batch()
         assert called["n"] == 0
 
@@ -191,9 +185,7 @@ class TestWorkerLifecycle:
         monkeypatch.setattr(ow, "POLL_INTERVAL", 0.01)
         cache.enqueue(_payload(), tmp_db)
         called = {"n": 0}
-        monkeypatch.setattr(
-            email_reader, "send_message", lambda *a, **k: called.__setitem__("n", called["n"] + 1)
-        )
+        monkeypatch.setattr(email_reader, "send_message", lambda *a, **k: called.__setitem__("n", called["n"] + 1))
 
         worker = ow.OutboxWorker(db_path=tmp_db)
         worker.start()
@@ -210,6 +202,7 @@ class TestWorkerLifecycle:
 class TestConcurrentWorkers:
     def test_two_workers_do_not_duplicate_send(self, tmp_db, monkeypatch):
         import threading as _threading
+
         n_rows = 20
         monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
         oids = [cache.enqueue(_payload(subject=f"S{i}"), tmp_db) for i in range(n_rows)]

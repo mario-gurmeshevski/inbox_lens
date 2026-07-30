@@ -117,6 +117,7 @@ class OutboxWorker:
         except Exception:
             logger.debug("on_change callback error", exc_info=True)
 
+
 def _split_addrs(value: str | None) -> list[str]:
     if not value:
         return []

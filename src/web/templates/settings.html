@@ -182,9 +182,7 @@
           </p>
         </div>
       </div>
-      <form id="smtp-settings-form"
-            class="settings-form"
-            autocomplete="off">
+      <form id="smtp-settings-form" class="settings-form" autocomplete="off">
         <div class="settings-fields">
           <label class="field">
             <span class="field-label">SMTP host</span>
@@ -209,12 +207,10 @@
           <label class="field field-sm">
             <span class="field-label">Security</span>
             <select name="smtp_security" id="smtp_security" class="input">
-              <option value="ssl"
-                      {% if smtp_security == "ssl" %}selected{% endif %}>SSL/TLS (465)</option>
+              <option value="ssl" {% if smtp_security == "ssl" %}selected{% endif %}>SSL/TLS (465)</option>
               <option value="starttls"
                       {% if smtp_security == "starttls" %}selected{% endif %}>STARTTLS (587)</option>
-              <option value="none"
-                      {% if smtp_security == "none" %}selected{% endif %}>None</option>
+              <option value="none" {% if smtp_security == "none" %}selected{% endif %}>None</option>
             </select>
             <small class="settings-hint" id="smtp-security-warning" hidden>
               Plaintext mode sends credentials unencrypted — not recommended.
@@ -223,9 +219,7 @@
         </div>
         <div class="settings-actions">
           <button type="button" class="btn" id="smtp-save-btn">Save</button>
-          <button type="button"
-                  class="btn btn-secondary"
-                  id="smtp-test-btn">Test connection</button>
+          <button type="button" class="btn btn-secondary" id="smtp-test-btn">Test connection</button>
           <span class="settings-inline-status"
                 id="smtp-test-status"
                 role="status"

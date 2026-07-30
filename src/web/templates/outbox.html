@@ -21,31 +21,21 @@
         <i data-lucide="chevron-down" class="icon-sm folder-chevron"></i>
       </button>
       <span class="total-count">({{ items|length }} total)</span>
-      <ul class="folder-dropdown-menu" role="menu" aria-label="Email folders" data-folder-dropdown-menu>
+      <ul class="folder-dropdown-menu"
+          role="menu"
+          aria-label="Email folders"
+          data-folder-dropdown-menu>
         <li role="menuitem">
-          <a href="/emails"
-             class="">
-            Inbox
-          </a>
+          <a href="/emails" class="">Inbox</a>
         </li>
         <li role="menuitem">
-          <a href="/emails/sent"
-             class="">
-            Sent
-          </a>
+          <a href="/emails/sent" class="">Sent</a>
         </li>
         <li role="menuitem">
-          <a href="/drafts"
-             class="">
-            Drafts
-          </a>
+          <a href="/drafts" class="">Drafts</a>
         </li>
         <li role="menuitem">
-          <a href="/outbox"
-             class="active"
-             aria-current="page">
-            Outbox
-          </a>
+          <a href="/outbox" class="active" aria-current="page">Outbox</a>
         </li>
       </ul>
     </h1>
@@ -68,12 +58,11 @@
             <span class="outbox-to">To: {{ it.to_addr or "—" }}</span>
             {% if it.cc %}<span class="outbox-cc">Cc: {{ it.cc }}</span>{% endif %}
             <span class="outbox-attempts">
-              {{ it.attempts }} attempt{% if it.attempts != 1 %}s{% endif %}
+              {{ it.attempts }} attempt
+              {% if it.attempts != 1 %}s{% endif %}
               {% if it.next_attempt_display %}&middot; retry ~{{ it.next_attempt_display }}{% endif %}
             </span>
-            {% if it.last_error %}
-              <span class="outbox-error" title="{{ it.last_error }}">{{ it.last_error }}</span>
-            {% endif %}
+            {% if it.last_error %}<span class="outbox-error" title="{{ it.last_error }}">{{ it.last_error }}</span>{% endif %}
           </div>
           <div class="outbox-actions">
             <button type="button"
@@ -85,7 +74,9 @@
                     hx-post="/outbox/{{ it.id }}/retry"
                     hx-target="this"
                     title="Try sending again now">Retry</button>
-            <form method="post" action="/outbox/{{ it.id }}/delete" style="display:inline">
+            <form method="post"
+                  action="/outbox/{{ it.id }}/delete"
+                  style="display:inline">
               <button type="submit" class="btn btn-sm btn-danger" aria-label="Delete">Delete</button>
             </form>
           </div>

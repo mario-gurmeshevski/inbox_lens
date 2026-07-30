@@ -105,16 +105,13 @@ def reclaim_stale_sending(db_path: str = DB_PATH, max_age_seconds: int = STALE_S
 def mark_attempting(outbox_id: str, db_path: str = DB_PATH) -> bool:
     with _connect(db_path) as conn:
         cursor = conn.execute(
-            "UPDATE outbox SET status = ?, updated_at = datetime('now') "
-            "WHERE id = ? AND status = ?",
+            "UPDATE outbox SET status = ?, updated_at = datetime('now') WHERE id = ? AND status = ?",
             (STATUS_SENDING, outbox_id, STATUS_PENDING),
         )
     return cursor.rowcount > 0
 
 
-def mark_failed(
-    outbox_id: str, error: str, next_attempt_at: str | None, db_path: str = DB_PATH
-) -> bool:
+def mark_failed(outbox_id: str, error: str, next_attempt_at: str | None, db_path: str = DB_PATH) -> bool:
     status = STATUS_FAILED if next_attempt_at is None else STATUS_PENDING
     truncated = (error or "")[:500]
     with _connect(db_path) as conn:
@@ -130,8 +127,7 @@ def mark_failed(
 def mark_pending(outbox_id: str, db_path: str = DB_PATH) -> bool:
     with _connect(db_path) as conn:
         cursor = conn.execute(
-            "UPDATE outbox SET status = ?, next_attempt_at = NULL, "
-            "updated_at = datetime('now') WHERE id = ?",
+            "UPDATE outbox SET status = ?, next_attempt_at = NULL, updated_at = datetime('now') WHERE id = ?",
             (STATUS_PENDING, outbox_id),
         )
     return cursor.rowcount > 0

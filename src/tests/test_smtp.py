@@ -348,5 +348,127 @@ class TestPackageReexport:
     def test_symbols_available_on_package(self):
         from src.scripts import email_reader
 
-        for name in ("smtp_session", "build_message", "send_message"):
+        for name in (
+            "smtp_session",
+            "build_message",
+            "send_message",
+            "test_smtp_connection",
+            "SECURITY_SSL",
+            "SECURITY_STARTTLS",
+            "SECURITY_NONE",
+        ):
             assert hasattr(email_reader, name), f"email_reader.{name} missing"
+
+
+class TestSmtpConfig:
+    def test_defaults_when_no_settings(self, tmp_db):
+        assert smtp_mod._smtp_config(tmp_db) == ("smtp.gmail.com", 465, smtp_mod.SECURITY_SSL)
+
+    def test_settings_override_env_defaults(self, tmp_db):
+        cache.save_setting("smtp_server", "mail.example.com", tmp_db)
+        cache.save_setting("smtp_port", "587", tmp_db)
+        cache.save_setting("smtp_security", "STARTTLS", tmp_db)
+        assert smtp_mod._smtp_config(tmp_db) == ("mail.example.com", 587, smtp_mod.SECURITY_STARTTLS)
+
+    def test_invalid_security_falls_back_to_ssl(self, tmp_db):
+        cache.save_setting("smtp_security", "bogus", tmp_db)
+        assert smtp_mod._smtp_config(tmp_db)[2] == smtp_mod.SECURITY_SSL
+
+    def test_invalid_port_in_settings_falls_back(self, tmp_db):
+        cache.save_setting("smtp_port", "not-a-port", tmp_db)
+        assert smtp_mod._smtp_config(tmp_db)[1] == 465
+
+    def test_unreadable_db_falls_back_to_env_defaults(self, monkeypatch):
+        def boom(*a, **k):
+            raise RuntimeError("db gone")
+
+        monkeypatch.setattr(cache, "get_setting", boom)
+        server, port, security = smtp_mod._smtp_config("/nope/db")
+        assert server == "smtp.gmail.com"
+        assert port == 465
+        assert security == smtp_mod.SECURITY_SSL
+
+
+class TestSmtpSessionSecurity:
+    def test_uses_settings_over_env(self, monkeypatch, tmp_db):
+        cache.save_setting("smtp_server", "mail.example.com", tmp_db)
+        cache.save_setting("smtp_port", "587", tmp_db)
+        cache.save_setting("smtp_security", "starttls", tmp_db)
+        monkeypatch.setattr(cache, "get_email_credentials", lambda db_path=None: ("u@e.com", "secret"))
+        fake = MagicMock(name="smtp")
+        with patch.object(smtp_mod.smtplib, "SMTP", return_value=fake) as mock_ctor:
+            with patch.object(smtp_mod.smtplib, "SMTP_SSL", return_value=fake) as mock_ssl:
+                with smtp_mod.smtp_session(tmp_db) as conn:
+                    assert conn is fake
+        mock_ssl.assert_not_called()
+        mock_ctor.assert_called_once_with("mail.example.com", 587, timeout=smtp_mod.SMTP_TIMEOUT)
+        fake.starttls.assert_called_once()
+        fake.login.assert_called_once_with("u@e.com", "secret")
+        fake.quit.assert_called_once()
+
+
+class TestOpenSmtp:
+    def test_ssl_mode_uses_smtp_ssl(self):
+        fake = MagicMock(name="ssl")
+        with patch.object(smtp_mod.smtplib, "SMTP_SSL", return_value=fake) as ctor:
+            assert smtp_mod._open_smtp("h", 465, smtp_mod.SECURITY_SSL) is fake
+        ctor.assert_called_once_with("h", 465, timeout=smtp_mod.SMTP_TIMEOUT)
+
+    def test_none_mode_uses_plain_smtp_no_starttls(self):
+        fake = MagicMock(name="plain")
+        with patch.object(smtp_mod.smtplib, "SMTP", return_value=fake) as ctor:
+            assert smtp_mod._open_smtp("h", 25, smtp_mod.SECURITY_NONE) is fake
+        ctor.assert_called_once_with("h", 25, timeout=smtp_mod.SMTP_TIMEOUT)
+        fake.starttls.assert_not_called()
+
+    def test_starttls_mode_upgrades(self):
+        fake = MagicMock(name="starttls")
+        with patch.object(smtp_mod.smtplib, "SMTP", return_value=fake) as ctor:
+            assert smtp_mod._open_smtp("h", 587, smtp_mod.SECURITY_STARTTLS) is fake
+        ctor.assert_called_once_with("h", 587, timeout=smtp_mod.SMTP_TIMEOUT)
+        fake.starttls.assert_called_once()
+
+
+class TestTestSmtpConnection:
+    def test_success_on_login(self, monkeypatch, tmp_db):
+        monkeypatch.setattr(cache, "get_email_credentials", lambda db_path=None: ("u@e.com", "secret"))
+        fake = MagicMock(name="smtp")
+        with patch.object(smtp_mod.smtplib, "SMTP_SSL", return_value=fake):
+            result = smtp_mod.test_smtp_connection("smtp.x.com", "465", "ssl", db_path=tmp_db)
+        assert result == {
+            "success": True,
+            "server": "smtp.x.com:465",
+            "security": "ssl",
+        }
+        fake.login.assert_called_once_with("u@e.com", "secret")
+        fake.quit.assert_called_once()
+
+    def test_auth_failure_message(self, monkeypatch, tmp_db):
+        monkeypatch.setattr(cache, "get_email_credentials", lambda db_path=None: ("u@e.com", "secret"))
+        fake = MagicMock(name="smtp")
+        fake.login.side_effect = smtplib.SMTPAuthenticationError(535, b"auth failed")
+        with patch.object(smtp_mod.smtplib, "SMTP_SSL", return_value=fake):
+            result = smtp_mod.test_smtp_connection("smtp.x.com", 465, "ssl", db_path=tmp_db)
+        assert result["success"] is False
+        assert "Authentication failed" in result["error"]
+
+    def test_generic_error_returns_sanitized_message(self, monkeypatch, tmp_db):
+        monkeypatch.setattr(cache, "get_email_credentials", lambda db_path=None: ("u@e.com", "secret"))
+        fake = MagicMock(name="smtp")
+        fake.login.side_effect = OSError("connection refused")
+        with patch.object(smtp_mod.smtplib, "SMTP_SSL", return_value=fake):
+            result = smtp_mod.test_smtp_connection("smtp.x.com", 465, "ssl", db_path=tmp_db)
+        assert result["success"] is False
+        assert "connection refused" not in result["error"]
+        assert "Could not reach the SMTP server" in result["error"]
+
+    def test_normalizes_security_and_port(self, monkeypatch, tmp_db):
+        monkeypatch.setattr(cache, "get_email_credentials", lambda db_path=None: ("u@e.com", "secret"))
+        fake = MagicMock(name="smtp")
+        with patch.object(smtp_mod.smtplib, "SMTP", return_value=fake) as ctor:
+            result = smtp_mod.test_smtp_connection("smtp.x.com", "587", "STARTTLS", db_path=tmp_db)
+        assert result["success"] is True
+        assert result["security"] == "starttls"
+        ctor.assert_called_once_with("smtp.x.com", 587, timeout=smtp_mod.SMTP_TIMEOUT)
+        fake.starttls.assert_called_once()
+        fake.quit.assert_called_once()

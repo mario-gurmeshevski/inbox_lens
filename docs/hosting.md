@@ -28,6 +28,8 @@ make up-ts # For Mac/Linux
 
 ```
 
+**Host disk** — every successful `make up` / `make up-ts` build automatically prunes dangling images (the orphaned previous build) and unused build cache via `make prune-auto`, so the host doesn't accumulate Docker bloat over time. It never touches volumes, running containers, or tagged images you keep around. For a deeper clean (all unused images + stopped containers), run `make prune` manually.
+
 On first visit you'll be redirected to the setup page to connect your email account.
 
 **Data persistence** — `docker-compose.yaml` persists data in the named `inbox-lens-data` volume so the database (including keyword configuration), encryption key, and session secret survive container restarts and image updates.

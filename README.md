@@ -94,13 +94,14 @@ Open `http://localhost:8000` — on first visit you'll be prompted to connect yo
 - **Live auto-refresh** — real-time updates over SSE as new emails arrive via IMAP IDLE (no page reload)
 - **Filterable email list** — search/filter by status and priority, paginated, with bulk actions (read/unread, star, archive, delete, move)
 - **Email detail** — rendered Markdown body, color-coded keyword tags, threaded conversations
-- **Reply, forward & compose** — compose modal with CC/BCC, a Markdown toolbar, and an HTML part; 10 sends/minute rate limit
+- **Reply, forward & compose** — compose modal with CC/BCC, a Markdown toolbar, and an HTML part; 10 sends/minute rate limit. Failed sends are never lost — they queue for automatic retry (see Outbox)
 - **Drafts** — autosave every 2 seconds, resumable on the Drafts page; stale drafts pruned after 30 days
 - **Signature** — persistent Markdown signature appended to every compose, re-synced to drafts
-- **Sent inbox** — dedicated view for outbound mail; optionally shown inline in the main inbox
+- **Sent inbox** — dedicated view for outbound mail; optionally shown inline in the main inbox. Sent-folder sync refreshes read/starred flags from the server and resolves the Sent folder by name for non-Gmail providers
+- **Outbox** — when a send can't reach SMTP, the message is saved to an Outbox queue and retried automatically with backoff (1m, 5m, 15m, 1h, 4h) up to 6 attempts; retry, edit, or delete from the Outbox page
 - **Move to folder** — IMAP mailbox picker with validated folder names
 - **Keyword editor** — inline add/edit/remove words and categories, JSON import/export, retroactive re-scan
-- **Settings page** — network access, signature, sent-mail visibility, local IPs/access URLs
+- **Settings page** — network access, signature, sent-mail visibility, local IPs/access URLs, and **Outbound (SMTP)** config — override host/port/security (SSL/TLS, STARTTLS, None) and verify with a Test connection button
 - **In-app updates** — dismissible update banner + Settings panel; optional one-click self-update for Docker
 - **Account page** — connected address, masked password, disconnect
 - **Responsive** — mobile-friendly layouts, touch-optimized controls, safe-area support

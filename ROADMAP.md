@@ -26,4 +26,3 @@ Expand beyond Gmail to support other major email providers out of the box.
 Manage emails directly from the dashboard without leaving the UI.
 
 - **Attachments:** Upload files with size validation and forward original attachments via IMAP.
-- **Outbound Reliability:** Sent folder syncing, an offline outbox queue, and SMTP connection testing in the UI.

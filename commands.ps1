@@ -27,6 +27,8 @@ if (-not $Task) {
     Write-Host "  up               Start Docker Compose (auto-detect host IP)"
     Write-Host "  up-ts            Start Docker Compose with Tailscale"
     Write-Host "  down             Stop and remove Docker Compose"
+    Write-Host "  prune            Remove unused Docker images, build cache, stopped containers (no volumes)"
+    Write-Host "  prune-auto       Remove dangling images + build cache only (runs automatically after up)"
     Write-Host "  stop             Stop Docker Compose containers (no data removed)"
     Write-Host "  start            Start previously-stopped Docker Compose containers"
     Write-Host "  restart          Restart running Docker Compose containers"
@@ -74,6 +76,18 @@ function Get-HostIP {
     if ($conn) { return $conn.LocalAddress }
     $ip = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -ne '127.0.0.1' } | Select-Object -First 1).IPAddress
     return $ip
+}
+
+function Invoke-PruneAuto {
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { return }
+    $reclaimed = (docker image prune -f 2>$null | ConvertFrom-Json -ErrorAction SilentlyContinue)
+    $cacheReclaimed = (docker builder prune -f 2>$null | ConvertFrom-Json -ErrorAction SilentlyContinue)
+    $total = 0
+    if ($reclaimed -and $reclaimed.SpaceReclaimed) { $total += [int64]$reclaimed.SpaceReclaimed }
+    if ($cacheReclaimed -and $cacheReclaimed.SpaceReclaimed) { $total += [int64]$cacheReclaimed.SpaceReclaimed }
+    if ($total -gt 0) {
+        Write-Host ("Auto-prune reclaimed {0:N0} bytes of dangling images + build cache." -f $total)
+    }
 }
 
 function Invoke-Clean {
@@ -173,12 +187,27 @@ switch ($Task) {
         $argList = @("compose", "up", "--build")
         if ($ExtraArgs) { $argList += $ExtraArgs }
         & docker @argList
+        if ($LASTEXITCODE -eq 0) { Invoke-PruneAuto }
     }
 
     "up-ts" {
         $argList = @("compose") + $COMPOSE_FILES_TS + @("up", "--build")
         if ($ExtraArgs) { $argList += $ExtraArgs }
         & docker @argList
+        if ($LASTEXITCODE -eq 0) { Invoke-PruneAuto }
+    }
+
+    "prune-auto" {
+        Invoke-PruneAuto
+    }
+
+    "prune" {
+        Invoke-PruneAuto
+        if (Get-Command docker -ErrorAction SilentlyContinue) {
+            docker image prune -a -f 2>$null | Out-Null
+            docker container prune -f 2>$null | Out-Null
+            Write-Host "Deep prune complete."
+        }
     }
 
     "down" {

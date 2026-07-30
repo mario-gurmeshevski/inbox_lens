@@ -29,6 +29,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from src.scripts import email_reader, cache, idle_monitor, event_bus, updater
 from src.scripts import auth
+from src.scripts import outbox_worker
 from src.scripts.constants import DB_PATH
 from src.scripts.utils import _priority_bucket
 
@@ -41,6 +42,7 @@ SESSION_COOKIE_MAX_AGE = int(os.getenv("SESSION_COOKIE_MAX_AGE", "2592000"))
 
 _monitor: idle_monitor.IdleMonitor | None = None
 _update_checker: updater.UpdateChecker | None = None
+_outbox_worker: "outbox_worker.OutboxWorker | None" = None
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +56,8 @@ def _on_update_available(result: dict) -> None:
 
 def _start_monitor() -> None:
     global _monitor
+    if _monitor is not None and _monitor.running:
+        return
     _monitor = idle_monitor.IdleMonitor(
         db_path=DB_PATH,
         on_refresh=lambda: event_bus.bus.publish("refresh"),
@@ -65,6 +69,17 @@ def _start_monitor() -> None:
     )
     t.start()
     _monitor.start()
+
+
+def _start_outbox_worker() -> None:
+    global _outbox_worker
+    if _outbox_worker is not None and _outbox_worker.running:
+        return
+    _outbox_worker = outbox_worker.OutboxWorker(
+        db_path=DB_PATH,
+        on_change=lambda: event_bus.bus.publish("refresh"),
+    )
+    _outbox_worker.start()
 
 
 @asynccontextmanager
@@ -83,6 +98,7 @@ async def lifespan(app: FastAPI):
 
     if cache.has_email_credentials(DB_PATH):
         _start_monitor()
+        _start_outbox_worker()
 
     if updater.is_docker_environment():
         if updater.cleanup_stale_containers():
@@ -96,6 +112,8 @@ async def lifespan(app: FastAPI):
         _update_checker.stop()
     if _monitor:
         _monitor.stop()
+    if _outbox_worker:
+        _outbox_worker.stop()
     _imap_executor.shutdown(wait=False, cancel_futures=True)
 
 
@@ -600,6 +618,7 @@ async def setup_submit(request: Request):
     email_reader.reset_folder_caches()
 
     _start_monitor()
+    _start_outbox_worker()
 
     return RedirectResponse("/", status_code=303)
 
@@ -804,6 +823,7 @@ def _settings_context(
     tailscale_login_url = _get_tailscale_login_url()
     ts_state = _tailscale_state(tailscale_ip, tailscale_login_url)
     port = WEB_PORT
+    smtp_server, smtp_port, smtp_security = email_reader.smtp_config(db_path)
     return {
         "network_access": network_on,
         "local_ips": local_ips,
@@ -835,6 +855,9 @@ def _settings_context(
         "theme": theme,
         "signature": cache.get_setting("signature", db_path) or "",
         "show_sent_in_inbox": bool(cache.get_setting("show_sent_in_inbox", db_path)),
+        "smtp_server": smtp_server,
+        "smtp_port": smtp_port,
+        "smtp_security": smtp_security,
     }
 
 
@@ -849,6 +872,60 @@ async def settings_network_access(request: Request):
     enabled = str(form.get("enabled", "false")).strip()
     cache.save_setting("network_access", enabled, DB_PATH)
     return templates.TemplateResponse(request, "settings.html", _settings_context(DB_PATH, restart_notice=True))
+
+
+SMTP_TEST_COOLDOWN = 20
+
+
+@app.post("/settings/smtp", response_class=HTMLResponse)
+async def settings_smtp(request: Request):
+    form = await request.form()
+    server = str(form.get("smtp_server", "")).strip()
+    port_raw = str(form.get("smtp_port", "")).strip()
+    security = str(form.get("smtp_security", email_reader.SECURITY_SSL)).strip().lower()
+    if security not in (
+        email_reader.SECURITY_SSL,
+        email_reader.SECURITY_STARTTLS,
+        email_reader.SECURITY_NONE,
+    ):
+        security = email_reader.SECURITY_SSL
+    cache.save_setting("smtp_server", server, DB_PATH)
+    cache.save_setting("smtp_port", port_raw, DB_PATH)
+    cache.save_setting("smtp_security", security, DB_PATH)
+    return _updated_response()
+
+
+@app.post("/settings/smtp/test", response_class=HTMLResponse)
+async def settings_smtp_test(request: Request):
+    now = time.time()
+    last = request.session.get("last_smtp_test_at", 0.0)
+    if now - last < SMTP_TEST_COOLDOWN:
+        wait = int(SMTP_TEST_COOLDOWN - (now - last))
+        return _toast(f"Please wait {wait}s before testing again.", "warning")
+    request.session["last_smtp_test_at"] = now
+
+    form = await request.form()
+    server = str(form.get("smtp_server", "")).strip()
+    port_raw = str(form.get("smtp_port", "")).strip()
+    security = str(form.get("smtp_security", email_reader.SECURITY_SSL)).strip().lower()
+    if not server:
+        return _toast("Enter an SMTP host to test.", "error")
+    try:
+        port = email_reader.parse_port(port_raw or email_reader.SMTP_PORT)
+    except Exception:
+        return _toast("Invalid SMTP port.", "error")
+    try:
+        result = await asyncio.to_thread(
+            email_reader.test_smtp_connection, server, port, security, DB_PATH
+        )
+    except Exception:
+        logger.warning("SMTP connection test failed", exc_info=True)
+        return _toast("Could not test SMTP connection.", "error")
+    if result.get("success"):
+        where = result.get("server", f"{server}:{port}")
+        return _toast(f"Connected to SMTP ({where}).", "success")
+    err = str(result.get("error") or "Connection failed.").strip()
+    return _toast(err, "error")
 
 
 @app.post("/settings/password", response_class=HTMLResponse)
@@ -1514,8 +1591,33 @@ async def send_email(request: Request):
             db_path=DB_PATH,
         )
     except Exception:
-        logger.warning("SMTP send failed", exc_info=True)
-        return _toast("Failed to send - check your SMTP credentials and recipient", "error")
+        logger.warning("SMTP send failed; enqueuing to outbox", exc_info=True)
+        try:
+            cache.enqueue(
+                {
+                    "to_addr": ", ".join(to_list),
+                    "cc": ", ".join(cc_list) if cc_list else "",
+                    "bcc": ", ".join(bcc_list) if bcc_list else "",
+                    "subject": subject,
+                    "body": body,
+                    "body_html": body_html,
+                    "mode": mode,
+                    "original_message_id": original_message_id,
+                    "thread_id": thread_id,
+                    "draft_id": draft_id,
+                },
+                DB_PATH,
+            )
+            if draft_id:
+                try:
+                    cache.delete_draft(draft_id, DB_PATH)
+                except Exception:
+                    logger.warning("Failed to delete draft %s after outbox enqueue", draft_id, exc_info=True)
+        except Exception:
+            logger.error("Failed to enqueue failed send to outbox", exc_info=True)
+            return _toast("Failed to send and could not save to Outbox.", "error")
+        _notify_refresh()
+        return _toast("Couldn't reach SMTP - saved to Outbox, will retry automatically.", "warning")
 
     if draft_id:
         try:
@@ -1816,6 +1918,81 @@ def drafts_delete(draft_id: str):
 def drafts_page(request: Request):
     drafts = cache.list_drafts(DB_PATH)
     return templates.TemplateResponse(request, "drafts.html", {"drafts": drafts})
+
+
+def _format_outbox_next_attempt(value: str | None) -> str:
+    if not value:
+        return ""
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return dt.strftime("%H:%M %b %d")
+    except Exception:
+        return str(value)
+
+
+@app.get("/outbox", response_class=HTMLResponse)
+def outbox_page(request: Request):
+    rows = cache.list_outbox(DB_PATH)
+    rows = [dict(r, next_attempt_display=_format_outbox_next_attempt(r.get("next_attempt_at"))) for r in rows]
+    return templates.TemplateResponse(request, "outbox.html", {"items": rows})
+
+
+@app.post("/outbox/{outbox_id}/retry")
+def outbox_retry(outbox_id: str):
+    if not cache.get_outbox(outbox_id, DB_PATH):
+        return _toast("Outbox message not found", "error")
+    cache.mark_outbox_pending(outbox_id, DB_PATH)
+    _notify_refresh()
+    return _toast("Queued for retry")
+
+
+@app.post("/outbox/{outbox_id}/delete")
+def outbox_delete(outbox_id: str):
+    cache.delete_outbox(outbox_id, DB_PATH)
+    _notify_refresh()
+    return RedirectResponse(url="/outbox", status_code=303)
+
+
+@app.get("/partials/compose-outbox/{outbox_id}", response_class=HTMLResponse)
+def partial_compose_outbox(request: Request, outbox_id: str):
+    row = cache.get_outbox(outbox_id, DB_PATH)
+    if not row:
+        return HTMLResponse("<p>Outbox message not found</p>", status_code=404)
+    mode = row.get("mode") or "new"
+    if mode not in ("new", "reply", "forward"):
+        mode = "new"
+    draft = {
+        "id": outbox_id,
+        "to_addr": row.get("to_addr") or "",
+        "cc": row.get("cc") or "",
+        "bcc": row.get("bcc") or "",
+        "subject": row.get("subject") or "",
+        "body": row.get("body") or "",
+        "mode": mode,
+        "thread_id": row.get("thread_id"),
+        "in_reply_to": row.get("original_message_id"),
+    }
+    cache.save_draft(draft, DB_PATH)
+    cache.delete_outbox(outbox_id, DB_PATH)
+    _notify_refresh()
+    return templates.TemplateResponse(
+        request,
+        "partials/compose.html",
+        {
+            "email": {"subject": row.get("subject") or ""},
+            "email_hash": "",
+            "mode": mode,
+            "to_addr": row.get("to_addr") or "",
+            "subject_prefix": "",
+            "quoted_body": _with_signature(row.get("body") or "", DB_PATH),
+            "original_message_id": row.get("original_message_id") or "",
+            "thread_id": row.get("thread_id") or "",
+            "draft_subject": row.get("subject") or "",
+            "draft_cc": row.get("cc") or "",
+            "draft_bcc": row.get("bcc") or "",
+            "draft_id": outbox_id,
+        },
+    )
 
 
 @app.get("/partials/tailscale-status", response_class=HTMLResponse)

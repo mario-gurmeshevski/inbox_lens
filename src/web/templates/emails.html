@@ -10,14 +10,48 @@
   <script src="/static/js/compose.js" defer></script>
 {% endblock %}
 {% block content %}
-  <h1>
-    {% if sent_only %}
-      Sent
-    {% else %}
-      Emails
-    {% endif %}
-    <span class="total-count">({{ total_rows }} total)</span>
-  </h1>
+  <header class="emails-header">
+    <h1 class="folder-dropdown">
+      <button type="button"
+              class="folder-dropdown-toggle"
+              aria-haspopup="true"
+              aria-expanded="false"
+              aria-label="Select email folder"
+              data-folder-dropdown-toggle>
+        {% if sent_only %}Sent{% elif request.url.path == '/drafts' %}Drafts{% elif request.url.path == '/outbox' %}Outbox{% else %}Emails{% endif %}
+        <i data-lucide="chevron-down" class="icon-sm folder-chevron"></i>
+      </button>
+      <span class="total-count">({{ total_rows }} total)</span>
+      <ul class="folder-dropdown-menu" role="menu" aria-label="Email folders" data-folder-dropdown-menu>
+        <li role="menuitem">
+          <a href="/emails"
+             class="{% if not sent_only %}active{% endif %}"
+             {% if not sent_only %}aria-current="page"{% endif %}>
+            Inbox
+          </a>
+        </li>
+        <li role="menuitem">
+          <a href="/emails/sent"
+             class="{% if sent_only %}active{% endif %}"
+             {% if sent_only %}aria-current="page"{% endif %}>
+            Sent
+          </a>
+        </li>
+        <li role="menuitem">
+          <a href="/drafts"
+             class="">
+            Drafts
+          </a>
+        </li>
+        <li role="menuitem">
+          <a href="/outbox"
+             class="">
+            Outbox
+          </a>
+        </li>
+      </ul>
+    </h1>
+  </header>
   <form class="toolbar filter-bar"
         method="get"
         action="{% if sent_only %}/emails/sent{% else %}/emails{% endif %}">

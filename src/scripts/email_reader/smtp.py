@@ -24,6 +24,50 @@ def _parse_port(raw, default=465):
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = _parse_port(os.getenv("SMTP_PORT", "465"))
 SMTP_TIMEOUT = 30
+SECURITY_SSL = "ssl"
+SECURITY_STARTTLS = "starttls"
+SECURITY_NONE = "none"
+_VALID_SECURITY = (SECURITY_SSL, SECURITY_STARTTLS, SECURITY_NONE)
+_SETTING_SERVER = "smtp_server"
+_SETTING_PORT = "smtp_port"
+_SETTING_SECURITY = "smtp_security"
+
+
+def _normalize_security(value):
+    value = (value or SECURITY_SSL).strip().lower()
+    return value if value in _VALID_SECURITY else SECURITY_SSL
+
+
+def _smtp_config(db_path=None):
+    server, port, security = SMTP_SERVER, SMTP_PORT, SECURITY_SSL
+    try:
+        saved_server = cache.get_setting(_SETTING_SERVER, db_path)
+        if saved_server and saved_server.strip():
+            server = saved_server.strip()
+        saved_port = cache.get_setting(_SETTING_PORT, db_path)
+        if saved_port:
+            port = _parse_port(saved_port)
+        security = _normalize_security(cache.get_setting(_SETTING_SECURITY, db_path))
+    except Exception:
+        logger.debug("SMTP settings unreadable; using env/defaults", exc_info=True)
+    return server, port, security
+
+
+def smtp_config(db_path=None):
+    return _smtp_config(db_path)
+
+
+def parse_port(raw, default=SMTP_PORT):
+    return _parse_port(raw, default)
+
+
+def _open_smtp(server, port, security, timeout=SMTP_TIMEOUT):
+    if security == SECURITY_SSL:
+        return smtplib.SMTP_SSL(server, port, timeout=timeout)
+    conn = smtplib.SMTP(server, port, timeout=timeout)
+    if security == SECURITY_STARTTLS:
+        conn.starttls()
+    return conn
 
 
 @contextmanager
@@ -31,7 +75,8 @@ def smtp_session(db_path=None):
     if db_path is None:
         db_path = DB_PATH
     email_user, email_pass = cache.get_email_credentials(db_path)
-    conn = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=SMTP_TIMEOUT)
+    server, port, security = _smtp_config(db_path)
+    conn = _open_smtp(server, port, security)
     try:
         conn.login(email_user, email_pass)
         yield conn
@@ -40,6 +85,42 @@ def smtp_session(db_path=None):
             conn.quit()
         except Exception:
             logger.warning("Failed to close SMTP connection cleanly", exc_info=True)
+
+
+def test_smtp_connection(server, port, security, db_path=None):
+    if db_path is None:
+        db_path = DB_PATH
+    security = _normalize_security(security)
+    try:
+        port = _parse_port(port)
+    except Exception:
+        port = SMTP_PORT
+    try:
+        email_user, email_pass = cache.get_email_credentials(db_path)
+        conn = _open_smtp(server, port, security)
+        try:
+            conn.login(email_user, email_pass)
+        finally:
+            try:
+                conn.quit()
+            except Exception:
+                logger.debug("Failed to close test SMTP connection cleanly", exc_info=True)
+        return {"success": True, "server": f"{server}:{port}", "security": security}
+    except smtplib.SMTPAuthenticationError:
+        return {
+            "success": False,
+            "error": "Authentication failed. Check your email and password "
+            "(use an App Password for providers like Gmail).",
+        }
+    except smtplib.SMTPConnectError:
+        logger.warning("SMTP connect failed for %s:%s", server, port, exc_info=True)
+        return {"success": False, "error": f"Could not connect to {server}:{port}."}
+    except (OSError, smtplib.SMTPException):
+        logger.warning("SMTP test failed for %s:%s", server, port, exc_info=True)
+        return {
+            "success": False,
+            "error": "Could not reach the SMTP server. Check host, port, and security mode.",
+        }
 
 
 def build_message(

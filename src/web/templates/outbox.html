@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Outbox{% endblock %}
+{% block styles %}
+  <link rel="stylesheet" href="/static/emails.css" />
+  <link rel="stylesheet" href="/static/outbox.css" />
+{% endblock %}
+{% block scripts %}
+  <script src="/static/js/emails.js" defer></script>
+  <script src="/static/js/compose.js" defer></script>
+{% endblock %}
+{% block content %}
+  <header class="emails-header">
+    <h1 class="folder-dropdown">
+      <button type="button"
+              class="folder-dropdown-toggle"
+              aria-haspopup="true"
+              aria-expanded="false"
+              aria-label="Select email folder"
+              data-folder-dropdown-toggle>
+        Outbox
+        <i data-lucide="chevron-down" class="icon-sm folder-chevron"></i>
+      </button>
+      <span class="total-count">({{ items|length }} total)</span>
+      <ul class="folder-dropdown-menu" role="menu" aria-label="Email folders" data-folder-dropdown-menu>
+        <li role="menuitem">
+          <a href="/emails"
+             class="">
+            Inbox
+          </a>
+        </li>
+        <li role="menuitem">
+          <a href="/emails/sent"
+             class="">
+            Sent
+          </a>
+        </li>
+        <li role="menuitem">
+          <a href="/drafts"
+             class="">
+            Drafts
+          </a>
+        </li>
+        <li role="menuitem">
+          <a href="/outbox"
+             class="active"
+             aria-current="page">
+            Outbox
+          </a>
+        </li>
+      </ul>
+    </h1>
+  </header>
+  {% if not items %}
+    <p class="empty-state">
+      Outbox is empty. Messages that fail to send land here and retry
+      automatically, check the <a href="/settings">SMTP settings</a> if sends
+      keep failing.
+    </p>
+  {% else %}
+    <ul class="outbox-list">
+      {% for it in items %}
+        <li class="outbox-item" id="outbox-{{ it.id }}">
+          <div class="outbox-meta">
+            <div class="outbox-head">
+              <span class="outbox-status outbox-status-{{ it.status }}">{{ it.status }}</span>
+              <span class="outbox-subject">{{ it.subject or "(no subject)" }}</span>
+            </div>
+            <span class="outbox-to">To: {{ it.to_addr or "—" }}</span>
+            {% if it.cc %}<span class="outbox-cc">Cc: {{ it.cc }}</span>{% endif %}
+            <span class="outbox-attempts">
+              {{ it.attempts }} attempt{% if it.attempts != 1 %}s{% endif %}
+              {% if it.next_attempt_display %}&middot; retry ~{{ it.next_attempt_display }}{% endif %}
+            </span>
+            {% if it.last_error %}
+              <span class="outbox-error" title="{{ it.last_error }}">{{ it.last_error }}</span>
+            {% endif %}
+          </div>
+          <div class="outbox-actions">
+            <button type="button"
+                    class="btn btn-sm"
+                    data-outbox-edit="{{ it.id }}"
+                    aria-label="Edit and resend">Edit</button>
+            <button type="button"
+                    class="btn btn-sm"
+                    hx-post="/outbox/{{ it.id }}/retry"
+                    hx-target="this"
+                    title="Try sending again now">Retry</button>
+            <form method="post" action="/outbox/{{ it.id }}/delete" style="display:inline">
+              <button type="submit" class="btn btn-sm btn-danger" aria-label="Delete">Delete</button>
+            </form>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+{% endblock %}

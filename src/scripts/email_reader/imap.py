@@ -27,6 +27,7 @@ _archive_folder_cache: str | None = None
 _sent_folder_cache: str | None = None
 GMAIL_DEFAULT_ARCHIVE = "[Gmail]/All Mail"
 GMAIL_DEFAULT_SENT = "[Gmail]/Sent Mail"
+_COMMON_SENT_NAMES = ("Sent", "Sent Items", "Sent Messages", "Sent Mail")
 
 
 def reset_folder_caches() -> None:
@@ -430,7 +431,28 @@ def resolve_archive_folder(db_path=None) -> str:
 
 
 def find_sent_folder(mail) -> str:
-    return find_folder_by_attr(mail, "\\Sent", GMAIL_DEFAULT_SENT)
+    status, folders = mail.list()
+    if status == "OK":
+        names: list[str] = []
+        for folder in folders:
+            decoded = folder.decode(errors="replace")
+            if "\\Sent" in decoded:
+                name = _parse_list_folder_name(decoded)
+                if name:
+                    return name
+            name = _parse_list_folder_name(decoded)
+            if name:
+                names.append(name)
+        for candidate in _COMMON_SENT_NAMES:
+            target = candidate.lower()
+            for name in names:
+                if name.lower() == target:
+                    return name
+            for name in names:
+                leaf = name.split(".")[-1].split("/")[-1].strip().strip('"').lower()
+                if leaf == target:
+                    return name
+    return GMAIL_DEFAULT_SENT
 
 
 def resolve_sent_folder(db_path=None, mail=None) -> str:
@@ -495,22 +517,24 @@ def sync_sent_replies(db_path=None) -> dict:
                 return {"synced": 0, "skipped": 0, "reconciled": 0}
 
             parsed_headers = _fetch_headers_bulk(mail, uids)
-            mail.select("INBOX")  # restore INBOX selection for other callers
+            mail.select("INBOX")
 
             new_headers = []
             new_message_ids = []
             all_sent_hashes = []
+            all_flag_updates: list[tuple[bool, bool, str]] = []
             thread_id_refreshes: list[tuple[str | None, str | None, str]] = []
             existing_sent_hashes: list[str] = []
             for header in parsed_headers:
                 header.pop("_uid", None)
-                header.pop("is_read", None)
-                header.pop("is_starred", None)
                 mid = header.get("message_id", "")
                 if not mid:
                     continue
                 h = cache._hash_message_id(mid)
                 all_sent_hashes.append(h)
+                all_flag_updates.append(
+                    (header.get("is_read", False), header.get("is_starred", False), h)
+                )
                 if cache.check_hashes_exist(db_path, [h]):
                     skipped += 1
                     thread_id = header.get("thread_id") or h
@@ -525,6 +549,8 @@ def sync_sent_replies(db_path=None) -> dict:
             if not new_headers:
                 if all_sent_hashes:
                     cache.mark_sent(all_sent_hashes, db_path)
+                if all_flag_updates:
+                    cache.update_flags_batch(all_flag_updates, db_path)
                 if thread_id_refreshes:
                     cache.refresh_thread_ids(thread_id_refreshes, db_path)
                 if existing_sent_hashes:
@@ -536,6 +562,8 @@ def sync_sent_replies(db_path=None) -> dict:
 
             if all_sent_hashes:
                 cache.mark_sent(all_sent_hashes, db_path)
+            if all_flag_updates:
+                cache.update_flags_batch(all_flag_updates, db_path)
             if thread_id_refreshes:
                 cache.refresh_thread_ids(thread_id_refreshes, db_path)
             if existing_sent_hashes:

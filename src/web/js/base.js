@@ -51,24 +51,135 @@ function closeAccountModal() {
   if (body) body.innerHTML = "";
 }
 
+// Mobile menu state
+let mobileMenuOpen = false;
+let lastFocusedElement = null;
+
+function openMobileMenu() {
+  const menu = document.getElementById("mobile-menu");
+  const backdrop = document.querySelector(".mobile-menu-backdrop");
+  const toggle = document.querySelector("[data-mobile-menu-toggle]");
+
+  if (!menu || !backdrop || !toggle) return;
+
+  lastFocusedElement = document.activeElement;
+
+  menu.hidden = false;
+  backdrop.hidden = false;
+
+  requestAnimationFrame(() => {
+    menu.classList.add("open");
+    backdrop.classList.add("open");
+  });
+
+  toggle.setAttribute("aria-expanded", "true");
+  document.body.style.overflow = "hidden";
+  mobileMenuOpen = true;
+
+  const firstFocusable = menu.querySelector(
+    'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  );
+  if (firstFocusable) {
+    firstFocusable.focus();
+  }
+
+  document.addEventListener("keydown", trapFocus);
+}
+
+function closeMobileMenu() {
+  const menu = document.getElementById("mobile-menu");
+  const backdrop = document.querySelector(".mobile-menu-backdrop");
+  const toggle = document.querySelector("[data-mobile-menu-toggle]");
+
+  if (!menu || !backdrop || !toggle) return;
+
+  menu.classList.remove("open");
+  backdrop.classList.remove("open");
+  toggle.setAttribute("aria-expanded", "false");
+  document.body.style.overflow = "";
+  mobileMenuOpen = false;
+
+  setTimeout(() => {
+    if (!mobileMenuOpen) {
+      menu.hidden = true;
+      backdrop.hidden = true;
+    }
+  }, 300);
+
+  if (lastFocusedElement) {
+    lastFocusedElement.focus();
+    lastFocusedElement = null;
+  }
+
+  document.removeEventListener("keydown", trapFocus);
+}
+
+function toggleMobileMenu() {
+  if (mobileMenuOpen) {
+    closeMobileMenu();
+  } else {
+    openMobileMenu();
+  }
+}
+
+function trapFocus(e) {
+  if (e.key !== "Tab" || !mobileMenuOpen) return;
+
+  const menu = document.getElementById("mobile-menu");
+  if (!menu) return;
+
+  const focusableElements = menu.querySelectorAll(
+    'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  );
+
+  const firstElement = focusableElements[0];
+  const lastElement = focusableElements[focusableElements.length - 1];
+
+  if (e.shiftKey && document.activeElement === firstElement) {
+    e.preventDefault();
+    lastElement.focus();
+  } else if (!e.shiftKey && document.activeElement === lastElement) {
+    e.preventDefault();
+    firstElement.focus();
+  }
+}
+
 document.addEventListener("keydown", function (e) {
-  if (e.key === "Escape") {
-    const confirmModal = document.getElementById("confirm-modal");
-    if (confirmModal && !confirmModal.hasAttribute("hidden")) return;
-    const modal = document.getElementById("account-modal");
-    if (modal && !modal.hasAttribute("hidden")) {
-      closeAccountModal();
-      return;
-    }
-    const composeModal = document.getElementById("compose-modal");
-    if (composeModal && !composeModal.hasAttribute("hidden")) {
-      if (typeof window.closeComposeModal === "function") window.closeComposeModal();
-      else closeModal("compose-modal");
-    }
+  if (e.key === "Escape" && mobileMenuOpen) {
+    closeMobileMenu();
+    return;
+  }
+  const confirmModal = document.getElementById("confirm-modal");
+  if (confirmModal && !confirmModal.hasAttribute("hidden")) return;
+  const modal = document.getElementById("account-modal");
+  if (modal && !modal.hasAttribute("hidden")) {
+    closeAccountModal();
+    return;
+  }
+  const composeModal = document.getElementById("compose-modal");
+  if (composeModal && !composeModal.hasAttribute("hidden")) {
+    if (typeof window.closeComposeModal === "function") window.closeComposeModal();
+    else closeModal("compose-modal");
   }
 });
 
 document.addEventListener("click", function (e) {
+  const backdrop = e.target.closest(".mobile-menu-backdrop");
+  const closeBtn = e.target.closest("[data-mobile-menu-close]");
+  const toggle = e.target.closest("[data-mobile-menu-toggle]");
+
+  if (toggle) {
+    toggleMobileMenu();
+    return;
+  }
+
+  if (backdrop || closeBtn) {
+    closeMobileMenu();
+    if (!(closeBtn && closeBtn.closest("[data-modal-open]"))) {
+      return;
+    }
+  }
+
   const closer = e.target.closest("[data-modal-close]");
   if (closer) {
     const id = closer.getAttribute("data-modal-close");

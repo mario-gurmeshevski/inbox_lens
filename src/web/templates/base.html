@@ -42,6 +42,18 @@
           <i data-lucide="inbox" class="icon"></i>
           <span class="nav-label">Emails</span>
         </a>
+        <a href="/emails/sent"
+           class="{% if request.url.path == '/emails/sent' %}active{% endif %}"
+           {% if request.url.path == '/emails/sent' %}aria-current="page"{% endif %}>
+          <i data-lucide="send" class="icon"></i>
+          <span class="nav-label">Sent</span>
+        </a>
+        <a href="/drafts"
+           class="{% if request.url.path == '/drafts' %}active{% endif %}"
+           {% if request.url.path == '/drafts' %}aria-current="page"{% endif %}>
+          <i data-lucide="file-text" class="icon"></i>
+          <span class="nav-label">Drafts</span>
+        </a>
         <a href="/keywords"
            class="{% if '/keywords' in request.url.path %}active{% endif %}"
            {% if '/keywords' in request.url.path %}aria-current="page"{% endif %}>

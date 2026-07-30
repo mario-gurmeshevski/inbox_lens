@@ -161,5 +161,4 @@ from src.scripts.cache.outbox import (
     update as update_outbox,
     delete as delete_outbox,
 )
-# Expose the outbox submodule for unambiguous access (e.g. ``cache.outbox.mark_attempting``).
-from src.scripts.cache import outbox  # noqa: E402,F401
+from src.scripts.cache import outbox

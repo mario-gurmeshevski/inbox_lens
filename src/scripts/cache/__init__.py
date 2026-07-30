@@ -53,6 +53,7 @@ __all__ = [
     "list_drafts",
     "delete_draft",
     "prune_stale_drafts",
+    "outbox",
     "enqueue",
     "get_outbox",
     "list_outbox",

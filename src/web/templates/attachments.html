@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Attachments{% endblock %}
+{% block styles %}
+  <link rel="stylesheet" href="/static/emails.css" />
+{% endblock %}
+{% block content %}
+  <header class="emails-header">
+    <h1 class="folder-dropdown">
+      <span>Attachments</span>
+      <span class="total-count">({{ total_rows }} total)</span>
+    </h1>
+  </header>
+  <form class="toolbar filter-bar" method="get" action="/attachments">
+    <fieldset>
+      <legend class="visually-hidden">Filter attachments</legend>
+      <select name="type" id="filter-type" aria-label="Filter by attachment type">
+        {% for val, label in type_buckets %}
+          <option value="{{ val }}" {% if type_bucket == val %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <input type="text"
+             name="search"
+             id="filter-search"
+             placeholder="Search by name or .ext (e.g. .txt, invoice)"
+             value="{{ search }}"
+             aria-label="Search attachments by filename" />
+      <select name="sort" id="filter-sort" aria-label="Sort by size">
+        <option value="" {% if size_sort == "" %}selected{% endif %}>Newest first</option>
+        <option value="asc" {% if size_sort == "asc" %}selected{% endif %}>Smallest first</option>
+        <option value="desc" {% if size_sort == "desc" %}selected{% endif %}>Largest first</option>
+      </select>
+      <button type="submit" class="btn btn-sm" aria-label="Apply filters">
+        <i data-lucide="search" class="icon-sm"></i> Filter
+      </button>
+      <a href="/attachments" class="btn btn-sm" aria-label="Clear all filters">
+        <i data-lucide="x" class="icon-sm"></i> Clear
+      </a>
+    </fieldset>
+  </form>
+  {% set q = urlencode({"type": type_bucket, "search": search, "sort": size_sort, "page": page}) %}
+  {% set q_prev = urlencode({"type": type_bucket, "search": search, "sort": size_sort, "page": page - 1}) %}
+  {% set q_next = urlencode({"type": type_bucket, "search": search, "sort": size_sort, "page": page + 1}) %}
+  <div id="attachments-table"
+       hx-get="/partials/attachments?{{ q }}"
+       hx-trigger="sse:refresh"
+       hx-swap="innerHTML">{% include "partials/attachments_table.html" %}</div>
+  {% if total_pages > 1 %}
+    <div class="pagination">
+      {% if page > 1 %}<a href="{{ url_for('attachments_page') }}?{{ q_prev }}">&laquo; Prev</a>{% endif %}
+      <span class="current">Page {{ page }} of {{ total_pages }}</span>
+      {% if page < total_pages %}<a href="{{ url_for('attachments_page') }}?{{ q_next }}">Next &raquo;</a>{% endif %}
+    </div>
+  {% endif %}
+{% endblock %}

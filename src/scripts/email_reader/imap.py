@@ -1,4 +1,6 @@
+import base64
 import os
+import quopri
 import re
 import ssl
 import logging
@@ -305,6 +307,7 @@ def _parse_fetched_email(msg_data_list):
                 "in_reply_to": (msg.get("In-Reply-To", "") or "").strip(),
                 "is_read": is_read,
                 "is_starred": is_starred,
+                "attachments": _walk_attachments(msg),
             }
         )
     return results
@@ -393,7 +396,13 @@ def move_to_trash(mail, message_id, db_path=None):
         logger.warning("move_to_trash: copy to %r failed (status=%s)", trash_folder, status)
         return False
 
-    mail.uid("store", email_id, "+FLAGS", "\\Deleted")
+    status, _ = mail.uid("store", email_id, "+FLAGS", "\\Deleted")
+    if status != "OK":
+        logger.warning(
+            "move_to_trash: store \\Deleted failed (status=%s); message left in source folder",
+            status,
+        )
+        return False
     mail.expunge()
     return True
 
@@ -408,6 +417,297 @@ def find_folder_by_attr(mail, attr: str, fallback: str) -> str:
                 if name:
                     return name
     return fallback
+
+
+def fetch_original_attachments(db_path, message_id) -> list[dict]:
+    if not message_id:
+        return []
+    if db_path is None:
+        db_path = DB_PATH
+    try:
+        with imap_session(db_path) as mail:
+            return _fetch_attachments_with_conn(mail, db_path, message_id)
+    except Exception:
+        logger.warning("fetch_original_attachments failed for %s", message_id, exc_info=True)
+        return []
+
+
+def _fetch_attachments_with_conn(mail, db_path, message_id) -> list[dict]:
+    folder = resolve_folder_for_message(db_path, message_id, mail=mail)
+    mail.select(_quote_mailbox(folder))
+    uid = _resolve_uid(mail, message_id)
+    if not uid:
+        tried = {folder}
+        for candidate in (resolve_sent_folder(db_path, mail=mail), "INBOX"):
+            if candidate in tried:
+                continue
+            tried.add(candidate)
+            mail.select(_quote_mailbox(candidate))
+            uid = _resolve_uid(mail, message_id)
+            if uid:
+                break
+    if not uid:
+        logger.debug("fetch_original_attachments: message %s not found", message_id)
+        return []
+    try:
+        attachments = _fetch_attachments_by_structure(mail, uid)
+        if attachments is not None:
+            return attachments
+    except Exception:
+        logger.debug("BODYSTRUCTURE path failed; falling back to full fetch", exc_info=True)
+    return _fetch_attachments_full(mail, uid)
+
+
+def _fetch_attachments_by_structure(mail, uid) -> list[dict] | None:
+    status, msg_data = mail.uid("fetch", uid, "(BODYSTRUCTURE)")
+    if status != "OK" or not msg_data:
+        return None
+    struct = _extract_bodystructure(msg_data)
+    if struct is None:
+        return None
+    parts = _attachment_part_numbers(struct)
+    if not parts:
+        return []
+    attachments = []
+    for part_number, hint in parts:
+        fetched = _fetch_attachment_part(mail, uid, part_number, hint)
+        if fetched:
+            attachments.append(fetched)
+    return attachments
+
+
+def _extract_bodystructure(msg_data) -> list | None:
+    for item in msg_data or []:
+        text = ""
+        if isinstance(item, tuple):
+            for chunk in item:
+                text += chunk.decode("utf-8", "replace") if isinstance(chunk, (bytes, bytearray)) else str(chunk)
+        elif isinstance(item, (bytes, bytearray)):
+            text = item.decode("utf-8", "replace")
+        elif isinstance(item, str):
+            text = item
+        idx = text.upper().find("BODYSTRUCTURE")
+        if idx == -1:
+            continue
+        rest = text[idx + len("BODYSTRUCTURE") :]
+        lp = rest.find("(")
+        if lp == -1:
+            continue
+        try:
+            return _parse_imap_list(rest[lp:])
+        except Exception:
+            return None
+    return None
+
+
+def _parse_imap_list(text):
+    pos = 0
+    n = len(text)
+
+    def skip_ws():
+        nonlocal pos
+        while pos < n and text[pos] in " \t\r\n":
+            pos += 1
+
+    def parse_item():
+        nonlocal pos
+        skip_ws()
+        if pos >= n:
+            raise ValueError("unexpected end of input")
+        c = text[pos]
+        if c == "(":
+            pos += 1
+            items = []
+            skip_ws()
+            while pos < n and text[pos] != ")":
+                items.append(parse_item())
+                skip_ws()
+            if pos >= n:
+                raise ValueError("unterminated list")
+            pos += 1
+            return items
+        if c == '"':
+            pos += 1
+            buf = []
+            while pos < n:
+                ch = text[pos]
+                if ch == "\\" and pos + 1 < n:
+                    buf.append(text[pos + 1])
+                    pos += 2
+                    continue
+                if ch == '"':
+                    pos += 1
+                    return "".join(buf)
+                buf.append(ch)
+                pos += 1
+            raise ValueError("unterminated string")
+        if c == "{":
+            end = text.find("}", pos)
+            if end == -1:
+                raise ValueError("bad literal")
+            length = int(text[pos + 1 : end])
+            pos = end + 1
+            if text[pos : pos + 2] == "\r\n":
+                pos += 2
+            literal = text[pos : pos + length]
+            pos += length
+            return literal
+        start = pos
+        while pos < n and text[pos] not in ' \t\r\n(){}"':
+            pos += 1
+        token = text[start:pos]
+        if token.upper() == "NIL":
+            return None
+        if token.isdigit():
+            return int(token)
+        return token
+
+    skip_ws()
+    return parse_item()
+
+
+def _attachment_part_numbers(struct) -> list[tuple[str, dict]]:
+    found = []
+    _walk_bodystructure(struct, "", found)
+    return found
+
+
+def _walk_bodystructure(node, prefix, found) -> None:
+    if not isinstance(node, list) or not node:
+        return
+    if isinstance(node[0], list):
+        first_str = next((i for i, x in enumerate(node) if isinstance(x, str)), None)
+        if first_str is None:
+            first_str = len(node)
+        for i in range(first_str):
+            child = node[i]
+            if not isinstance(child, list):
+                continue
+            num = f"{prefix}.{i + 1}" if prefix else str(i + 1)
+            _walk_bodystructure(child, num, found)
+        return
+    info = _leaf_attachment_info(node)
+    if info:
+        found.append((prefix or "1", info))
+
+
+def _leaf_attachment_info(struct) -> dict | None:
+    if len(struct) < 2:
+        return None
+    maintype = struct[0] if isinstance(struct[0], str) else ""
+    subtype = struct[1] if isinstance(struct[1], str) else ""
+    mime_type = f"{maintype}/{subtype}".lower() if subtype else (maintype or "application/octet-stream").lower()
+    params = _kv_to_dict(struct[2]) if len(struct) > 2 else {}
+    filename = params.get("name") or params.get("filename")
+    encoding = struct[5] if len(struct) > 5 and isinstance(struct[5], str) else ""
+    encoding = encoding.lower()
+    is_attachment = False
+    for entry in struct[7:]:
+        if isinstance(entry, list) and entry and isinstance(entry[0], str) and entry[0].lower() == "attachment":
+            is_attachment = True
+            if len(entry) > 1 and isinstance(entry[1], list):
+                dparams = _kv_to_dict(entry[1])
+                filename = filename or dparams.get("filename") or dparams.get("name")
+            break
+    if not is_attachment and not filename:
+        return None
+    return {
+        "filename": filename or "attachment",
+        "mime_type": mime_type,
+        "encoding": encoding,
+    }
+
+
+def _kv_to_dict(params) -> dict:
+    d = {}
+    if isinstance(params, list):
+        i = 0
+        while i + 1 < len(params):
+            key = params[i]
+            val = params[i + 1]
+            if isinstance(key, str):
+                d[key.lower()] = val if isinstance(val, str) else ""
+            i += 2
+    return d
+
+
+def _fetch_attachment_part(mail, uid, part_number, hint) -> dict | None:
+    status, msg_data = mail.uid("fetch", uid, f"(BODY.PEEK[{part_number}])")
+    if status != "OK" or not msg_data:
+        return None
+    raw = None
+    for item in msg_data:
+        if isinstance(item, tuple) and item[1]:
+            raw = item[1]
+            break
+    if not raw:
+        return None
+    payload = _decode_part_section(raw, hint.get("encoding") or "")
+    if not payload:
+        return None
+    filename = hint.get("filename") or "attachment"
+    mime_type = hint.get("mime_type") or "application/octet-stream"
+    return {"filename": filename, "mime_type": mime_type, "payload": payload}
+
+
+def _decode_part_section(raw: bytes, encoding: str = "") -> bytes:
+    if not raw:
+        return b""
+    if encoding == "base64":
+        try:
+            decoded = base64.b64decode(raw)
+        except Exception:
+            logger.debug("Could not base64-decode attachment section", exc_info=True)
+            return b""
+        return decoded or b""
+    if encoding == "quoted-printable":
+        try:
+            return quopri.decodestring(raw)
+        except Exception:
+            logger.debug("Could not quoted-printable-decode attachment section", exc_info=True)
+            return b""
+    return raw
+
+
+def _walk_attachments(msg) -> list[dict]:
+    attachments = []
+    for part in msg.walk():
+        if part.is_multipart():
+            continue
+        disposition = (part.get("Content-Disposition") or "").lower()
+        filename = part.get_filename()
+        if "attachment" not in disposition and not filename:
+            continue
+        try:
+            payload = part.get_payload(decode=True) or b""
+        except Exception:
+            logger.debug("Could not decode attachment part", exc_info=True)
+            continue
+        if not payload:
+            continue
+        attachments.append(
+            {
+                "filename": filename or "attachment",
+                "mime_type": part.get_content_type() or "application/octet-stream",
+                "payload": payload,
+            }
+        )
+    return attachments
+
+
+def _fetch_attachments_full(mail, uid) -> list[dict]:
+    status, msg_data = mail.uid("fetch", uid, "(BODY.PEEK[])")
+    if status != "OK" or not msg_data:
+        return []
+    raw = None
+    for item in msg_data:
+        if isinstance(item, tuple) and item[1]:
+            raw = item[1]
+            break
+    if not raw:
+        return []
+    msg = email_lib.message_from_bytes(raw)
+    return _walk_attachments(msg)
 
 
 def find_archive_folder(mail) -> str:
@@ -682,7 +982,13 @@ def move_to_folder(mail, message_id, folder: str, db_path=None) -> bool:
     if status != "OK":
         return False
 
-    mail.uid("store", email_id, "+FLAGS", "\\Deleted")
+    status, _ = mail.uid("store", email_id, "+FLAGS", "\\Deleted")
+    if status != "OK":
+        logger.warning(
+            "move_to_folder: store \\Deleted failed (status=%s); message left in source folder",
+            status,
+        )
+        return False
     mail.expunge()
     return True
 
@@ -727,7 +1033,13 @@ def _bulk_move_uids(mail, message_ids: list[str], folder: str, db_path=None) -> 
             if status == "OK":
                 moved_uids.append((uid, mid))
         if moved_uids:
-            mail.uid("store", b",".join(uid for uid, _ in moved_uids), "+FLAGS", "\\Deleted")
+            status, _ = mail.uid("store", b",".join(uid for uid, _ in moved_uids), "+FLAGS", "\\Deleted")
+            if status != "OK":
+                logger.warning(
+                    "_bulk_move_uids: store \\Deleted failed (status=%s); messages left in source folder",
+                    status,
+                )
+                continue
             mail.expunge()
             moved.extend(mid for _, mid in moved_uids)
     return moved

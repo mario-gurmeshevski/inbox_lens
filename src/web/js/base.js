@@ -41,6 +41,17 @@ window.postForm = function (url, params) {
   });
 };
 
+window.postFormData = function (url, formData) {
+  return fetch(url, { method: "POST", body: formData }).then(function (resp) {
+    const msg = resp.headers.get("X-Toast");
+    if (msg && typeof window.showToast === "function") {
+      const tone = resp.headers.get("X-Toast-Tone") || (resp.ok ? "success" : "error");
+      window.showToast(msg, tone);
+    }
+    return resp;
+  });
+};
+
 function openAccountModal() {
   openModal("account-modal");
 }
@@ -151,6 +162,7 @@ document.addEventListener("keydown", function (e) {
   }
   const confirmModal = document.getElementById("confirm-modal");
   if (confirmModal && !confirmModal.hasAttribute("hidden")) return;
+  if (e.key !== "Escape") return;
   const modal = document.getElementById("account-modal");
   if (modal && !modal.hasAttribute("hidden")) {
     closeAccountModal();

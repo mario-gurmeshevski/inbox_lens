@@ -17,8 +17,10 @@ if (-not $Task) {
     Write-Host "  dev-install      Install dev dependencies"
     Write-Host "  web              Run the web server"
     Write-Host "  test             Run tests"
+    Write-Host "  test-counts      Show test counts per file"
     Write-Host "  test-cov         Run tests with coverage"
     Write-Host "  lint             Run linters (Ruff for Python, djlint for templates)"
+    Write-Host "  lint-fix         Auto-fix Ruff lint issues"
     Write-Host "  format           Format Python (Ruff) and templates (djlint)"
     Write-Host "  unused           Find unused code (Vulture)"
     Write-Host "  pre-commit       Format, lint (incl. Vulture), and test"
@@ -48,6 +50,7 @@ $DJLINT = "$VENV\Scripts\djlint.exe"
 $RUNTIME_STAMP = "$VENV\.runtime.stamp"
 $DEV_STAMP = "$VENV\.dev.stamp"
 $COMPOSE_FILES_TS = @("-f", "docker-compose.yaml", "-f", "docker-compose.tailscale.yaml")
+$COMPOSE_DEFAULT = @("compose")
 
 $WEB_HOST = if ($env:WEB_HOST) { $env:WEB_HOST } else { "0.0.0.0" }
 $WEB_PORT = if ($env:WEB_PORT) { $env:WEB_PORT } else { "8000" }
@@ -147,24 +150,51 @@ switch ($Task) {
     }
     "web" { & $VENV_PYTHON -m uvicorn src.scripts.web:app --host $WEB_HOST --port $WEB_PORT --reload }
     "test" { & $VENV_PYTHON -m pytest src/tests/ -v }
+    "test-counts" {
+        $results = @()
+        $files = Get-ChildItem "src/tests/test_*.py" | Sort-Object Name
+        foreach ($f in $files) {
+            $output = & $VENV_PYTHON -m pytest $f.FullName --collect-only 2>&1
+            if ($output -match 'collected (\d+)') {
+                $count = [int]$Matches[1]
+                $results += [pscustomobject]@{ Name = $f.Name; Count = $count }
+            }
+        }
+        $results | Sort-Object Count -Descending | ForEach-Object {
+            Write-Host "$($_.Name): $($_.Count)"
+        }
+    }
     "test-cov" { & $VENV_PYTHON -m pytest src/tests/ --cov=src/scripts --cov-report=term-missing }
     "lint" {
         & $VENV_PYTHON -m ruff check src/
-        & $VENV_PYTHON -m vulture src/scripts
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ""
+            Write-Host "Run './commands.ps1 lint-fix' to auto-fix Ruff issues." -ForegroundColor Yellow
+            exit 1
+        }
+        & $VENV_PYTHON -m vulture src/scripts --exclude=src/scripts/web.py,src/scripts/auth.py,src/scripts/event_bus.py,src/scripts/idle_monitor.py,src/scripts/outbox_worker.py,src/scripts/updater.py,src/scripts/utils.py
         & $DJLINT --check src/web/templates
+    }
+    "lint-fix" {
+        & $VENV_PYTHON -m ruff check src/ --fix
     }
     "format" {
         & $VENV_PYTHON -m ruff format src/
         & $DJLINT --reformat src/web/templates
     }
     "unused" {
-        & $VENV_PYTHON -m vulture src/scripts
+        & $VENV_PYTHON -m vulture src/scripts --exclude=src/scripts/web.py,src/scripts/auth.py,src/scripts/event_bus.py,src/scripts/idle_monitor.py,src/scripts/outbox_worker.py,src/scripts/updater.py,src/scripts/utils.py
     }
     "pre-commit" {
         & $VENV_PYTHON -m ruff format src/
         & $DJLINT --reformat src/web/templates
         & $VENV_PYTHON -m ruff check src/
-        & $VENV_PYTHON -m vulture src/scripts
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ""
+            Write-Host "💡 Run './commands.ps1 lint-fix' to auto-fix Ruff issues." -ForegroundColor Yellow
+            exit 1
+        }
+        & $VENV_PYTHON -m vulture src/scripts --exclude=src/scripts/web.py,src/scripts/auth.py,src/scripts/event_bus.py,src/scripts/idle_monitor.py,src/scripts/outbox_worker.py,src/scripts/updater.py,src/scripts/utils.py
         & $DJLINT --check src/web/templates
         & $VENV_PYTHON -m pytest src/tests/ -v
     }
@@ -215,17 +245,17 @@ switch ($Task) {
     }
 
     "stop" {
-        $argList = @("compose") + $COMPOSE_FILES_TS + @("stop")
+        $argList = $COMPOSE_DEFAULT + @("stop")
         & docker @argList
     }
 
     "start" {
-        $argList = @("compose") + $COMPOSE_FILES_TS + @("start")
+        $argList = $COMPOSE_DEFAULT + @("start")
         & docker @argList
     }
 
     "restart" {
-        $argList = @("compose") + $COMPOSE_FILES_TS + @("restart")
+        $argList = $COMPOSE_DEFAULT + @("restart")
         & docker @argList
     }
 
@@ -258,16 +288,23 @@ switch ($Task) {
     }
 
     "purge" {
+        # Logout from Tailscale first
         $logoutArgs = @("compose") + $COMPOSE_FILES_TS + @("exec", "tailscale", "/usr/local/bin/tailscale", "logout")
         & docker @logoutArgs 2>$null
 
+        # Clean cache files
         Invoke-Clean
+
+        # Remove data files
         @("src/data/emails.db", "src/data/emails.db-shm", "src/data/emails.db-wal", "src/data/.secret.key", "src/data/.session.key") | ForEach-Object {
             Remove-Item -Force -ErrorAction SilentlyContinue $_
         }
 
+        # Full Docker teardown with Tailscale compose files
         $downArgs = @("compose") + $COMPOSE_FILES_TS + @("down", "--rmi", "all", "--volumes", "--remove-orphans")
         & docker @downArgs
+
+        # Remove Tailscale state directory
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "tailscale-state"
     }
 

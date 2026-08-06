@@ -66,7 +66,7 @@
       box.replaceChildren(
         makeIcon("alert-circle", "icon-md"),
         makeTextSpan(
-          "Restart is taking longer than expected. The update may still be finishing — try reloading, or check the host logs if it doesn't come back."
+          "Restart is taking longer than expected. The update may still be finishing, try reloading, or check the host logs if it doesn't come back."
         )
       );
       if (document.getElementById("restart-actions")) return;

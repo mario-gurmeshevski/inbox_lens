@@ -5,6 +5,9 @@
   let lastFocused = null;
   let autosaveTimer = null;
   let autosaveDirty = false;
+  let pendingFiles = [];
+  let storedAttachments = [];
+  let draftPersisted = false;
 
   function getModal() {
     return document.getElementById(COMPOSE_MODAL_ID);
@@ -31,6 +34,7 @@
     if (typeof openModal === "function") openModal(COMPOSE_MODAL_ID);
     wireToolbar();
     wireCcToggle();
+    wireAttachments();
     placeCursor();
     const form = document.getElementById("compose-form");
     if (form) {
@@ -43,12 +47,21 @@
   }
 
   function closeComposeModal() {
+    const draftId = currentDraftId();
+    const wasPersisted = draftPersisted;
     if (typeof closeModal === "function") closeModal(COMPOSE_MODAL_ID);
     const body = document.getElementById(COMPOSE_BODY_ID);
     if (body) body.innerHTML = "";
+    resetAttachmentState();
     if (lastFocused && typeof lastFocused.focus === "function") {
       lastFocused.focus();
       lastFocused = null;
+    }
+    if (!wasPersisted && draftId) {
+      try {
+        fetch("/drafts/" + encodeURIComponent(draftId) + "/abandon", { method: "POST" });
+      } catch (e) {
+      }
     }
   }
 
@@ -64,9 +77,43 @@
         if (!resp.ok) throw new Error("Failed to load compose form");
         return resp.text();
       })
-      .then(openComposeModal)
+      .then(function (html) {
+        openComposeModal(html);
+        if (mode === "forward" && hash) {
+          loadForwardAttachments(hash);
+        }
+      })
       .catch(function () {
         if (typeof window.showToast === "function") window.showToast("Could not open composer", "error");
+      });
+  }
+
+  function loadForwardAttachments(hash) {
+    const draftIdEl = document.getElementById("compose-draft-id");
+    const draftId = draftIdEl ? draftIdEl.value : "";
+    const qs = draftId ? "?draft_id=" + encodeURIComponent(draftId) : "";
+    fetch("/partials/forward-attachments/" + encodeURIComponent(hash) + qs, {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    })
+      .then(function (resp) {
+        if (!resp.ok) return { attachments: [] };
+        return resp.json();
+      })
+      .then(function (data) {
+        if (data.draft_id && draftIdEl && !draftIdEl.value) {
+          draftIdEl.value = data.draft_id;
+        }
+        (data.attachments || []).forEach(function (att) {
+          storedAttachments.push(att);
+        });
+        renderAttachmentChips();
+        if (data.notice && typeof window.showToast === "function") {
+          window.showToast(data.notice, "warning");
+        }
+      })
+      .catch(function () {
+        if (typeof window.showToast === "function") window.showToast("Couldn't load original attachments", "warning");
       });
   }
 
@@ -151,6 +198,121 @@
     textarea.focus();
   }
 
+  function formatSize(bytes) {
+    if (bytes == null) return "";
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  }
+
+  function resetAttachmentState() {
+    pendingFiles = [];
+    storedAttachments = [];
+    draftPersisted = false;
+  }
+
+  function renderAttachmentChips() {
+    const list = document.getElementById("compose-attachment-list");
+    if (!list) return;
+    list.innerHTML = "";
+    storedAttachments.forEach(function (att) {
+      list.appendChild(buildChip(att.filename, att.size, true, function () {
+        removeStored(att.id);
+      }));
+    });
+    pendingFiles.forEach(function (file, idx) {
+      list.appendChild(buildChip(file.name, file.size, false, function () {
+        removePending(idx);
+      }));
+    });
+  }
+
+  function buildChip(name, size, stored, onRemove) {
+    const li = document.createElement("li");
+    li.className = "attachment-chip" + (stored ? " is-stored" : "");
+    const icon = document.createElement("i");
+    icon.setAttribute("data-lucide", stored ? "check" : "file");
+    icon.className = "icon-sm";
+    const nameEl = document.createElement("span");
+    nameEl.className = "attachment-chip-name";
+    nameEl.textContent = name;
+    const sizeEl = document.createElement("span");
+    sizeEl.className = "attachment-chip-size";
+    sizeEl.textContent = formatSize(size);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "attachment-chip-remove";
+    btn.setAttribute("aria-label", "Remove " + name);
+    btn.innerHTML = '<i data-lucide="x" class="icon-sm"></i>';
+    btn.addEventListener("click", function () {
+      onRemove();
+    });
+    li.appendChild(icon);
+    li.appendChild(nameEl);
+    li.appendChild(sizeEl);
+    li.appendChild(btn);
+    return li;
+  }
+
+  function wireAttachments() {
+    resetAttachmentState();
+    const list = document.getElementById("compose-attachment-list");
+    if (list) {
+      Array.prototype.forEach.call(list.children, function (chip) {
+        const id = chip.getAttribute("data-attachment-id");
+        if (!id) return;
+        const name = chip.getAttribute("data-filename") || "attachment";
+        const size = parseInt(chip.getAttribute("data-size") || "0", 10) || null;
+        storedAttachments.push({ id: id, filename: name, size: size });
+      });
+    }
+    const input = document.getElementById("compose-attachments-input");
+    if (input && input.dataset.wired !== "1") {
+      input.dataset.wired = "1";
+      input.addEventListener("change", function () {
+        if (!input.files || !input.files.length) return;
+        for (let i = 0; i < input.files.length; i++) {
+          pendingFiles.push(input.files[i]);
+        }
+        input.value = "";
+        renderAttachmentChips();
+        scheduleAutosave();
+      });
+    }
+    renderAttachmentChips();
+  }
+
+  function removePending(index) {
+    pendingFiles.splice(index, 1);
+    renderAttachmentChips();
+    scheduleAutosave();
+  }
+
+  function removeStored(attachmentId) {
+    const draftId = currentDraftId();
+    if (!draftId || !attachmentId) {
+      storedAttachments = storedAttachments.filter(function (a) { return a.id !== attachmentId; });
+      renderAttachmentChips();
+      return;
+    }
+    fetch("/drafts/" + encodeURIComponent(draftId) + "/attachments/" + encodeURIComponent(attachmentId), {
+      method: "DELETE",
+    })
+      .then(function (resp) {
+        if (!resp.ok) throw new Error("remove failed");
+        storedAttachments = storedAttachments.filter(function (a) { return a.id !== attachmentId; });
+        renderAttachmentChips();
+      })
+      .catch(function () {
+        if (typeof window.showToast === "function") window.showToast("Couldn't remove attachment", "error");
+      });
+  }
+
+  function currentDraftId() {
+    const el = document.getElementById("compose-draft-id");
+    return el ? el.value : "";
+  }
+
   function gatherDraftParams() {
     const form = document.getElementById("compose-form");
     if (!form) return null;
@@ -190,11 +352,44 @@
     autosaveDirty = false;
     const params = gatherDraftParams();
     if (!params) return;
-    if (!params.to && !params.cc && !params.bcc && !params.subject && !params.body) return;
+    const hasText = params.to || params.cc || params.bcc || params.subject || params.body;
+    const hasPending = pendingFiles.length > 0;
+    if (!hasText && !hasPending) return;
     params.draft_id = ensureDraftId();
-    window.postForm("/drafts/save", params).catch(function () {
+    const draftId = params.draft_id;
+    const textPromise = window.postForm("/drafts/save", params);
+    textPromise.then(function (resp) {
+      if (resp.ok) draftPersisted = true;
+    });
+    textPromise.catch(function () {
       if (typeof window.showToast === "function") window.showToast("Couldn't save draft", "warning");
     });
+    if (hasPending) {
+      uploadPendingToDraft(draftId);
+    }
+  }
+
+  function uploadPendingToDraft(draftId) {
+    const files = pendingFiles;
+    pendingFiles = [];
+    const fd = new FormData();
+    files.forEach(function (file) { fd.append("attachments", file); });
+    fetch("/drafts/" + encodeURIComponent(draftId) + "/attachments", { method: "POST", body: fd })
+      .then(function (resp) {
+        if (!resp.ok) throw new Error("upload failed");
+        return resp.json();
+      })
+      .then(function (data) {
+        (data.attachments || []).forEach(function (att) {
+          storedAttachments.push(att);
+        });
+        renderAttachmentChips();
+      })
+      .catch(function () {
+        pendingFiles = files.concat(pendingFiles);
+        renderAttachmentChips();
+        if (typeof window.showToast === "function") window.showToast("Couldn't save attachment to draft", "warning");
+      });
   }
 
   function loadDraft(draftId) {
@@ -207,6 +402,7 @@
       })
       .then(function (html) {
         openComposeModal(html);
+        draftPersisted = true;
         const form = document.getElementById("compose-form");
         if (form) {
           const cc = form.elements["cc"];
@@ -222,6 +418,7 @@
 
   function loadOutbox(outboxId) {
     fetch("/partials/compose-outbox/" + encodeURIComponent(outboxId), {
+      method: "POST",
       headers: { Accept: "text/html" },
     })
       .then(function (resp) {
@@ -230,6 +427,7 @@
       })
       .then(function (html) {
         openComposeModal(html);
+        draftPersisted = true;
         const form = document.getElementById("compose-form");
         if (form) {
           const cc = form.elements["cc"];
@@ -248,7 +446,7 @@
     if (sendBtn) sendBtn.disabled = true;
 
     const draftIdEl = document.getElementById("compose-draft-id");
-    const params = {
+    const fields = {
       to: (form.elements["to"] || {}).value || "",
       cc: (form.elements["cc"] || {}).value || "",
       bcc: (form.elements["bcc"] || {}).value || "",
@@ -260,14 +458,18 @@
       draft_id: draftIdEl ? draftIdEl.value : "",
     };
 
-    if (!params.to || !params.subject || !params.body) {
+    if (!fields.to || !fields.subject || !fields.body) {
       if (typeof window.showToast === "function") window.showToast("To, subject, and body are required", "error");
       if (sendBtn) sendBtn.disabled = false;
       return;
     }
 
+    const fd = new FormData();
+    Object.keys(fields).forEach(function (k) { fd.append(k, fields[k]); });
+    pendingFiles.forEach(function (file) { fd.append("attachments", file); });
+
     window
-      .postForm("/emails/send", params)
+      .postFormData("/emails/send", fd)
       .then(function (resp) {
         const tone = resp.headers.get("X-Toast-Tone") || (resp.ok ? "success" : "error");
         if (resp.ok && tone === "success") {

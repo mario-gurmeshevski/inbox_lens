@@ -389,6 +389,205 @@ class TestFolderQuoting:
         assert copy_args[2] == '"Archive Box"'
 
 
+class TestFetchOriginalAttachments:
+    def _raw_with_attachments(self):
+        from email import encoders
+        from email.mime.base import MIMEBase
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+
+        msg = MIMEMultipart()
+        msg["Subject"] = "Has attachments"
+        msg["From"] = "a@b.com"
+        msg["Message-ID"] = "<src@e.com>"
+        msg.attach(MIMEText("see attached", "plain"))
+        for name, mime, data in [
+            ("report.pdf", "application/pdf", b"%PDF-1.4 body"),
+            ("pic.png", "image/png", b"\x89PNG\r\n"),
+        ]:
+            main, _, sub = mime.partition("/")
+            part = MIMEBase(main, sub)
+            part.set_payload(data)
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", "attachment", filename=name)
+            msg.attach(part)
+        return msg.as_bytes()
+
+    def test_extracts_attachment_parts(self, fake_mail, monkeypatch):
+        monkeypatch.setattr(imap_mod, "resolve_folder_for_message", lambda db_path, mid, mail=None: "INBOX")
+        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: b"42")
+        raw = self._raw_with_attachments()
+        fake_mail.uid.return_value = ("OK", [(b"UID 42 (BODY[])", raw)])
+        result = imap_mod._fetch_attachments_with_conn(fake_mail, "/db", "<src@e.com>")
+        assert len(result) == 2
+        names = {a["filename"] for a in result}
+        assert names == {"report.pdf", "pic.png"}
+        pdf = next(a for a in result if a["filename"] == "report.pdf")
+        assert pdf["mime_type"] == "application/pdf"
+        assert pdf["payload"] == b"%PDF-1.4 body"
+
+    def test_returns_empty_when_uid_not_found(self, fake_mail, monkeypatch):
+        monkeypatch.setattr(imap_mod, "resolve_folder_for_message", lambda db_path, mid, mail=None: "INBOX")
+        monkeypatch.setattr(imap_mod, "resolve_sent_folder", lambda db_path=None, mail=None: "Sent")
+        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: None)
+        result = imap_mod._fetch_attachments_with_conn(fake_mail, "/db", "<missing@e.com>")
+        assert result == []
+
+    def test_returns_empty_for_message_without_attachments(self, fake_mail, monkeypatch):
+        monkeypatch.setattr(imap_mod, "resolve_folder_for_message", lambda db_path, mid, mail=None: "INBOX")
+        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: b"42")
+        raw = ("From: a@b.com\r\nSubject: plain\r\nMessage-ID: <src@e.com>\r\n\r\njust text\r\n").encode()
+        fake_mail.uid.return_value = ("OK", [(b"UID 42 (BODY[])", raw)])
+        result = imap_mod._fetch_attachments_with_conn(fake_mail, "/db", "<src@e.com>")
+        assert result == []
+
+    def test_public_wrapper_degrades_on_error(self, tmp_db, monkeypatch):
+        def boom(*a, **k):
+            raise RuntimeError("imap down")
+
+        monkeypatch.setattr(imap_mod, "imap_session", boom)
+        result = email_reader.fetch_original_attachments(tmp_db, "<src@e.com>")
+        assert result == []
+
+    def test_public_wrapper_empty_message_id(self, tmp_db):
+        assert email_reader.fetch_original_attachments(tmp_db, "") == []
+
+
+class TestBodystructureFetch:
+    def _patch_folder(self, monkeypatch):
+        monkeypatch.setattr(imap_mod, "resolve_folder_for_message", lambda db_path, mid, mail=None: "INBOX")
+        monkeypatch.setattr(imap_mod, "_resolve_uid", lambda mail, mid: b"42")
+
+    def _structure_mail(self, monkeypatch, structure_text, part_payloads):
+        from unittest.mock import MagicMock
+
+        mail = MagicMock(name="structure_mail")
+        calls = []
+
+        def uid(cmd, uid_val, item):
+            calls.append(item)
+            if "BODYSTRUCTURE" in item:
+                return ("OK", [(b"UID 42", structure_text.encode())])
+            for key, payload in part_payloads.items():
+                if f"[{key}]" in item:
+                    return ("OK", [(b"UID 42", payload)])
+            return ("OK", [b""])
+
+        mail.uid.side_effect = uid
+        mail.calls = calls
+        return mail
+
+    def _b64(self, data):
+        import base64
+
+        return base64.b64encode(data)
+
+    def test_bodystructure_path_fetches_only_attachment_parts(self, monkeypatch):
+        self._patch_folder(monkeypatch)
+        structure_two = (
+            'BODYSTRUCTURE (("TEXT" "PLAIN" ("CHARSET" "utf-8") NIL NIL "7bit" 10 1)'
+            '("APPLICATION" "PDF" ("NAME" "report.pdf") NIL NIL "base64" 20'
+            ' NIL NIL NIL ("attachment" ("FILENAME" "report.pdf")))'
+            '("IMAGE" "PNG" ("NAME" "pic.png") NIL NIL "base64" 12'
+            ' NIL NIL NIL ("attachment" ("FILENAME" "pic.png"))) "mixed" NIL))'
+        )
+        mail = self._structure_mail(
+            monkeypatch,
+            structure_two,
+            {
+                "2": self._b64(b"%PDF-1.4 body"),
+                "3": self._b64(b"\x89PNG\r\n"),
+            },
+        )
+        result = imap_mod._fetch_attachments_with_conn(mail, "/db", "<src@e.com>")
+        names = {a["filename"] for a in result}
+        assert names == {"report.pdf", "pic.png"}
+        pdf = next(a for a in result if a["filename"] == "report.pdf")
+        assert pdf["mime_type"] == "application/pdf"
+        assert pdf["payload"] == b"%PDF-1.4 body"
+        struct_calls = [c for c in mail.calls if "BODYSTRUCTURE" in c]
+        part_calls = [c for c in mail.calls if "BODY.PEEK" in c]
+        assert len(struct_calls) == 1
+        assert len(part_calls) == 2
+        assert all("BODY.PEEK[]" not in c for c in mail.calls)
+
+    def test_quoted_printable_attachment_is_decoded_by_encoding(self, monkeypatch):
+        self._patch_folder(monkeypatch)
+        original = b"line one \xe2\x80\x99 quoted\n"
+        import quopri
+
+        encoded_qp = quopri.encodestring(original)
+        structure_qp = (
+            'BODYSTRUCTURE (("TEXT" "PLAIN" ("CHARSET" "utf-8") NIL NIL "7bit" 10 1)'
+            '("TEXT" "CSV" ("NAME" "data.csv") NIL NIL "quoted-printable" 30'
+            ' NIL NIL NIL ("attachment" ("FILENAME" "data.csv"))) "mixed" NIL))'
+        )
+        mail = self._structure_mail(monkeypatch, structure_qp, {"2": encoded_qp})
+        result = imap_mod._fetch_attachments_with_conn(mail, "/db", "<src@e.com>")
+        assert len(result) == 1
+        att = result[0]
+        assert att["filename"] == "data.csv"
+        assert att["payload"] == original
+
+    def test_eightbit_attachment_that_looks_like_base64_not_decoded(self, monkeypatch):
+        self._patch_folder(monkeypatch)
+        import base64
+
+        original = b"ZGF0YQ=="
+        assert base64.b64decode(original, validate=True) == b"data"
+        structure_8bit = (
+            'BODYSTRUCTURE (("TEXT" "PLAIN" ("CHARSET" "utf-8") NIL NIL "7bit" 10 1)'
+            '("APPLICATION" "OCTET-STREAM" ("NAME" "blob.bin") NIL NIL "8bit" 8'
+            ' NIL NIL NIL ("attachment" ("FILENAME" "blob.bin"))) "mixed" NIL))'
+        )
+        mail = self._structure_mail(monkeypatch, structure_8bit, {"2": original})
+        result = imap_mod._fetch_attachments_with_conn(mail, "/db", "<src@e.com>")
+        assert len(result) == 1
+        assert result[0]["payload"] == original
+
+    def test_bodystructure_parse_failure_falls_back_to_full_fetch(self, monkeypatch):
+        self._patch_folder(monkeypatch)
+        full_raw = self._raw_with_two_attachments()
+        mail = self._structure_mail(monkeypatch, "BODYSTRUCTURE (garbage (not closed", {})
+        mail.uid.side_effect = lambda cmd, uid, item: (
+            ("OK", [(b"UID 42", full_raw)]) if "BODY.PEEK[]" in item else ("OK", [(b"UID 42", b"x")])
+        )
+        result = imap_mod._fetch_attachments_with_conn(mail, "/db", "<src@e.com>")
+        assert len(result) == 2
+        assert {a["filename"] for a in result} == {"report.pdf", "pic.png"}
+
+    def test_no_attachment_parts_in_structure_returns_empty(self, monkeypatch):
+        self._patch_folder(monkeypatch)
+        structure = (
+            'BODYSTRUCTURE (("TEXT" "PLAIN" ("CHARSET" "utf-8") NIL NIL "7bit" 10 1)'
+            '("TEXT" "HTML" ("CHARSET" "utf-8") NIL NIL "7bit" 20 1) "alternative")'
+        )
+        mail = self._structure_mail(monkeypatch, structure, {})
+        result = imap_mod._fetch_attachments_with_conn(mail, "/db", "<src@e.com>")
+        assert result == []
+        assert all("BODY.PEEK" not in c for c in mail.calls)
+
+    def _raw_with_two_attachments(self):
+        from email import encoders
+        from email.mime.base import MIMEBase
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+
+        msg = MIMEMultipart()
+        msg.attach(MIMEText("see attached", "plain"))
+        for name, mime, data in [
+            ("report.pdf", "application/pdf", b"%PDF-1.4 body"),
+            ("pic.png", "image/png", b"\x89PNG\r\n"),
+        ]:
+            main, _, sub = mime.partition("/")
+            part = MIMEBase(main, sub)
+            part.set_payload(data)
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", "attachment", filename=name)
+            msg.attach(part)
+        return msg.as_bytes()
+
+
 class TestImapConnect:
     def test_uses_credentials_and_selects_inbox(self, monkeypatch, fake_mail):
         monkeypatch.setattr(cache, "get_email_credentials", lambda db_path=None: ("u", "p"))
@@ -1722,3 +1921,82 @@ class TestSyncAllMail:
         result = email_reader.sync_all_mail(db_path=tmp_db)
         assert result["synced"] == 0
         assert result["hashes"] == set()
+
+
+class TestWalkAttachments:
+    def _multipart_with_attachment(self, filename="doc.pdf", payload=b"%PDF-1.4"):
+        import email.message
+
+        msg = email.message.EmailMessage()
+        msg["From"] = "a@b.com"
+        msg["Subject"] = "With attachment"
+        msg["Message-ID"] = "<m@e.com>"
+        msg.set_content("Hello body")
+        msg.add_attachment(
+            payload,
+            maintype="application",
+            subtype="pdf",
+            filename=filename,
+        )
+        return msg
+
+    def test_extracts_attachment_parts(self):
+        msg = self._multipart_with_attachment("doc.pdf", b"%PDF-1.4")
+        atts = imap_mod._walk_attachments(msg)
+        assert len(atts) == 1
+        a = atts[0]
+        assert a["filename"] == "doc.pdf"
+        assert a["mime_type"] == "application/pdf"
+        assert a["payload"] == b"%PDF-1.4"
+
+    def test_skips_non_attachment_text_parts(self):
+        import email.message
+
+        msg = email.message.EmailMessage()
+        msg["Message-ID"] = "<m@e.com>"
+        msg.set_content("just text")
+        assert imap_mod._walk_attachments(msg) == []
+
+    def test_missing_filename_defaults_to_attachment(self):
+        import email.message
+
+        msg = email.message.EmailMessage()
+        msg["Message-ID"] = "<m@e.com>"
+        msg.set_content("body")
+        msg.add_attachment(
+            b"rawbytes",
+            maintype="application",
+            subtype="octet-stream",
+        )
+        atts = imap_mod._walk_attachments(msg)
+        assert any(a["filename"] == "attachment" for a in atts)
+
+
+class TestParseFetchedEmailAttachments:
+    def test_parse_result_includes_attachments_key(self):
+        import email.message
+
+        msg = email.message.EmailMessage()
+        msg["From"] = "a@b.com"
+        msg["Subject"] = "Hi"
+        msg["Message-ID"] = "<mid@e.com>"
+        msg.set_content("body")
+        msg.add_attachment(
+            b"%PDF-1.4",
+            maintype="application",
+            subtype="pdf",
+            filename="f.pdf",
+        )
+
+        raw = msg.as_bytes()
+        result = email_reader._parse_fetched_email([(b"UID 1 (BODY[])", raw)])
+        assert len(result) == 1
+        atts = result[0]["attachments"]
+        assert len(atts) == 1
+        assert atts[0]["filename"] == "f.pdf"
+        assert atts[0]["payload"] == b"%PDF-1.4"
+
+    def test_parse_result_attachments_empty_when_no_attachments(self):
+        raw = b"From: a@b.com\r\nSubject: Hi\r\nMessage-ID: <mid@e.com>\r\n\r\nbody\r\n"
+        result = email_reader._parse_fetched_email([(b"env", raw)])
+        assert result[0]["attachments"] == []

@@ -20,6 +20,28 @@
       {% else %}
         <p class="empty-body">No body content available.</p>
       {% endif %}
+      {% set msg_atts = attachment_map.get(msg._file_hash, []) if attachment_map else [] %}
+      {% if msg_atts %}
+        <div class="received-attachments">
+          <span class="received-attachments-label">
+            <i data-lucide="paperclip" class="icon-sm"></i>
+            {{ msg_atts | length }} attachment{{ "s" if (msg_atts | length) != 1 else "" }}
+          </span>
+          <ul class="attachment-chips">
+            {% for att in msg_atts %}
+              <li class="attachment-chip is-stored">
+                <a class="attachment-chip-link"
+                   href="/emails/{{ msg._file_hash }}/attachments/{{ att.id }}"
+                   download="{{ att.filename }}">
+                  <i data-lucide="file" class="icon-sm"></i>
+                  <span class="attachment-chip-name">{{ att.filename }}</span>
+                  <span class="attachment-chip-size">{{ att.size | format_size }}</span>
+                </a>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
     </article>
   {% endfor %}
   {% if thread_limit and thread_total > thread_limit %}
@@ -37,6 +59,28 @@
             <div class="body-block markdown-body">{{ msg.body | stripped_body | markdown }}</div>
           {% else %}
             <p class="empty-body">No body content available.</p>
+          {% endif %}
+          {% set msg_atts = attachment_map.get(msg._file_hash, []) if attachment_map else [] %}
+          {% if msg_atts %}
+            <div class="received-attachments">
+              <span class="received-attachments-label">
+                <i data-lucide="paperclip" class="icon-sm"></i>
+                {{ msg_atts | length }} attachment{{ "s" if (msg_atts | length) != 1 else "" }}
+              </span>
+              <ul class="attachment-chips">
+                {% for att in msg_atts %}
+                  <li class="attachment-chip is-stored">
+                    <a class="attachment-chip-link"
+                       href="/emails/{{ msg._file_hash }}/attachments/{{ att.id }}"
+                       download="{{ att.filename }}">
+                      <i data-lucide="file" class="icon-sm"></i>
+                      <span class="attachment-chip-name">{{ att.filename }}</span>
+                      <span class="attachment-chip-size">{{ att.size | format_size }}</span>
+                    </a>
+                  </li>
+                {% endfor %}
+              </ul>
+            </div>
           {% endif %}
         </article>
       {% endfor %}

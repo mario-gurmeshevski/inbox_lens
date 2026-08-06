@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import patch
 
 from src.scripts import cache, email_reader
-from src.tests._helpers import save_fetched_batch  # noqa: F401
+from src.tests._helpers import save_fetched_batch
 
 
 @pytest.fixture
@@ -13,8 +13,21 @@ def tmp_db(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def cleanup_db_connections():
-    yield
+def cleanup_db_connections(tmp_path):
+    from src.scripts.cache import attachments as _attachments
+    from src.scripts import constants as _constants
+
+    tmp_attachments = tmp_path / "attachments"
+    tmp_attachments.mkdir(parents=True, exist_ok=True)
+    saved_const = _constants.ATTACHMENTS_DIR
+    saved_att = _attachments.ATTACHMENTS_DIR
+    _constants.ATTACHMENTS_DIR = tmp_attachments
+    _attachments.ATTACHMENTS_DIR = tmp_attachments
+    try:
+        yield
+    finally:
+        _constants.ATTACHMENTS_DIR = saved_const
+        _attachments.ATTACHMENTS_DIR = saved_att
     from src.scripts.cache.db import close_all_connections
 
     close_all_connections()
@@ -146,8 +159,13 @@ def web_db(tmp_path, monkeypatch):
 @pytest.fixture
 def web_client(web_db):
     from fastapi.testclient import TestClient
-    from src.scripts import web
+    from src.scripts import auth, web
 
     cache.save_email_credentials("me@e.com", "secret", web_db)
-    with patch.object(web, "DB_PATH", web_db):
-        yield TestClient(web.app)
+    saved = auth.send_rate_limiter
+    auth.send_rate_limiter = auth.RateLimiter(max_attempts=saved.max_attempts, window_seconds=saved.window_seconds)
+    try:
+        with patch.object(web, "DB_PATH", web_db):
+            yield TestClient(web.app)
+    finally:
+        auth.send_rate_limiter = saved

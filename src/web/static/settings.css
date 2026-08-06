@@ -226,6 +226,14 @@ body.nav-tabs .settings-tabs {
   font-size: 0.82rem;
 }
 
+.settings-note {
+  display: block;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--text-muted, var(--text-secondary));
+  margin-top: 0.4rem;
+}
+
 .combobox {
   position: relative;
   width: 100%;

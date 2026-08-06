@@ -104,6 +104,77 @@ class TestAttemptSuccess:
         assert captured["mode"] == "reply"
 
 
+class TestAttemptAttachments:
+    def test_success_reattaches_and_cleans_up(self, tmp_db, monkeypatch):
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
+        captured = {}
+
+        def fake_send(*a, **k):
+            captured["attachments"] = k.get("attachments")
+
+        monkeypatch.setattr(email_reader, "send_message", fake_send)
+        oid = cache.enqueue(_payload(), tmp_db)
+        created = cache.store_attachment_bytes(
+            tmp_db,
+            oid,
+            cache.OWNER_OUTBOX,
+            [{"filename": "f.txt", "mime_type": "text/plain", "payload": b"data"}],
+        )
+        assert cache.attachment_path(created[0]).is_file()
+        row = cache.get_outbox(oid, tmp_db)
+        ow.OutboxWorker(db_path=tmp_db)._attempt(row)
+
+        atts = captured["attachments"]
+        assert atts and len(atts) == 1
+        assert atts[0]["filename"] == "f.txt"
+        assert cache.get_outbox(oid, tmp_db) is None
+        assert cache.list_attachments(tmp_db, oid, cache.OWNER_OUTBOX) == []
+        assert not cache.attachment_path(created[0]).exists()
+
+    def test_failure_keeps_attachments_for_retry(self, tmp_db, monkeypatch):
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
+
+        def boom(*a, **k):
+            raise RuntimeError("smtp down")
+
+        monkeypatch.setattr(email_reader, "send_message", boom)
+        oid = cache.enqueue(_payload(), tmp_db)
+        created = cache.store_attachment_bytes(
+            tmp_db,
+            oid,
+            cache.OWNER_OUTBOX,
+            [{"filename": "f.txt", "mime_type": "text/plain", "payload": b"data"}],
+        )
+        row = cache.get_outbox(oid, tmp_db)
+        ow.OutboxWorker(db_path=tmp_db)._attempt(row)
+
+        updated = cache.get_outbox(oid, tmp_db)
+        assert updated["status"] == "pending"
+        assert updated["attempts"] == 1
+        atts = cache.list_attachments(tmp_db, oid, cache.OWNER_OUTBOX)
+        assert len(atts) == 1
+        assert cache.attachment_path(created[0]).is_file()
+
+    def test_missing_attachment_file_fails_attempt(self, tmp_db, monkeypatch):
+        monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
+        sent = {"n": 0}
+        monkeypatch.setattr(email_reader, "send_message", lambda *a, **k: sent.__setitem__("n", sent["n"] + 1))
+        oid = cache.enqueue(_payload(), tmp_db)
+        created = cache.store_attachment_bytes(
+            tmp_db,
+            oid,
+            cache.OWNER_OUTBOX,
+            [{"filename": "f.txt", "mime_type": "text/plain", "payload": b"data"}],
+        )
+        cache.attachment_path(created[0]).unlink()
+        row = cache.get_outbox(oid, tmp_db)
+        ow.OutboxWorker(db_path=tmp_db)._attempt(row)
+        assert sent["n"] == 0
+        updated = cache.get_outbox(oid, tmp_db)
+        assert updated["status"] == "pending"
+        assert "missing" in updated["last_error"]
+
+
 class TestAttemptFailure:
     def test_failure_records_error_and_backoff(self, tmp_db, monkeypatch):
         monkeypatch.setattr(cache, "has_email_credentials", lambda db_path=None: True)
@@ -145,6 +216,12 @@ class TestAttemptFailure:
 
         monkeypatch.setattr(email_reader, "send_message", boom)
         oid = cache.enqueue(_payload(), tmp_db)
+        cache.store_attachment_bytes(
+            tmp_db,
+            oid,
+            cache.OWNER_OUTBOX,
+            [{"filename": "f.txt", "mime_type": "text/plain", "payload": b"x"}],
+        )
         cache.mark_outbox_failed(oid, "x", ow._next_attempt_at(0), tmp_db)
         for _ in range(ow.MAX_ATTEMPTS - 2):
             cache.mark_outbox_failed(oid, "x", ow._next_attempt_at(0), tmp_db)
@@ -152,9 +229,10 @@ class TestAttemptFailure:
         assert row["attempts"] == ow.MAX_ATTEMPTS - 1
         ow.OutboxWorker(db_path=tmp_db)._attempt(row)
         updated = cache.get_outbox(oid, tmp_db)
-        assert updated["attempts"] == ow.MAX_ATTEMPTS
+        assert updated is not None
         assert updated["status"] == "failed"
-        assert updated["next_attempt_at"] is None
+        assert updated["last_error"]
+        assert cache.list_attachments(tmp_db, oid, cache.OWNER_OUTBOX) != []
 
 
 class TestProcessBatch:

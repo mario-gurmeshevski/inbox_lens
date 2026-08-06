@@ -79,6 +79,16 @@ class OutboxWorker:
         if not cache.mark_outbox_attempting(outbox_id, self.db_path):
             return
         try:
+            attachments = cache.list_attachments(self.db_path, outbox_id, cache.OWNER_OUTBOX)
+            for att in attachments:
+                try:
+                    missing = not cache.attachment_path(att).is_file()
+                except OSError:
+                    missing = True
+                except cache.AttachmentError as invalid:
+                    raise RuntimeError(f"attachment path invalid: {att.get('filename')}") from invalid
+                if missing:
+                    raise RuntimeError(f"attachment file missing: {att.get('filename')}")
             email_reader.send_message(
                 _split_addrs(row["to_addr"]),
                 _split_addrs(row["cc"]),
@@ -90,6 +100,7 @@ class OutboxWorker:
                 original_message_id=row["original_message_id"],
                 thread_id=row["thread_id"],
                 db_path=self.db_path,
+                attachments=attachments or None,
             )
         except Exception as exc:
             attempts = int(row["attempts"] or 0) + 1
@@ -111,6 +122,7 @@ class OutboxWorker:
             return
 
         cache.delete_outbox(outbox_id, self.db_path)
+        cache.delete_attachments(self.db_path, outbox_id, cache.OWNER_OUTBOX)
         logger.info("Outbox message %s sent after %d attempt(s)", outbox_id, int(row["attempts"] or 0) + 1)
         try:
             self.on_change()

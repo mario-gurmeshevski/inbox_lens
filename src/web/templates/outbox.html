@@ -55,7 +55,7 @@
               <span class="outbox-status outbox-status-{{ it.status }}">{{ it.status }}</span>
               <span class="outbox-subject">{{ it.subject or "(no subject)" }}</span>
             </div>
-            <span class="outbox-to">To: {{ it.to_addr or "—" }}</span>
+            <span class="outbox-to">To: {{ it.to_addr or "–" }}</span>
             {% if it.cc %}<span class="outbox-cc">Cc: {{ it.cc }}</span>{% endif %}
             <span class="outbox-attempts">
               {{ it.attempts }} attempt

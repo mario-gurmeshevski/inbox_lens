@@ -2,6 +2,8 @@ import os
 import logging
 import smtplib
 from contextlib import contextmanager
+from email import encoders
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formatdate, make_msgid
@@ -124,7 +126,16 @@ def test_smtp_connection(server, port, security, db_path=None):
 
 
 def build_message(
-    from_addr, to_addrs, subject, body, mode, cc_addrs=None, bcc_addrs=None, html=None, original_message_id=None
+    from_addr,
+    to_addrs,
+    subject,
+    body,
+    mode,
+    cc_addrs=None,
+    bcc_addrs=None,
+    html=None,
+    original_message_id=None,
+    attachments=None,
 ):
     cc_addrs = list(cc_addrs or [])
     bcc_addrs = list(bcc_addrs or [])
@@ -152,12 +163,21 @@ def build_message(
         final_subject = subject
 
     to_joined = ", ".join(to_addrs)
+    attachments = list(attachments or [])
     if html:
-        msg = MIMEMultipart("alternative")
-        msg.attach(MIMEText(body or "", "plain", "utf-8"))
-        msg.attach(MIMEText(html, "html", "utf-8"))
+        body_part = MIMEMultipart("alternative")
+        body_part.attach(MIMEText(body or "", "plain", "utf-8"))
+        body_part.attach(MIMEText(html, "html", "utf-8"))
     else:
-        msg = MIMEText(body or "", "plain", "utf-8")
+        body_part = MIMEText(body or "", "plain", "utf-8")
+
+    if attachments:
+        msg = MIMEMultipart("mixed")
+        msg.attach(body_part)
+        for att in attachments:
+            msg.attach(_build_attachment_part(att))
+    else:
+        msg = body_part
     msg["From"] = from_addr
     msg["To"] = to_joined
     if cc_addrs:
@@ -173,6 +193,26 @@ def build_message(
     return msg
 
 
+def _build_attachment_part(att: dict) -> MIMEBase:
+    filename = att.get("filename") or "attachment"
+    mime_type = att.get("mime_type") or "application/octet-stream"
+    maintype, _, subtype = mime_type.partition("/")
+    if not subtype:
+        maintype, subtype = "application", "octet-stream"
+    payload = att.get("payload")
+    if payload is None:
+        if not att.get("disk_path"):
+            raise ValueError("attachment requires payload or disk_path")
+        from src.scripts.cache import attachments as _att_store
+
+        payload = _att_store.read_bytes_for(att)
+    part = MIMEBase(maintype, subtype)
+    part.set_payload(payload)
+    encoders.encode_base64(part)
+    part.add_header("Content-Disposition", "attachment", filename=filename)
+    return part
+
+
 def send_message(
     to_addrs,
     cc_addrs,
@@ -184,6 +224,7 @@ def send_message(
     original_message_id=None,
     thread_id=None,
     db_path=None,
+    attachments=None,
 ):
     if db_path is None:
         db_path = DB_PATH
@@ -201,6 +242,7 @@ def send_message(
         bcc_addrs=bcc_addrs,
         html=body_html,
         original_message_id=original_message_id,
+        attachments=attachments,
     )
     with smtp_session(db_path) as conn:
         conn.sendmail(from_addr, to_addrs + cc_addrs + bcc_addrs, msg.as_string())

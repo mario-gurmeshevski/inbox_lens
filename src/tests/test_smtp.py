@@ -472,3 +472,74 @@ class TestTestSmtpConnection:
         ctor.assert_called_once_with("smtp.x.com", 587, timeout=smtp_mod.SMTP_TIMEOUT)
         fake.starttls.assert_called_once()
         fake.quit.assert_called_once()
+
+
+class TestBuildMessageAttachments:
+    def _attachments(self):
+        return [
+            {"filename": "notes.txt", "mime_type": "text/plain", "payload": b"hello"},
+            {"filename": "doc.pdf", "mime_type": "application/pdf", "payload": b"%PDF-1.4"},
+        ]
+
+    def test_attachments_produce_multipart_mixed_with_html(self):
+        msg = smtp_mod.build_message(
+            "me@e.com", ["x@y.com"], "Hi", "body", "new", html="<p>b</p>", attachments=self._attachments()
+        )
+        assert msg.get_content_type() == "multipart/mixed"
+        parts = msg.get_payload()
+        assert len(parts) == 3
+        assert parts[0].get_content_type() == "multipart/alternative"
+        assert parts[1].get_content_type() == "text/plain"
+        assert parts[2].get_content_type() == "application/pdf"
+
+    def test_attachments_produce_multipart_mixed_without_html(self):
+        msg = smtp_mod.build_message("me@e.com", ["x@y.com"], "Hi", "body", "new", attachments=self._attachments())
+        assert msg.get_content_type() == "multipart/mixed"
+        parts = msg.get_payload()
+        assert len(parts) == 3
+        assert parts[0].get_content_type() == "text/plain"
+
+    def test_attachment_payload_round_trips_base64(self):
+        import base64
+
+        msg = smtp_mod.build_message("me@e.com", ["x@y.com"], "Hi", "body", "new", attachments=self._attachments())
+        parts = msg.get_payload()
+        txt_part = next(p for p in parts if p.get_filename() == "notes.txt")
+        pdf_part = next(p for p in parts if p.get_filename() == "doc.pdf")
+        assert base64.b64decode(txt_part.get_payload()) == b"hello"
+        assert base64.b64decode(pdf_part.get_payload()) == b"%PDF-1.4"
+
+    def test_no_attachments_unchanged_path(self):
+        msg = smtp_mod.build_message("me@e.com", ["x@y.com"], "Hi", "body", "new", html="<p>b</p>")
+        assert msg.get_content_type() == "multipart/alternative"
+
+    def test_attachment_part_reads_from_disk_path(self, tmp_db):
+        created = cache.store_attachment_bytes(
+            tmp_db,
+            "o1",
+            "outbox",
+            [{"filename": "disk.txt", "mime_type": "text/plain", "payload": b"from-disk"}],
+        )
+        msg = smtp_mod.build_message("me@e.com", ["x@y.com"], "Hi", "body", "new", html="<p>b</p>", attachments=created)
+        import base64
+
+        att_part = next(p for p in msg.get_payload() if p.get_filename() == "disk.txt")
+        assert base64.b64decode(att_part.get_payload()) == b"from-disk"
+
+
+class TestSendMessageAttachments:
+    def test_attachments_attached_to_outgoing_mime(self, monkeypatch, tmp_db, fake_credentials):
+        created = cache.store_attachment_bytes(
+            tmp_db,
+            "o1",
+            "outbox",
+            [{"filename": "file.txt", "mime_type": "text/plain", "payload": b"payload-here"}],
+        )
+        fake = MagicMock(name="smtp")
+        with patch.object(smtp_mod.smtplib, "SMTP_SSL", return_value=fake):
+            smtp_mod.send_message(
+                ["x@y.com"], [], [], "Hi", "Body", "<p>Body</p>", "new", db_path=tmp_db, attachments=created
+            )
+        raw = fake.sendmail.call_args.args[2]
+        assert "Content-Disposition: attachment" in raw
+        assert "file.txt" in raw

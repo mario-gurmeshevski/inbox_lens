@@ -202,7 +202,7 @@ def check_for_update(force: bool = False) -> dict:
     if latest is None:
         message = "Couldn't reach the version source. Check your connection."
         if is_rate_limited():
-            message = "GitHub rate limit reached — try again in a few minutes."
+            message = "GitHub rate limit reached; try again in a few minutes."
         return {
             "current": current,
             "latest": None,

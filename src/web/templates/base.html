@@ -42,6 +42,12 @@
           <i data-lucide="inbox" class="icon"></i>
           <span class="nav-label">Emails</span>
         </a>
+        <a href="/attachments"
+           class="{% if request.url.path == '/attachments' %}active{% endif %}"
+           {% if request.url.path == '/attachments' %}aria-current="page"{% endif %}>
+          <i data-lucide="paperclip" class="icon"></i>
+          <span class="nav-label">Attachments</span>
+        </a>
         <a href="/keywords"
            class="{% if '/keywords' in request.url.path %}active{% endif %}"
            {% if '/keywords' in request.url.path %}aria-current="page"{% endif %}>
@@ -102,6 +108,12 @@
            {% if request.url.path == '/emails' %}aria-current="page"{% endif %}>
           <i data-lucide="inbox" class="icon"></i>
           <span>Emails</span>
+        </a>
+        <a href="/attachments"
+           class="{% if request.url.path == '/attachments' %}active{% endif %}"
+           {% if request.url.path == '/attachments' %}aria-current="page"{% endif %}>
+          <i data-lucide="paperclip" class="icon"></i>
+          <span>Attachments</span>
         </a>
         <a href="/keywords"
            class="{% if '/keywords' in request.url.path %}active{% endif %}"

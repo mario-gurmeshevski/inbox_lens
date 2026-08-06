@@ -58,13 +58,13 @@ Templates live in `src/web/templates/` and are formatted with [djlint](https://w
 
 ### Why not just use your editor's HTML formatter?
 
-Jinja2 `{% %}` / `{{ }}` tags are not valid HTML, so editors' built-in HTML formatters (Prettier, the VSCode/IntelliJ HTML formatter, Zed's prettier) mangle them — e.g. `{% if timezone == tz_id %}` gets split into `=""` and `="tz_id"`. That is why this project formats templates with djlint instead.
+Jinja2 `{% %}` / `{{ }}` tags are not valid HTML, so editors' built-in HTML formatters (Prettier, the VSCode/IntelliJ HTML formatter, Zed's prettier) mangle them, e.g. `{% if timezone == tz_id %}` gets split into `=""` and `="tz_id"`. That is why this project formats templates with djlint instead.
 
 The **CI** GitHub Actions workflow runs `make lint` (Ruff + `djlint --check`) on every pull request. If it fails, run `make format` locally and push again. This catches mangled or unformatted templates before they merge, regardless of which editor a contributor uses.
 
 ## Editor-specific setup
 
-Format-on-save is inherently editor-specific, so it is configured per editor below. The CLI (`make format`) works the same in every editor; the CI workflow enforces it on pull requests.
+Format-on-save is inherently editor-specific, so it is configured per editor below. The CLI (`make format`) works the same in every editor, the CI workflow enforces it on pull requests.
 
 ### VS Code / Cursor
 
@@ -74,7 +74,7 @@ Optional: install the [djlint extension](https://marketplace.visualstudio.com/it
 
 ### JetBrains (WebStorm / PyCharm)
 
-- Do **not** run _Reformat Code_ on `.html` templates — IntelliJ's HTML formatter does not understand Jinja.
+- Do **not** run _Reformat Code_ on `.html` templates, IntelliJ's HTML formatter does not understand Jinja.
 - Turn off "Reformat on save" for HTML (_Settings → Tools → Actions on Save_).
 - Optional: add djlint as an **External Tool** (Settings → Tools → External Tools) with program `.venv/bin/djlint` and arguments `--reformat $FilePath$`, then bind it to a key. Indentation follows the committed `.editorconfig`.
 

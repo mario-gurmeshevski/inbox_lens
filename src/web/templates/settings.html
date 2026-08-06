@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Settings — Email Reader{% endblock %}
+{% block title %}Settings - Email Reader{% endblock %}
 {% block styles %}
   <link rel="stylesheet" href="/static/settings.css" />
   <link rel="stylesheet" href="/static/style.css" />
@@ -178,11 +178,15 @@
             Server used to send mail. Host and port default to your
             <code>SMTP_SERVER</code>/<code>SMTP_PORT</code> environment variables;
             saving here overrides them. Login uses your account's email and
-            password (shared with IMAP — use an App Password for Gmail).
+            password (shared with IMAP, use an App Password for Gmail).
           </p>
         </div>
       </div>
-      <form id="smtp-settings-form" class="settings-form" autocomplete="off">
+      <form id="smtp-settings-form"
+            class="settings-form"
+            autocomplete="off"
+            hx-post="/settings/smtp"
+            hx-trigger="change">
         <div class="settings-fields">
           <label class="field">
             <span class="field-label">SMTP host</span>
@@ -212,13 +216,12 @@
                       {% if smtp_security == "starttls" %}selected{% endif %}>STARTTLS (587)</option>
               <option value="none" {% if smtp_security == "none" %}selected{% endif %}>None</option>
             </select>
-            <small class="settings-hint" id="smtp-security-warning" hidden>
-              Plaintext mode sends credentials unencrypted — not recommended.
-            </small>
           </label>
         </div>
+        <small class="settings-note" id="smtp-security-warning" hidden>
+          None security disables encryption, your email password is sent in plain text over the network. Use only for local testing, most providers reject this.
+        </small>
         <div class="settings-actions">
-          <button type="button" class="btn" id="smtp-save-btn">Save</button>
           <button type="button" class="btn btn-secondary" id="smtp-test-btn">Test connection</button>
           <span class="settings-inline-status"
                 id="smtp-test-status"
@@ -226,6 +229,36 @@
                 aria-live="polite"></span>
         </div>
       </form>
+    </div>
+    <div class="detail-card">
+      <div class="settings-row">
+        <div class="settings-info">
+          <div class="settings-label">
+            <i data-lucide="paperclip" class="icon"></i>
+            Max file size
+          </div>
+          <p class="settings-desc">
+            Per-file cap for uploads and forwarded attachments. Total per message is capped higher. Saves automatically.
+          </p>
+        </div>
+      </div>
+      <div class="settings-network-info">
+        <form hx-post="/settings/attachments"
+              hx-trigger="change"
+              class="setup-form">
+          <div class="form-group">
+            <label for="attachment_max_mb">Max file size</label>
+            <div class="theme-select-wrap">
+              <select id="attachment_max_mb" name="attachment_max_mb" class="theme-select">
+                {% for mb in attachment_mb_options %}
+                  <option value="{{ mb }}" {% if attachment_max_mb == mb %}selected{% endif %}>{{ mb }} MB</option>
+                {% endfor %}
+              </select>
+              <i data-lucide="chevron-down" class="theme-select-chevron icon"></i>
+            </div>
+          </div>
+        </form>
+      </div>
     </div>
   </section>
   <section class="settings-tab-panel"
@@ -509,7 +542,7 @@
               A dashboard password is set. Visitors must log in
               to access the dashboard.
             {% else %}
-              No password set — the dashboard
+              No password set, the dashboard
               binds to <code>localhost</code> only. Set a password to expose it
               safely.
             {% endif %}

@@ -1,0 +1,43 @@
+{% if items %}
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>From</th>
+        <th>Subject</th>
+        <th>Type</th>
+        <th class="num">Size</th>
+        <th>Date</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in items %}
+        <tr>
+          <td data-label="Name">
+            <i data-lucide="{{ a.mime_type | attachment_icon }}" class="icon-sm"></i>
+            <span class="att-name">{{ a.filename }}</span>
+          </td>
+          <td data-label="From">{{ a.sender | format_sender }}</td>
+          <td data-label="Subject">
+            <a href="/emails/{{ a.owner_id }}" class="subject-link">{{ a.subject or "—" }}</a>
+          </td>
+          <td data-label="Type">{{ a.mime_type }}</td>
+          <td data-label="Size" class="num">{{ a.size | format_size }}</td>
+          <td data-label="Date">{{ a.date | format_date }}</td>
+          <td data-label="Download">
+            <a class="btn btn-sm"
+               href="/emails/{{ a.owner_id }}/attachments/{{ a.id }}"
+               download>
+              <i data-lucide="download" class="icon-sm"></i> Download
+            </a>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <tr>
+    <td colspan="7" class="empty-state">No attachments found.</td>
+  </tr>
+{% endif %}

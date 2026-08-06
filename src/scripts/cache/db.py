@@ -85,6 +85,18 @@ CREATE TABLE IF NOT EXISTS outbox (
 );
 CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status);
 CREATE INDEX IF NOT EXISTS idx_outbox_next ON outbox(status, next_attempt_at);
+
+CREATE TABLE IF NOT EXISTS attachments (
+    id          TEXT PRIMARY KEY,
+    owner_type  TEXT NOT NULL,
+    owner_id    TEXT NOT NULL,
+    filename    TEXT NOT NULL,
+    mime_type   TEXT NOT NULL,
+    size        INTEGER NOT NULL,
+    disk_path   TEXT NOT NULL,
+    created_at  TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_attachments_owner ON attachments(owner_type, owner_id);
 """
 
 
@@ -167,7 +179,7 @@ def _connect(db_path: str):
         raise
 
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 
 def _migrate(db_path: str) -> None:
@@ -226,6 +238,19 @@ def _migrate(db_path: str) -> None:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_outbox_next ON outbox(status, next_attempt_at)")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS attachments (\n"
+            "    id          TEXT PRIMARY KEY,\n"
+            "    owner_type  TEXT NOT NULL,\n"
+            "    owner_id    TEXT NOT NULL,\n"
+            "    filename    TEXT NOT NULL,\n"
+            "    mime_type   TEXT NOT NULL,\n"
+            "    size        INTEGER NOT NULL,\n"
+            "    disk_path   TEXT NOT NULL,\n"
+            "    created_at  TEXT DEFAULT (datetime('now'))\n"
+            ")"
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_attachments_owner ON attachments(owner_type, owner_id)")
         needs_backfill = conn.execute("SELECT 1 FROM emails WHERE thread_id IS NULL LIMIT 1").fetchone()
         if needs_backfill:
             conn.execute("UPDATE emails SET thread_id = message_id_hash WHERE thread_id IS NULL")
@@ -271,6 +296,8 @@ def delete_email(message_id: str, db_path: str) -> bool:
             "DELETE FROM emails WHERE message_id_hash = ?",
             (message_id_hash,),
         )
+    if cursor.rowcount > 0:
+        _delete_email_attachments(db_path, [message_id_hash])
     return cursor.rowcount > 0
 
 
@@ -285,7 +312,19 @@ def delete_emails_by_hashes(db_path: str, message_id_hashes: list[str]) -> int:
             message_id_hashes,
         ):
             removed += cursor.rowcount
+    if removed > 0:
+        _delete_email_attachments(db_path, message_id_hashes)
     return removed
+
+
+def _delete_email_attachments(db_path: str, message_id_hashes: list[str]) -> None:
+    try:
+        from src.scripts.cache import attachments as _att
+
+        for h in message_id_hashes:
+            _att.delete_attachments(db_path, h, _att.OWNER_EMAIL)
+    except Exception:
+        logger.warning("Failed to clean up attachments for deleted email(s)", exc_info=True)
 
 
 def reconcile_inbox(

@@ -436,6 +436,46 @@ class TestWebEndpoints:
         assert second.headers.get("X-Toast-Tone") == "warning"
         assert "wait" in second.headers.get("X-Toast", "").lower()
 
+    def test_save_attachment_settings_persists_single_bytes_key(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post("/settings/attachments", data={"attachment_max_mb": "25"})
+        assert resp.status_code == 204
+        assert cache.get_setting("max_attachment_size", self.db_path) == str(25 * 1024 * 1024)
+        assert cache.get_setting("max_attachment_size_mb", self.db_path) is None
+
+    def test_save_attachment_settings_rejects_invalid_mb(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.post("/settings/attachments", data={"attachment_max_mb": "999"})
+        assert resp.status_code == 204
+        assert cache.get_setting("max_attachment_size", self.db_path) == str(10 * 1024 * 1024)
+
+    def test_setting_single_key_keeps_hint_and_enforcement_in_sync(self):
+        cache.save_setting("max_attachment_size", str(15 * 1024 * 1024), self.db_path)
+        hint = web._attachment_hint(self.db_path)
+        assert "15 MB per file" in hint
+        with pytest.raises(cache.AttachmentError, match="per-file limit"):
+            cache.store_attachment_bytes(
+                self.db_path,
+                "sync-1",
+                cache.OWNER_DRAFT,
+                [
+                    {
+                        "filename": "big.bin",
+                        "mime_type": "application/octet-stream",
+                        "payload": b"x" * (16 * 1024 * 1024),
+                    }
+                ],
+            )
+
+    def test_settings_page_exposes_attachment_dropdown(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/settings")
+        assert "attachment_max_mb" in resp.text
+        assert "Max file size" in resp.text
+
     def test_email_detail_found(self):
         self._seed_emails(1)
         email_hash = cache._hash_message_id("<web0@e.com>")
@@ -1413,6 +1453,341 @@ class TestWebExtraEndpoints:
         assert resp.status_code == 200
 
 
+class TestReceivedAttachmentsEndpoints:
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path):
+        self.db_path = str(tmp_path / "test_recatt.db")
+        cache.init_db(self.db_path)
+        cache.save_email_credentials("test@test.com", "testpass", self.db_path)
+
+    def _make_client(self):
+        from fastapi.testclient import TestClient
+
+        return TestClient(web.app)
+
+    def _seed_email(self):
+        _save_fetched_batch(
+            [
+                {
+                    "message_id": "<rec0@e.com>",
+                    "from": "sender@e.com",
+                    "subject": "Rec subject",
+                    "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                    "body": "Body 0",
+                    "_category": "7",
+                }
+            ],
+            self.db_path,
+        )
+        return cache._hash_message_id("<rec0@e.com>")
+
+    def test_format_size_filter(self):
+        assert web._format_size(0) == "0 B"
+        assert web._format_size(512) == "512 B"
+        assert web._format_size(2048) == "2.0 KB"
+        assert web._format_size(2 * 1024 * 1024) == "2.0 MB"
+
+    def test_download_attachment_returns_bytes_and_header(self):
+        email_hash = self._seed_email()
+        created = cache.store_received_attachments(
+            self.db_path,
+            email_hash,
+            [{"filename": "doc.pdf", "mime_type": "application/pdf", "payload": b"%PDF-1.4"}],
+        )[0]
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get(f"/emails/{email_hash}/attachments/{created['id']}")
+        assert resp.status_code == 200
+        assert resp.content == b"%PDF-1.4"
+        assert resp.headers["content-type"] == "application/pdf"
+        cd = resp.headers["content-disposition"]
+        assert 'filename="doc.pdf"' in cd
+        assert "filename*=UTF-8''doc.pdf" in cd
+
+    def test_download_attachment_404_on_wrong_owner(self):
+        email_hash = self._seed_email()
+        created = cache.store_received_attachments(
+            self.db_path,
+            "otherhash",
+            [{"filename": "secret.txt", "mime_type": "text/plain", "payload": b"secret"}],
+        )[0]
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get(f"/emails/{email_hash}/attachments/{created['id']}")
+        assert resp.status_code == 404
+
+    def test_download_attachment_404_on_unknown_id(self):
+        email_hash = self._seed_email()
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get(f"/emails/{email_hash}/attachments/does-not-exist")
+        assert resp.status_code == 404
+
+    def test_detail_partial_renders_attachment_chips(self):
+        email_hash = self._seed_email()
+        cache.store_received_attachments(
+            self.db_path,
+            email_hash,
+            [{"filename": "doc.pdf", "mime_type": "application/pdf", "payload": b"%PDF-1.4"}],
+        )
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get(f"/partials/email-detail/{email_hash}")
+        assert resp.status_code == 200
+        body = resp.text
+        assert "received-attachments" in body
+        assert "doc.pdf" in body
+        assert f"/emails/{email_hash}/attachments/" in body
+        assert "B" in body or "KB" in body
+
+
+class TestAttachmentsPage:
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path):
+        self.db_path = str(tmp_path / "test_att.db")
+        cache.init_db(self.db_path)
+        cache.save_email_credentials("test@test.com", "testpass", self.db_path)
+
+    def _make_client(self):
+        from fastapi.testclient import TestClient
+
+        return TestClient(web.app)
+
+    def _seed_email(
+        self, message_id="<rec@e.com>", sender="sender@e.com", subject="Subject", date="Mon, 01 Jan 2024 10:00:00 +0000"
+    ):
+        _save_fetched_batch(
+            [
+                {
+                    "message_id": message_id,
+                    "from": sender,
+                    "subject": subject,
+                    "date": date,
+                    "body": "Body",
+                    "_category": "7",
+                }
+            ],
+            self.db_path,
+        )
+        return cache._hash_message_id(message_id)
+
+    def _seed_attachment(self, email_hash, filename, mime, payload=b"x"):
+        return cache.store_received_attachments(
+            self.db_path, email_hash, [{"filename": filename, "mime_type": mime, "payload": payload}]
+        )[0]
+
+    def test_page_renders_with_items(self):
+        email_hash = self._seed_email()
+        self._seed_attachment(email_hash, "doc.pdf", "application/pdf", b"%PDF")
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/attachments")
+        assert resp.status_code == 200
+        assert "Attachments" in resp.text
+        assert "doc.pdf" in resp.text
+        assert "application/pdf" in resp.text
+        assert "sender@e.com" in resp.text
+        assert "Subject" in resp.text
+
+    def test_page_renders_empty_state(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/attachments")
+        assert resp.status_code == 200
+        assert "No attachments found" in resp.text or "empty-state" in resp.text
+
+    def test_search_filter_substring(self):
+        email_hash = self._seed_email()
+        self._seed_attachment(email_hash, "invoice_2024.pdf", "application/pdf")
+        self._seed_attachment(email_hash, "report.txt", "text/plain")
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/attachments?search=invoice")
+        assert resp.status_code == 200
+        assert "invoice_2024.pdf" in resp.text
+        assert "report.txt" not in resp.text
+
+    def test_search_filter_extension(self):
+        h1 = self._seed_email(message_id="<e1@e.com>")
+        h2 = self._seed_email(message_id="<e2@e.com>")
+        h3 = self._seed_email(message_id="<e3@e.com>")
+        self._seed_attachment(h1, "a.txt", "text/plain")
+        self._seed_attachment(h2, "b.txt", "text/plain")
+        self._seed_attachment(h3, "c.png", "image/png")
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/attachments?search=.txt")
+        assert resp.status_code == 200
+        assert "a.txt" in resp.text
+        assert "b.txt" in resp.text
+        assert "c.png" not in resp.text
+
+    def test_type_filter_images(self):
+        h1 = self._seed_email(message_id="<e1@e.com>")
+        h2 = self._seed_email(message_id="<e2@e.com>")
+        h3 = self._seed_email(message_id="<e3@e.com>")
+        self._seed_attachment(h1, "a.png", "image/png")
+        self._seed_attachment(h2, "b.jpg", "image/jpeg")
+        self._seed_attachment(h3, "c.txt", "text/plain")
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/attachments?type=images")
+        assert resp.status_code == 200
+        assert "a.png" in resp.text
+        assert "b.jpg" in resp.text
+        assert "c.txt" not in resp.text
+
+    def test_type_filter_pdf(self):
+        h1 = self._seed_email(message_id="<e1@e.com>")
+        h2 = self._seed_email(message_id="<e2@e.com>")
+        self._seed_attachment(h1, "a.pdf", "application/pdf")
+        self._seed_attachment(h2, "b.txt", "text/plain")
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/attachments?type=pdf")
+        assert resp.status_code == 200
+        assert "a.pdf" in resp.text
+        assert "b.txt" not in resp.text
+
+    def test_type_filter_documents(self):
+        h1 = self._seed_email(message_id="<e1@e.com>")
+        h2 = self._seed_email(message_id="<e2@e.com>")
+        h3 = self._seed_email(message_id="<e3@e.com>")
+        h4 = self._seed_email(message_id="<e4@e.com>")
+        self._seed_attachment(h1, "a.txt", "text/plain")
+        self._seed_attachment(h2, "b.csv", "text/csv")
+        self._seed_attachment(h3, "c.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        self._seed_attachment(h4, "d.png", "image/png")
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/attachments?type=documents")
+        assert resp.status_code == 200
+        assert "a.txt" in resp.text
+        assert "b.csv" in resp.text
+        assert "c.docx" in resp.text
+        assert "d.png" not in resp.text
+
+    def test_type_filter_archives(self):
+        h1 = self._seed_email(message_id="<e1@e.com>")
+        h2 = self._seed_email(message_id="<e2@e.com>")
+        h3 = self._seed_email(message_id="<e3@e.com>")
+        self._seed_attachment(h1, "a.zip", "application/zip")
+        self._seed_attachment(h2, "b.gz", "application/gzip")
+        self._seed_attachment(h3, "c.txt", "text/plain")
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/attachments?type=archives")
+        assert resp.status_code == 200
+        assert "a.zip" in resp.text
+        assert "b.gz" in resp.text
+        assert "c.txt" not in resp.text
+
+    def test_type_filter_other(self):
+        h1 = self._seed_email(message_id="<e1@e.com>")
+        h2 = self._seed_email(message_id="<e2@e.com>")
+        h3 = self._seed_email(message_id="<e3@e.com>")
+        self._seed_attachment(h1, "a.txt", "text/plain")
+        self._seed_attachment(h2, "b.pdf", "application/pdf")
+        self._seed_attachment(h3, "c.unknown", "application/octet-stream")
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/attachments?type=other")
+        assert resp.status_code == 200
+        assert "c.unknown" in resp.text
+        assert "a.txt" not in resp.text
+        assert "b.pdf" not in resp.text
+
+    def test_size_sort_asc(self):
+        h1 = self._seed_email(message_id="<e1@e.com>")
+        h2 = self._seed_email(message_id="<e2@e.com>")
+        h3 = self._seed_email(message_id="<e3@e.com>")
+        self._seed_attachment(h1, "a.txt", "text/plain", b"aaa")  # 3
+        self._seed_attachment(h2, "b.txt", "text/plain", b"bb")  # 2
+        self._seed_attachment(h3, "c.txt", "text/plain", b"ccccc")  # 5
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/attachments?sort=asc")
+        assert resp.status_code == 200
+        idx_b = resp.text.index("b.txt")
+        idx_a = resp.text.index("a.txt")
+        idx_c = resp.text.index("c.txt")
+        assert idx_b < idx_a < idx_c
+
+    def test_size_sort_desc(self):
+        h1 = self._seed_email(message_id="<e1@e.com>")
+        h2 = self._seed_email(message_id="<e2@e.com>")
+        h3 = self._seed_email(message_id="<e3@e.com>")
+        self._seed_attachment(h1, "a.txt", "text/plain", b"aaa")  # 3
+        self._seed_attachment(h2, "b.txt", "text/plain", b"bb")  # 2
+        self._seed_attachment(h3, "c.txt", "text/plain", b"ccccc")  # 5
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/attachments?sort=desc")
+        assert resp.status_code == 200
+        idx_c = resp.text.index("c.txt")
+        idx_a = resp.text.index("a.txt")
+        idx_b = resp.text.index("b.txt")
+        assert idx_c < idx_a < idx_b
+
+    def test_pagination(self):
+        for i in range(11):
+            h = self._seed_email(message_id=f"<e{i}@e.com>")
+            self._seed_attachment(h, f"f{i}.txt", "text/plain", b"x")
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            cache.save_setting("page_size", "10", self.db_path)
+            resp = client.get("/attachments?page=1&sort=asc")
+            assert resp.status_code == 200
+            assert "Page 1 of 2" in resp.text
+            assert "Next &raquo;" in resp.text
+            resp2 = client.get("/attachments?page=2&sort=asc")
+            assert resp2.status_code == 200
+            assert "Page 2 of 2" in resp2.text
+            assert "&laquo; Prev" in resp2.text
+
+    def test_partial_endpoint_renders_table(self):
+        email_hash = self._seed_email()
+        self._seed_attachment(email_hash, "doc.pdf", "application/pdf")
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/partials/attachments")
+        assert resp.status_code == 200
+        assert "doc.pdf" in resp.text
+        assert "attachments-table" in resp.text or "table" in resp.text
+
+    def test_nav_link_present_in_desktop_and_mobile(self):
+        email_hash = self._seed_email()
+        self._seed_attachment(email_hash, "doc.pdf", "application/pdf")
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/attachments")
+        assert resp.status_code == 200
+        body = resp.text
+        assert '/attachments"' in body
+        assert "paperclip" in body
+        assert "Attachments" in body
+        assert "mobile-menu" in body or "mobile-menu-links" in body
+        assert "/attachments" in body
+
+    def test_download_link_in_table(self):
+        email_hash = self._seed_email()
+        att = self._seed_attachment(email_hash, "doc.pdf", "application/pdf")
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/attachments")
+        assert resp.status_code == 200
+        assert f"/emails/{email_hash}/attachments/{att['id']}" in resp.text
+
+    def test_open_email_link_in_table(self):
+        email_hash = self._seed_email()
+        self._seed_attachment(email_hash, "doc.pdf", "application/pdf")
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            resp = client.get("/attachments")
+        assert resp.status_code == 200
+        assert f'/emails/{email_hash}"' in resp.text or f"/emails/{email_hash}'" in resp.text
+
+
 class TestDashboardPriorityDistribution:
     @pytest.fixture(autouse=True)
     def setup(self, tmp_path):
@@ -1679,6 +2054,45 @@ class TestAuthMiddleware:
             resp = client.get("/setup-dashboard", follow_redirects=False)
         assert resp.status_code == 303
         assert resp.headers["location"] == "/"
+
+    def test_attachment_download_requires_auth(self):
+        # Regression guard: attachment endpoints inherit the global auth gate.
+        _save_fetched_batch(
+            [
+                {
+                    "message_id": "<attach-auth@e.com>",
+                    "from": "s@e.com",
+                    "subject": "S",
+                    "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                    "body": "b",
+                    "_category": "7",
+                }
+            ],
+            self.db_path,
+        )
+        email_hash = cache._hash_message_id("<attach-auth@e.com>")
+        created = cache.store_received_attachments(
+            self.db_path,
+            email_hash,
+            [{"filename": "f.txt", "mime_type": "text/plain", "payload": b"secret"}],
+        )[0]
+        att_id = created["id"]
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._make_client()
+            html = client.get(
+                f"/emails/{email_hash}/attachments/{att_id}",
+                headers={"accept": "text/html"},
+                follow_redirects=False,
+            )
+            assert html.status_code == 303
+            assert html.headers["location"].startswith("/login?next=")
+            api = client.get(
+                f"/emails/{email_hash}/attachments/{att_id}",
+                headers={"accept": "application/json"},
+                follow_redirects=False,
+            )
+            assert api.status_code == 401
+            assert api.json()["detail"] == "Not authenticated."
 
 
 class TestAuthRoutes:
@@ -2553,6 +2967,122 @@ class TestComposePartial:
             resp = client.get("/partials/compose/nonexistent?mode=reply")
         assert resp.status_code == 404
 
+    def test_forward_attachments_stages_originals_under_draft(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(
+                email_reader,
+                "fetch_original_attachments",
+                return_value=[
+                    {"filename": "report.pdf", "mime_type": "application/pdf", "payload": b"%PDF-1.4"},
+                ],
+            ),
+        ):
+            client = self._client()
+            resp = client.post(f"/partials/forward-attachments/{self.hash}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["attachments"]) == 1
+        assert data["attachments"][0]["filename"] == "report.pdf"
+        draft_id = data["draft_id"]
+        stored = cache.list_attachments(self.db_path, draft_id, cache.OWNER_DRAFT)
+        assert len(stored) == 1
+        assert cache.attachment_path(stored[0]).is_file()
+
+    def test_forward_attachments_graceful_when_imap_fails(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(email_reader, "fetch_original_attachments", return_value=[]),
+        ):
+            client = self._client()
+            resp = client.post(f"/partials/forward-attachments/{self.hash}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["attachments"] == []
+        assert "notice" in data
+
+    def test_forward_attachments_unknown_hash_404(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._client()
+            resp = client.post("/partials/forward-attachments/nonexistent")
+        assert resp.status_code == 404
+
+    def test_forward_attachments_accepts_blocked_extension_received_file(self):
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(
+                email_reader,
+                "fetch_original_attachments",
+                return_value=[
+                    {"filename": "script.py", "mime_type": "text/x-python", "payload": b"print('hi')"},
+                ],
+            ),
+        ):
+            client = self._client()
+            resp = client.post(f"/partials/forward-attachments/{self.hash}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["attachments"]) == 1
+        assert data["attachments"][0]["filename"] == "script.py"
+        stored = cache.list_attachments(self.db_path, data["draft_id"], cache.OWNER_DRAFT)
+        assert len(stored) == 1
+        assert cache.read_attachment_bytes(stored[0]) == b"print('hi')"
+
+    def test_forward_attachments_cleans_up_on_partial_write_failure(self):
+        from src.scripts.cache.db import _connect
+
+        parts = [
+            {"filename": "a.txt", "mime_type": "text/plain", "payload": b"a"},
+            {"filename": "b.txt", "mime_type": "text/plain", "payload": b"b"},
+        ]
+        original_store = cache.store_staged_received
+        call = {"n": 0}
+
+        def store_then_fail(db_path, owner_id, owner_type, items):
+            call["n"] += 1
+            original_store(db_path, owner_id, owner_type, [items[0]])
+            raise RuntimeError("disk full")
+
+        with (
+            patch.object(web, "DB_PATH", self.db_path),
+            patch.object(email_reader, "fetch_original_attachments", return_value=parts),
+            patch.object(cache, "store_staged_received", side_effect=store_then_fail),
+        ):
+            client = self._client()
+            resp = client.post(f"/partials/forward-attachments/{self.hash}")
+        assert resp.status_code == 500
+        assert call["n"] == 1
+        with _connect(self.db_path) as conn:
+            n = conn.execute("SELECT COUNT(*) FROM attachments WHERE owner_type = ?", (cache.OWNER_DRAFT,)).fetchone()[
+                0
+            ]
+        assert n == 0
+
+    def test_abandon_endpoint_deletes_unpersisted_draft_attachments(self):
+        owner_id = "abandon-1"
+        created = cache.store_attachment_bytes(
+            self.db_path,
+            owner_id,
+            cache.OWNER_DRAFT,
+            [{"filename": "f.txt", "mime_type": "text/plain", "payload": b"x"}],
+        )
+        path = cache.attachment_path(created[0])
+        assert path.is_file()
+
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._client()
+            resp = client.post(f"/drafts/{owner_id}/abandon")
+
+        assert resp.status_code == 204
+        assert cache.list_attachments(self.db_path, owner_id, cache.OWNER_DRAFT) == []
+        assert not path.exists()
+
+    def test_abandon_is_noop_when_nothing_exists(self):
+        with patch.object(web, "DB_PATH", self.db_path):
+            client = self._client()
+            resp = client.post("/drafts/never-existed/abandon")
+        assert resp.status_code == 204
+
     def test_compose_partial_escapes_xss_in_quoted_body(self):
         from src.tests._helpers import save_fetched
 
@@ -2665,6 +3195,172 @@ class TestComposeSend:
         assert captured["to"] == ["to@x.com"]
         assert captured["cc"] == ["a@x.com", "b@x.com"]
         assert captured["bcc"] == ["secret@x.com"]
+
+    def test_send_uploads_attachments(self, web_client, monkeypatch):
+        captured = {}
+
+        def fake_send(*args, **kw):
+            captured["attachments"] = kw.get("attachments")
+
+        monkeypatch.setattr(email_reader, "send_message", fake_send)
+        resp = web_client.post(
+            "/emails/send",
+            data={
+                "to": "to@x.com",
+                "cc": "",
+                "bcc": "",
+                "subject": "Hi",
+                "body": "Body",
+                "mode": "new",
+            },
+            files=[("attachments", ("file.txt", b"hello", "text/plain"))],
+        )
+        assert resp.status_code == 204
+        assert resp.headers.get("X-Toast-Tone") == "success"
+        atts = captured["attachments"]
+        assert atts and len(atts) == 1
+        assert atts[0]["filename"] == "file.txt"
+        from src.scripts import web as _web
+
+        assert cache.list_attachments(_web.DB_PATH, atts[0]["owner_id"], cache.OWNER_OUTBOX) == []
+
+    def test_send_rejects_blocked_attachment_type(self, web_client, monkeypatch):
+        called = {"n": 0}
+
+        def fake_send(*a, **k):
+            called["n"] += 1
+
+        monkeypatch.setattr(email_reader, "send_message", fake_send)
+        resp = web_client.post(
+            "/emails/send",
+            data={
+                "to": "to@x.com",
+                "subject": "Hi",
+                "body": "Body",
+                "mode": "new",
+            },
+            files=[("attachments", ("evil.exe", b"MZ", "application/x-msdownload"))],
+        )
+        assert resp.headers.get("X-Toast-Tone") == "error"
+        assert called["n"] == 0
+
+    def test_send_failure_enqueues_attachments_for_retry(self, web_client, monkeypatch):
+        def fail(*a, **k):
+            raise RuntimeError("smtp down")
+
+        monkeypatch.setattr(email_reader, "send_message", fail)
+        resp = web_client.post(
+            "/emails/send",
+            data={
+                "to": "to@x.com",
+                "subject": "Hi",
+                "body": "Body",
+                "mode": "new",
+            },
+            files=[("attachments", ("keep.txt", b"data", "text/plain"))],
+        )
+        assert resp.headers.get("X-Toast-Tone") == "warning"
+        from src.scripts import web as _web
+
+        rows = cache.list_outbox(_web.DB_PATH)
+        assert len(rows) == 1
+        oid = rows[0]["id"]
+        atts = cache.list_attachments(_web.DB_PATH, oid, cache.OWNER_OUTBOX)
+        assert len(atts) == 1
+        assert atts[0]["filename"] == "keep.txt"
+        assert cache.attachment_path(atts[0]).is_file()
+
+    def test_send_enqueue_failure_rolls_back_draft_attachments(self, web_client, monkeypatch):
+        from src.scripts import web as _web
+
+        cache.save_draft(
+            {
+                "id": "d-rollback",
+                "to_addr": "",
+                "cc": "",
+                "bcc": "",
+                "subject": "S",
+                "body": "B",
+                "mode": "new",
+                "thread_id": None,
+                "in_reply_to": None,
+            },
+            _web.DB_PATH,
+        )
+        created = cache.store_attachment_bytes(
+            _web.DB_PATH,
+            "d-rollback",
+            cache.OWNER_DRAFT,
+            [{"filename": "f.txt", "mime_type": "text/plain", "payload": b"x"}],
+        )
+        path = cache.attachment_path(created[0])
+
+        def fail(*a, **k):
+            raise RuntimeError("smtp down")
+
+        def boom_enqueue(*a, **k):
+            raise RuntimeError("db locked")
+
+        monkeypatch.setattr(email_reader, "send_message", fail)
+        monkeypatch.setattr(cache, "enqueue", boom_enqueue)
+        resp = web_client.post(
+            "/emails/send",
+            data={"to": "to@x.com", "subject": "S", "body": "B", "mode": "new", "draft_id": "d-rollback"},
+        )
+        assert resp.headers.get("X-Toast-Tone") == "error"
+        kept = cache.list_attachments(_web.DB_PATH, "d-rollback", cache.OWNER_DRAFT)
+        assert len(kept) == 1
+        assert path.is_file()
+
+    def test_forward_round_trip_attaches_originals(self, web_client, monkeypatch):
+        from src.scripts import web as _web
+
+        _save_fetched(
+            {
+                "message_id": "<orig-fwd@e.com>",
+                "from": "alice@e.com",
+                "subject": "Lunch?",
+                "date": "Mon, 01 Jan 2024 10:00:00 +0000",
+                "body": "Want to grab lunch?",
+                "thread_id": "t-fwd",
+                "gm_thrid": "t-fwd",
+                "in_reply_to": "",
+            },
+            _web.DB_PATH,
+        )
+        fwd_hash = cache._hash_message_id("<orig-fwd@e.com>")
+        monkeypatch.setattr(
+            email_reader,
+            "fetch_original_attachments",
+            lambda *a, **k: [
+                {"filename": "menu.pdf", "mime_type": "application/pdf", "payload": b"%PDF menu"},
+            ],
+        )
+        resp = web_client.post(f"/partials/forward-attachments/{fwd_hash}")
+        draft_id = resp.json()["draft_id"]
+
+        captured = {}
+
+        def fake_send(*a, **k):
+            captured["attachments"] = k.get("attachments")
+
+        monkeypatch.setattr(email_reader, "send_message", fake_send)
+        resp = web_client.post(
+            "/emails/send",
+            data={
+                "to": "bob@x.com",
+                "subject": "Fwd: Lunch?",
+                "body": "FYI",
+                "mode": "forward",
+                "original_message_id": "<orig-fwd@e.com>",
+                "draft_id": draft_id,
+            },
+        )
+        assert resp.headers.get("X-Toast-Tone") == "success"
+        atts = captured["attachments"]
+        assert atts and len(atts) == 1
+        assert atts[0]["filename"] == "menu.pdf"
+        assert cache.list_attachments(_web.DB_PATH, draft_id, cache.OWNER_DRAFT) == []
 
     def test_invalid_recipient_rejected(self, web_client, monkeypatch):
         called = {"n": 0}
@@ -2858,6 +3554,18 @@ class TestComposeSend:
         assert "compose-body" in resp.text
         assert 'name="mode" value="new"' in resp.text
 
+    def test_compose_partial_attachment_hint_reflects_setting(self, web_client):
+        from src.scripts import web as _web
+
+        resp = web_client.get("/partials/compose-new")
+        assert "10 MB per file" in resp.text
+        assert "up to" not in resp.text
+        cache.save_setting("max_attachment_size", str(25 * 1024 * 1024), _web.DB_PATH)
+        resp = web_client.get("/partials/compose-new")
+        assert "25 MB per file" in resp.text
+        assert "Max 10 MB per file, 25 MB total" not in resp.text
+        assert "up to" not in resp.text
+
     def test_csrf_rejects_bad_origin_on_send(self, web_client, monkeypatch):
         from src.scripts import auth, web
 
@@ -2952,6 +3660,128 @@ class TestDrafts:
         resp = web_client.post("/drafts/d12/delete", follow_redirects=False)
         assert resp.status_code in (303, 204)
         assert cache.get_draft("d12", _web.DB_PATH) is None
+
+    def test_draft_attach_and_detach(self, web_client):
+        from src.scripts import web as _web
+
+        cache.save_draft(
+            {
+                "id": "d-att",
+                "to_addr": "",
+                "cc": "",
+                "bcc": "",
+                "subject": "S",
+                "body": "B",
+                "mode": "new",
+                "thread_id": None,
+                "in_reply_to": None,
+            },
+            _web.DB_PATH,
+        )
+        resp = web_client.post(
+            "/drafts/d-att/attachments",
+            files=[("attachments", ("doc.txt", b"draft-bytes", "text/plain"))],
+        )
+        assert resp.status_code == 200
+        atts = resp.json()["attachments"]
+        assert len(atts) == 1
+        assert atts[0]["filename"] == "doc.txt"
+        stored = cache.list_attachments(_web.DB_PATH, "d-att", cache.OWNER_DRAFT)
+        assert len(stored) == 1
+        assert cache.attachment_path(stored[0]).is_file()
+
+        resp = web_client.delete(f"/drafts/d-att/attachments/{atts[0]['id']}")
+        assert resp.status_code == 200
+        assert cache.list_attachments(_web.DB_PATH, "d-att", cache.OWNER_DRAFT) == []
+        resp = web_client.delete("/drafts/d-att/attachments/nope")
+        assert resp.status_code == 404
+
+    def test_draft_detach_rejects_attachment_owned_by_another_draft(self, web_client):
+        from src.scripts import web as _web
+
+        for draft_id in ("d-owner", "d-other"):
+            cache.save_draft(
+                {
+                    "id": draft_id,
+                    "to_addr": "",
+                    "cc": "",
+                    "bcc": "",
+                    "subject": "S",
+                    "body": "B",
+                    "mode": "new",
+                    "thread_id": None,
+                    "in_reply_to": None,
+                },
+                _web.DB_PATH,
+            )
+        created = cache.store_attachment_bytes(
+            _web.DB_PATH,
+            "d-owner",
+            cache.OWNER_DRAFT,
+            [{"filename": "owned.txt", "mime_type": "text/plain", "payload": b"owner"}],
+        )
+        att_id = created[0]["id"]
+        path = cache.attachment_path(created[0])
+
+        resp = web_client.delete(f"/drafts/d-other/attachments/{att_id}")
+        assert resp.status_code == 404
+        still = cache.list_attachments(_web.DB_PATH, "d-owner", cache.OWNER_DRAFT)
+        assert len(still) == 1 and still[0]["id"] == att_id
+        assert cache.list_attachments(_web.DB_PATH, "d-other", cache.OWNER_DRAFT) == []
+        assert path.is_file()
+
+    def test_draft_attach_rejects_blocked_type(self, web_client):
+        from src.scripts import web as _web
+
+        cache.save_draft(
+            {
+                "id": "d-bad",
+                "to_addr": "",
+                "cc": "",
+                "bcc": "",
+                "subject": "S",
+                "body": "B",
+                "mode": "new",
+                "thread_id": None,
+                "in_reply_to": None,
+            },
+            _web.DB_PATH,
+        )
+        resp = web_client.post(
+            "/drafts/d-bad/attachments",
+            files=[("attachments", ("evil.exe", b"MZ", "application/x-msdownload"))],
+        )
+        assert resp.status_code == 400
+        assert cache.list_attachments(_web.DB_PATH, "d-bad", cache.OWNER_DRAFT) == []
+
+    def test_delete_draft_cleans_up_attachments(self, web_client):
+        from src.scripts import web as _web
+
+        cache.save_draft(
+            {
+                "id": "d-cleanup",
+                "to_addr": "",
+                "cc": "",
+                "bcc": "",
+                "subject": "S",
+                "body": "B",
+                "mode": "new",
+                "thread_id": None,
+                "in_reply_to": None,
+            },
+            _web.DB_PATH,
+        )
+        created = cache.store_attachment_bytes(
+            _web.DB_PATH,
+            "d-cleanup",
+            cache.OWNER_DRAFT,
+            [{"filename": "f.txt", "mime_type": "text/plain", "payload": b"x"}],
+        )
+        path = cache.attachment_path(created[0])
+        assert path.is_file()
+        web_client.post("/drafts/d-cleanup/delete", follow_redirects=False)
+        assert cache.list_attachments(_web.DB_PATH, "d-cleanup", cache.OWNER_DRAFT) == []
+        assert not path.exists()
 
     def test_get_draft_json(self, web_client):
         from src.scripts import web as _web
@@ -3445,7 +4275,7 @@ class TestOutbox:
         from src.scripts import web as _web
 
         oid = self._enqueue(_web.DB_PATH, subject="Edit me", to_addr="to@x.com", cc="c@x.com")
-        resp = web_client.get(f"/partials/compose-outbox/{oid}")
+        resp = web_client.post(f"/partials/compose-outbox/{oid}")
         assert resp.status_code == 200
         assert "Edit me" in resp.text
         assert "to@x.com" in resp.text
@@ -3457,7 +4287,7 @@ class TestOutbox:
         assert draft["cc"] == "c@x.com"
 
     def test_outbox_compose_partial_missing(self, web_client):
-        resp = web_client.get("/partials/compose-outbox/nope")
+        resp = web_client.post("/partials/compose-outbox/nope")
         assert resp.status_code == 404
 
     def test_outbox_page_shows_status_and_attempts(self, web_client):
@@ -3475,7 +4305,7 @@ class TestOutbox:
         from src.scripts import web as _web
 
         oid = self._enqueue(_web.DB_PATH, subject="Retry me", to_addr="to@x.com")
-        web_client.get(f"/partials/compose-outbox/{oid}")
+        web_client.post(f"/partials/compose-outbox/{oid}")
         assert cache.get_draft(oid, _web.DB_PATH) is not None
         monkeypatch.setattr(email_reader, "send_message", lambda *a, **k: None)
         resp = web_client.post(
@@ -3498,7 +4328,7 @@ class TestOutbox:
         from src.scripts import web as _web
 
         oid = self._enqueue(_web.DB_PATH, subject="Will fail again", to_addr="to@x.com")
-        web_client.get(f"/partials/compose-outbox/{oid}")
+        web_client.post(f"/partials/compose-outbox/{oid}")
         monkeypatch.setattr(email_reader, "send_message", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
         resp = web_client.post(
             "/emails/send",

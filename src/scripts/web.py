@@ -6,9 +6,10 @@ import os
 import socket
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Query, Form
@@ -32,6 +33,7 @@ from src.scripts import auth
 from src.scripts import outbox_worker
 from src.scripts.constants import DB_PATH
 from src.scripts.utils import _priority_bucket
+from src.scripts.cache import crypto
 
 load_dotenv()
 WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
@@ -94,6 +96,12 @@ async def lifespan(app: FastAPI):
             logger.info("Pruned %d stale draft(s)", removed)
     except Exception:
         logger.warning("Stale-draft pruning failed", exc_info=True)
+    try:
+        removed = cache.prune_attachment_orphans(DB_PATH)
+        if removed:
+            logger.info("Pruned %d orphaned attachment(s)", removed)
+    except Exception:
+        logger.warning("Attachment orphan pruning failed", exc_info=True)
     email_reader.load_keywords(DB_PATH)
 
     if cache.has_email_credentials(DB_PATH):
@@ -128,6 +136,8 @@ templates.env.filters["format_sender"] = lambda raw: _format_sender(raw)
 templates.env.filters["priority_bucket"] = lambda lvl: _priority_bucket(lvl) or "none"
 templates.env.filters["markdown"] = lambda t: _render_markdown(t)
 templates.env.filters["stripped_body"] = lambda t: email_reader.strip_quoted_history(t)
+templates.env.filters["format_size"] = lambda n: _format_size(n)
+templates.env.filters["attachment_icon"] = lambda m: _attachment_icon(m)
 templates.env.globals["current_theme"] = lambda: _current_theme()
 templates.env.globals["urlencode"] = urlencode
 app.mount("/static/js", StaticFiles(directory=str(_WEB_DIR / "js")), name="js")
@@ -352,6 +362,103 @@ def _get_thread_limit(db_path: str) -> int:
     except (TypeError, ValueError):
         val = _DEFAULT_THREAD_LIMIT
     return val if val in (0, *_THREAD_LIMIT_VALUES) else _DEFAULT_THREAD_LIMIT
+
+
+_ATTACHMENT_MB_VALUES = (5, 10, 15, 25)
+_DEFAULT_ATTACHMENT_MB = 10
+
+
+def _attachment_max_mb(db_path: str = DB_PATH) -> int:
+    mb = cache.get_max_attachment_size(db_path) // (1024 * 1024)
+    return mb if mb in _ATTACHMENT_MB_VALUES else _DEFAULT_ATTACHMENT_MB
+
+
+def _attachment_hint(db_path: str = DB_PATH) -> str:
+    mb = _attachment_max_mb(db_path)
+    total = cache.get_max_total_size(db_path) // (1024 * 1024)
+    return f"Max {mb} MB per file, {total} MB total."
+
+
+def _format_size(n) -> str:
+
+    try:
+        n = int(n or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n / (1024 * 1024):.1f} MB"
+
+
+def _attachment_map_for_thread(conversation, email_hash: str) -> dict:
+    hashes = {m.get("_file_hash") for m in conversation if m.get("_file_hash")}
+    if email_hash:
+        hashes.add(email_hash)
+    if not hashes:
+        return {}
+    return cache.list_attachments_for_owners(DB_PATH, list(hashes), cache.OWNER_EMAIL)
+
+
+def _attachment_icon(mime_type: str) -> str:
+    m = (mime_type or "").lower()
+    if m.startswith("image/"):
+        return "image"
+    if m == "application/pdf":
+        return "file-text"
+    if m.startswith("text/"):
+        return "file-text"
+    if (
+        m.startswith("application/vnd.openxmlformats-officedocument")
+        or m.startswith("application/vnd.ms-")
+        or m.startswith("application/vnd.oasis.opendocument.")
+    ):
+        return "file-text"
+    if m in (
+        "application/zip",
+        "application/x-zip-compressed",
+        "application/gzip",
+        "application/x-tar",
+        "application/x-7z-compressed",
+        "application/x-rar-computed",
+        "application/x-rar",
+    ):
+        return "archive"
+    return "file"
+
+
+ATTACHMENT_TYPE_BUCKETS = [
+    ("", "All types"),
+    ("images", "Images"),
+    ("pdf", "PDFs"),
+    ("documents", "Documents"),
+    ("archives", "Archives"),
+    ("other", "Other"),
+]
+
+
+def _attachments_list_context(db_path: str, search: str, type_bucket: str, size_sort: str, page: int) -> dict:
+    page_size = _get_page_size(db_path)
+    items, total_rows, total_pages = cache.search_received_attachments(
+        db_path,
+        search=search or None,
+        type_bucket=type_bucket or None,
+        size_sort=size_sort or None,
+        page=page,
+        page_size=page_size,
+    )
+    return {
+        "items": items,
+        "search": search,
+        "type_bucket": type_bucket,
+        "size_sort": size_sort,
+        "page": page,
+        "total_pages": total_pages,
+        "total_rows": total_rows,
+        "type_buckets": ATTACHMENT_TYPE_BUCKETS,
+        "type_counts": cache.received_attachment_type_counts(db_path),
+    }
 
 
 _THEMES = {"system", "light", "dark"}
@@ -824,6 +931,7 @@ def _settings_context(
     ts_state = _tailscale_state(tailscale_ip, tailscale_login_url)
     port = WEB_PORT
     smtp_server, smtp_port, smtp_security = email_reader.smtp_config(db_path)
+    attachment_mb = _attachment_max_mb(db_path)
     return {
         "network_access": network_on,
         "local_ips": local_ips,
@@ -858,6 +966,8 @@ def _settings_context(
         "smtp_server": smtp_server,
         "smtp_port": smtp_port,
         "smtp_security": smtp_security,
+        "attachment_max_mb": attachment_mb,
+        "attachment_mb_options": _ATTACHMENT_MB_VALUES,
     }
 
 
@@ -892,6 +1002,20 @@ async def settings_smtp(request: Request):
     cache.save_setting("smtp_server", server, DB_PATH)
     cache.save_setting("smtp_port", port_raw, DB_PATH)
     cache.save_setting("smtp_security", security, DB_PATH)
+    return _updated_response()
+
+
+@app.post("/settings/attachments", response_class=HTMLResponse)
+async def settings_attachments(request: Request):
+    form = await request.form()
+    mb_raw = str(form.get("attachment_max_mb", str(_DEFAULT_ATTACHMENT_MB))).strip()
+    try:
+        mb = int(mb_raw)
+    except (TypeError, ValueError):
+        mb = _DEFAULT_ATTACHMENT_MB
+    if mb not in _ATTACHMENT_MB_VALUES:
+        mb = _DEFAULT_ATTACHMENT_MB
+    cache.save_setting("max_attachment_size", str(mb * 1024 * 1024), DB_PATH)
     return _updated_response()
 
 
@@ -957,7 +1081,7 @@ async def settings_api_key_regenerate(request: Request):
         request,
         "settings.html",
         _settings_context(
-            DB_PATH, api_key_msg="API key regenerated. Copy it now — it won't be shown again.", new_api_key=token
+            DB_PATH, api_key_msg="API key regenerated. Copy it now; it won't be shown again.", new_api_key=token
         ),
     )
 
@@ -1395,6 +1519,7 @@ def email_detail(request: Request, email_hash: str):
             "conversation": conversation,
             "thread_total": thread_total,
             "thread_limit": thread_limit,
+            "attachment_map": _attachment_map_for_thread(conversation, email_hash),
         },
     )
 
@@ -1433,6 +1558,19 @@ _imap_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="imap-sync
 
 def _defer(func, *args, **kwargs):
     _imap_executor.submit(func, *args, **kwargs)
+
+
+def _backfill_received_attachments(email_hash: str, message_id: str) -> None:
+    try:
+        if cache.list_attachments(DB_PATH, email_hash, cache.OWNER_EMAIL):
+            return
+        parts = email_reader.fetch_original_attachments(DB_PATH, message_id)
+        if not parts:
+            return
+        cache.store_received_attachments(DB_PATH, email_hash, parts)
+        _notify_refresh()
+    except Exception:
+        logger.warning("Background attachment backfill failed for %s", email_hash, exc_info=True)
 
 
 def _apply_flag(
@@ -1546,6 +1684,7 @@ async def send_email(request: Request):
     original_message_id = (form.get("original_message_id") or "").strip() or None
     thread_id = (form.get("thread_id") or "").strip() or None
     draft_id = (form.get("draft_id") or "").strip() or None
+    upload_files = form.getlist("attachments")
 
     limiter_key = cache.get_setting("email_user", DB_PATH) or auth._client_ip(request)
     if auth.send_rate_limiter.is_limited(limiter_key):
@@ -1572,6 +1711,22 @@ async def send_email(request: Request):
     if len(body) > 50000:
         return _toast("Body too long (max 50,000 chars)", "error")
 
+    owner_id = uuid.uuid4().hex
+    attachments = []
+    try:
+        if draft_id:
+            attachments.extend(cache.list_attachments(DB_PATH, draft_id, cache.OWNER_DRAFT))
+        if upload_files:
+            uploaded = await cache.store_upload_attachments(DB_PATH, owner_id, cache.OWNER_OUTBOX, upload_files)
+            attachments.extend(uploaded)
+    except cache.AttachmentError as exc:
+        cache.delete_attachments(DB_PATH, owner_id, cache.OWNER_OUTBOX)
+        return _toast(str(exc), "error")
+    except Exception:
+        logger.warning("Failed to store attachments for send", exc_info=True)
+        cache.delete_attachments(DB_PATH, owner_id, cache.OWNER_OUTBOX)
+        return _toast("Could not save one or more attachments.", "error")
+
     body_html = str(_render_markdown(body))
     auth.send_rate_limiter.record_failure(limiter_key)
     try:
@@ -1587,12 +1742,17 @@ async def send_email(request: Request):
             original_message_id=original_message_id,
             thread_id=thread_id,
             db_path=DB_PATH,
+            attachments=attachments or None,
         )
     except Exception:
         logger.warning("SMTP send failed; enqueuing to outbox", exc_info=True)
+        rekeyed = False
         try:
+            if draft_id:
+                rekeyed = bool(cache.rekey(DB_PATH, draft_id, cache.OWNER_DRAFT, owner_id, cache.OWNER_OUTBOX))
             cache.enqueue(
                 {
+                    "id": owner_id,
                     "to_addr": ", ".join(to_list),
                     "cc": ", ".join(cc_list) if cc_list else "",
                     "bcc": ", ".join(bcc_list) if bcc_list else "",
@@ -1613,6 +1773,11 @@ async def send_email(request: Request):
                     logger.warning("Failed to delete draft %s after outbox enqueue", draft_id, exc_info=True)
         except Exception:
             logger.error("Failed to enqueue failed send to outbox", exc_info=True)
+            if rekeyed and draft_id:
+                try:
+                    cache.rekey(DB_PATH, owner_id, cache.OWNER_OUTBOX, draft_id, cache.OWNER_DRAFT)
+                except Exception:
+                    logger.warning("Failed to roll back attachment rekey", exc_info=True)
             return _toast("Failed to send and could not save to Outbox.", "error")
         _notify_refresh()
         return _toast("Couldn't reach SMTP - saved to Outbox, will retry automatically.", "warning")
@@ -1622,6 +1787,9 @@ async def send_email(request: Request):
             cache.delete_draft(draft_id, DB_PATH)
         except Exception:
             logger.warning("Failed to delete draft %s after send", draft_id, exc_info=True)
+    cache.delete_attachments(DB_PATH, owner_id, cache.OWNER_OUTBOX)
+    if draft_id:
+        cache.delete_attachments(DB_PATH, draft_id, cache.OWNER_DRAFT)
     return _toast("Email sent")
 
 
@@ -1749,6 +1917,11 @@ def partial_email_detail(request: Request, email_hash: str):
     conversation = cache.get_conversation(DB_PATH, email_hash)
     thread_total = len(conversation)
     thread_limit = _get_thread_limit(DB_PATH)
+    attachment_map = _attachment_map_for_thread(conversation, email_hash)
+    message_id = (email_data.get("message_id") or "").strip()
+    if message_id and not attachment_map.get(email_hash):
+        _defer(_backfill_received_attachments, email_hash, message_id)
+
     return templates.TemplateResponse(
         request,
         "partials/email_detail_content.html",
@@ -1758,7 +1931,65 @@ def partial_email_detail(request: Request, email_hash: str):
             "conversation": conversation,
             "thread_total": thread_total,
             "thread_limit": thread_limit,
+            "attachment_map": attachment_map,
         },
+    )
+
+
+@app.get("/emails/{email_hash}/attachments/{attachment_id}")
+def download_attachment(request: Request, email_hash: str, attachment_id: str):
+    att = cache.get_attachment(DB_PATH, attachment_id)
+    if not att or att.get("owner_type") != cache.OWNER_EMAIL or att.get("owner_id") != email_hash:
+        return Response(status_code=404)
+    try:
+        encrypted_path = cache.attachment_path(att)
+        encrypted_data = encrypted_path.read_bytes()
+        decrypted = crypto.decrypt_bytes(encrypted_data)
+    except Exception:
+        logger.warning("Failed to read attachment %s", attachment_id, exc_info=True)
+        return Response(status_code=404)
+
+    fname = cache.sanitize_filename(att["filename"])
+    fname_legacy = fname.replace('"', '\\"')
+    quoted = quote(fname)
+
+    return Response(
+        content=decrypted,
+        media_type=att["mime_type"] or "application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename=\"{fname_legacy}\"; filename*=UTF-8''{quoted}",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.get("/attachments", response_class=HTMLResponse)
+def attachments_page(
+    request: Request,
+    search: str = Query("", alias="search"),
+    type: str = Query("", alias="type"),
+    sort: str = Query("", alias="sort"),
+    page: int = Query(1, alias="page"),
+):
+    return templates.TemplateResponse(
+        request,
+        "attachments.html",
+        _attachments_list_context(DB_PATH, search, type, sort, page),
+    )
+
+
+@app.get("/partials/attachments", response_class=HTMLResponse)
+def partial_attachments(
+    request: Request,
+    search: str = Query("", alias="search"),
+    type: str = Query("", alias="type"),
+    sort: str = Query("", alias="sort"),
+    page: int = Query(1, alias="page"),
+):
+    return templates.TemplateResponse(
+        request,
+        "partials/attachments_table.html",
+        _attachments_list_context(DB_PATH, search, type, sort, page),
     )
 
 
@@ -1816,7 +2047,44 @@ def partial_compose(request: Request, email_hash: str, mode: str = Query("reply"
             "quoted_body": _with_signature(quoted_body, DB_PATH),
             "original_message_id": (email_data.get("message_id") or "").strip() or "",
             "thread_id": email_data.get("thread_id") or "",
+            "attachments": [],
+            "attachment_hint": _attachment_hint(DB_PATH),
         },
+    )
+
+
+@app.post("/partials/forward-attachments/{email_hash}")
+def forward_attachments(request: Request, email_hash: str, draft_id: str = Query("")):
+    email_data = cache.get_email_by_hash(DB_PATH, email_hash)
+    if not email_data:
+        return JSONResponse({"attachments": [], "notice": "Original message not found."}, status_code=404)
+    message_id = (email_data.get("message_id") or "").strip()
+    if not message_id:
+        return JSONResponse({"attachments": [], "notice": "Original message has no attachments."})
+    try:
+        parts = email_reader.fetch_original_attachments(DB_PATH, message_id)
+    except Exception:
+        logger.warning("forward-attachments fetch failed for %s", message_id, exc_info=True)
+        parts = []
+    if not parts:
+        return JSONResponse({"attachments": [], "notice": "Could not load original attachments."})
+    owner_id = (draft_id or "").strip() or uuid.uuid4().hex
+    try:
+        created = cache.store_staged_received(DB_PATH, owner_id, cache.OWNER_DRAFT, parts)
+    except cache.AttachmentError as exc:
+        return JSONResponse({"attachments": [], "notice": str(exc)}, status_code=400)
+    except Exception:
+        logger.warning("Failed to stage forward attachments", exc_info=True)
+        cache.delete_attachments(DB_PATH, owner_id, cache.OWNER_DRAFT)
+        return JSONResponse({"attachments": [], "notice": "Could not save attachments."}, status_code=500)
+    return JSONResponse(
+        {
+            "draft_id": owner_id,
+            "attachments": [
+                {"id": a["id"], "filename": a["filename"], "size": a["size"], "mime_type": a["mime_type"]}
+                for a in created
+            ],
+        }
     )
 
 
@@ -1834,6 +2102,8 @@ def partial_compose_new(request: Request):
             "quoted_body": _with_signature("", DB_PATH),
             "original_message_id": "",
             "thread_id": "",
+            "attachments": [],
+            "attachment_hint": _attachment_hint(DB_PATH),
         },
     )
 
@@ -1862,6 +2132,8 @@ def partial_compose_draft(request: Request, draft_id: str):
             "draft_cc": draft.get("cc") or "",
             "draft_bcc": draft.get("bcc") or "",
             "draft_id": draft.get("id") or "",
+            "attachments": cache.list_attachments(DB_PATH, draft.get("id") or "", cache.OWNER_DRAFT),
+            "attachment_hint": _attachment_hint(DB_PATH),
         },
     )
 
@@ -1906,10 +2178,50 @@ def drafts_get_json(draft_id: str):
     return JSONResponse(draft)
 
 
+@app.post("/drafts/{draft_id}/attachments")
+async def drafts_attach(draft_id: str, request: Request):
+    if not cache.get_draft(draft_id, DB_PATH):
+        return JSONResponse({"error": "draft not found"}, status_code=404)
+    form = await request.form()
+    upload_files = form.getlist("attachments")
+    try:
+        created = await cache.store_upload_attachments(DB_PATH, draft_id, cache.OWNER_DRAFT, upload_files)
+    except cache.AttachmentError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except Exception:
+        logger.warning("Failed to store draft attachments", exc_info=True)
+        return JSONResponse({"error": "Could not save attachment"}, status_code=500)
+    return JSONResponse(
+        {
+            "attachments": [
+                {"id": a["id"], "filename": a["filename"], "size": a["size"], "mime_type": a["mime_type"]}
+                for a in created
+            ]
+        }
+    )
+
+
+@app.delete("/drafts/{draft_id}/attachments/{attachment_id}")
+def drafts_detach(draft_id: str, attachment_id: str):
+    att = cache.get_attachment(DB_PATH, attachment_id)
+    if not att or att["owner_id"] != draft_id or att["owner_type"] != cache.OWNER_DRAFT:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    cache.delete_attachment(DB_PATH, attachment_id)
+    return JSONResponse({"deleted": attachment_id})
+
+
 @app.post("/drafts/{draft_id}/delete")
 def drafts_delete(draft_id: str):
     cache.delete_draft(draft_id, DB_PATH)
+    cache.delete_attachments(DB_PATH, draft_id, cache.OWNER_DRAFT)
     return RedirectResponse(url="/drafts", status_code=303)
+
+
+@app.post("/drafts/{draft_id}/abandon")
+def drafts_abandon(draft_id: str):
+    cache.delete_draft(draft_id, DB_PATH)
+    cache.delete_attachments(DB_PATH, draft_id, cache.OWNER_DRAFT)
+    return Response(status_code=204)
 
 
 @app.get("/drafts", response_class=HTMLResponse)
@@ -1947,11 +2259,12 @@ def outbox_retry(outbox_id: str):
 @app.post("/outbox/{outbox_id}/delete")
 def outbox_delete(outbox_id: str):
     cache.delete_outbox(outbox_id, DB_PATH)
+    cache.delete_attachments(DB_PATH, outbox_id, cache.OWNER_OUTBOX)
     _notify_refresh()
     return RedirectResponse(url="/outbox", status_code=303)
 
 
-@app.get("/partials/compose-outbox/{outbox_id}", response_class=HTMLResponse)
+@app.post("/partials/compose-outbox/{outbox_id}", response_class=HTMLResponse)
 def partial_compose_outbox(request: Request, outbox_id: str):
     row = cache.get_outbox(outbox_id, DB_PATH)
     if not row:
@@ -1972,6 +2285,7 @@ def partial_compose_outbox(request: Request, outbox_id: str):
     }
     cache.save_draft(draft, DB_PATH)
     cache.delete_outbox(outbox_id, DB_PATH)
+    cache.transfer_attachments(DB_PATH, outbox_id, cache.OWNER_OUTBOX, cache.OWNER_DRAFT)
     _notify_refresh()
     return templates.TemplateResponse(
         request,
@@ -1989,6 +2303,8 @@ def partial_compose_outbox(request: Request, outbox_id: str):
             "draft_cc": row.get("cc") or "",
             "draft_bcc": row.get("bcc") or "",
             "draft_id": outbox_id,
+            "attachments": cache.list_attachments(DB_PATH, outbox_id, cache.OWNER_DRAFT),
+            "attachment_hint": _attachment_hint(DB_PATH),
         },
     )
 
@@ -2020,7 +2336,7 @@ def _resolve_bind_host(requested: str) -> str:
     try:
         cache.init_db(DB_PATH)
         if not auth.is_auth_configured(DB_PATH):
-            print(f"[auth] No dashboard password configured — binding to 127.0.0.1 (requested {requested}).")
+            print(f"[auth] No dashboard password configured; binding to 127.0.0.1 (requested {requested}).")
             print(
                 "[auth] Set a password at http://127.0.0.1:8000/setup-dashboard, then restart to expose the dashboard."
             )

@@ -65,9 +65,23 @@ def delete_draft(draft_id: str, db_path: str = DB_PATH) -> bool:
 
 
 def prune_stale_drafts(db_path: str = DB_PATH, max_age_days: int = 30) -> int:
+    from src.scripts.cache import attachments as _attachments
+
     with _connect(db_path) as conn:
+        stale_ids = [
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM drafts WHERE updated_at < datetime('now', ?)",
+                (f"-{int(max_age_days)} days",),
+            ).fetchall()
+        ]
+        if not stale_ids:
+            return 0
+        placeholders = ",".join("?" for _ in stale_ids)
         cursor = conn.execute(
-            "DELETE FROM drafts WHERE updated_at < datetime('now', ?)",
-            (f"-{int(max_age_days)} days",),
+            f"DELETE FROM drafts WHERE id IN ({placeholders})",
+            stale_ids,
         )
+    for draft_id in stale_ids:
+        _attachments.delete_attachments(db_path, draft_id, _attachments.OWNER_DRAFT)
     return cursor.rowcount

@@ -20,9 +20,3 @@ Expand beyond Gmail to support other major email providers out of the box.
 - **Yahoo Mail** (`imap.mail.yahoo.com`)
 - **Apple Mail / iCloud** (`imap.mail.me.com`)
 - Pre-configured IMAP server presets (select provider during setup instead of manual entry)
-
-## Email Actions
-
-Manage emails directly from the dashboard without leaving the UI.
-
-- **Attachments:** Upload files with size validation and forward original attachments via IMAP.

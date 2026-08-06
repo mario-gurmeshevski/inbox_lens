@@ -1,4 +1,4 @@
-.PHONY: install uninstall dev-install web test test-cov lint format unused pre-commit clean reset up up-ts down stop start restart tailscale-up tailscale-status tailscale-ip tailscale-logout prune prune-auto purge
+.PHONY: install uninstall dev-install web test test-counts test-cov lint lint-fix format unused pre-commit clean reset up up-ts down stop start restart tailscale-up tailscale-status tailscale-ip tailscale-logout prune prune-auto purge
 
 PYTHON ?= python3
 VENV := .venv
@@ -7,11 +7,13 @@ VENV_PYTHON := $(VENV)/bin/python
 DJLINT := $(VENV)/bin/djlint
 RUNTIME_STAMP := $(VENV)/.runtime.stamp
 DEV_STAMP := $(VENV)/.dev.stamp
--include .env
+
 WEB_HOST ?= 0.0.0.0
 WEB_PORT ?= 8000
 
 COMPOSE_FILES_TS = -f docker-compose.yaml -f docker-compose.tailscale.yaml
+
+ ENV_EXPORT = set -a; [ -f .env ] && . .env; set +a;
 
 $(RUNTIME_STAMP): .python-version
 	$(PYTHON) -m venv $(VENV)
@@ -31,25 +33,31 @@ $(DEV_STAMP): $(RUNTIME_STAMP) pyproject.toml
 	@touch $(DEV_STAMP)
 
 web:
-	$(VENV_PYTHON) -m uvicorn src.scripts.web:app --host $(WEB_HOST) --port $(WEB_PORT) --reload
+	$(ENV_EXPORT) $(VENV_PYTHON) -m uvicorn src.scripts.web:app --host $(WEB_HOST) --port $(WEB_PORT) --reload
 
 test: dev-install
-	$(VENV_PYTHON) -m pytest src/tests/ -v
+	$(ENV_EXPORT) $(VENV_PYTHON) -m pytest src/tests/ -v
+
+test-counts: dev-install
+	@$(ENV_EXPORT) $(VENV_PYTHON) scripts/test_counts.py
 
 test-cov: dev-install
-	$(VENV_PYTHON) -m pytest src/tests/ --cov=src/scripts --cov-report=term-missing
+	$(ENV_EXPORT) $(VENV_PYTHON) -m pytest src/tests/ --cov=src/scripts --cov-report=term-missing
 
 lint: dev-install
-	$(VENV_PYTHON) -m ruff check src/
-	$(VENV_PYTHON) -m vulture src/scripts
-	$(DJLINT) --check src/web/templates
+	@$(ENV_EXPORT) $(VENV_PYTHON) -m ruff check src/ || (echo "" && echo "Run 'make lint-fix' to auto-fix Ruff issues." && exit 1)
+	$(ENV_EXPORT) $(VENV_PYTHON) -m vulture src/scripts --exclude=src/scripts/web.py,src/scripts/auth.py,src/scripts/event_bus.py,src/scripts/idle_monitor.py,src/scripts/outbox_worker.py,src/scripts/updater.py,src/scripts/utils.py
+	$(ENV_EXPORT) $(DJLINT) --check src/web/templates
+
+lint-fix: dev-install
+	$(ENV_EXPORT) $(VENV_PYTHON) -m ruff check src/ --fix
 
 format: dev-install
-	$(VENV_PYTHON) -m ruff format src/
-	$(DJLINT) --reformat src/web/templates
+	$(ENV_EXPORT) $(VENV_PYTHON) -m ruff format src/
+	$(ENV_EXPORT) $(DJLINT) --reformat src/web/templates
 
 unused: dev-install
-	$(VENV_PYTHON) -m vulture src/scripts
+	$(ENV_EXPORT) $(VENV_PYTHON) -m vulture src/scripts --exclude=src/scripts/web.py,src/scripts/auth.py,src/scripts/event_bus.py,src/scripts/idle_monitor.py,src/scripts/outbox_worker.py,src/scripts/updater.py,src/scripts/utils.py
 
 pre-commit: format lint test
 
@@ -73,28 +81,11 @@ up-ts:
 down:
 	docker compose down --rmi local --volumes --remove-orphans
 
-prune-auto:
-	-@docker image prune -f || true
-	-@docker builder prune -f || true
-
-prune: prune-auto
-	-@docker image prune -a -f || true
-	-@docker container prune -f || true
-
 stop:
 	docker compose $(COMPOSE_FILES_TS) stop
 
 start:
 	docker compose $(COMPOSE_FILES_TS) start
-	@DNS=$$(docker compose $(COMPOSE_FILES_TS) exec -T tailscale sh -c "/usr/local/bin/tailscale status --json 2>/dev/null | grep -o '\"DNSName\": *\"[^\"]*\"' | head -1 | cut -d'\"' -f4 | sed 's/\.$$//'"); \
-	if [ -n "$$DNS" ] && docker compose $(COMPOSE_FILES_TS) exec -T web test -f /shared/serve_done 2>/dev/null; then \
-	  echo "Website: https://$$DNS"; \
-	elif [ -n "$$DNS" ]; then \
-	  IP=$$(docker compose $(COMPOSE_FILES_TS) exec -T tailscale /usr/local/bin/tailscale ip -4 2>/dev/null); \
-	  echo "Website: http://$${IP}:8000"; \
-	else \
-	  echo "Tailscale not logged in. Run: make tailscale-up"; \
-	fi
 
 restart:
 	docker compose $(COMPOSE_FILES_TS) restart
@@ -112,6 +103,14 @@ tailscale-ip:
 
 tailscale-logout:
 	-docker compose $(COMPOSE_FILES_TS) exec tailscale /usr/local/bin/tailscale logout
+
+prune-auto:
+	-@docker image prune -f || true
+	-@docker builder prune -f || true
+
+prune: prune-auto
+	-@docker image prune -a -f || true
+	-@docker container prune -f || true
 
 purge: reset tailscale-logout
 	docker compose $(COMPOSE_FILES_TS) down --rmi all --volumes --remove-orphans

@@ -279,3 +279,30 @@
 #thread-overflow[hidden] {
   display: none;
 }
+
+.received-attachments {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.received-attachments-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-fg, #6b7280);
+  font-size: 0.85rem;
+}
+
+.attachment-chip-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.attachment-chip-link:hover {
+  text-decoration: underline;
+}

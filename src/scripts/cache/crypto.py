@@ -41,7 +41,7 @@ def get_email_credentials(db_path: str = DB_PATH) -> tuple[str | None, str | Non
         try:
             passwd = _decrypt(encrypted_pass)
         except Exception:
-            logger.warning("Failed to decrypt email password — key may have changed")
+            logger.warning("Failed to decrypt email password; key may have changed")
             return user, None
     else:
         passwd = None
@@ -89,6 +89,14 @@ def _encrypt(plaintext: str) -> str:
 
 def _decrypt(ciphertext: str) -> str:
     return _get_fernet().decrypt(ciphertext.encode()).decode()
+
+
+def encrypt_bytes(payload: bytes) -> bytes:
+    return _get_fernet().encrypt(payload)
+
+
+def decrypt_bytes(token: bytes) -> bytes:
+    return _get_fernet().decrypt(token)
 
 
 def _ensure_session_key() -> str:

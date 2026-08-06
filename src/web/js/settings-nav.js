@@ -1,6 +1,6 @@
 (function () {
   const tabs = document.querySelector(".settings-tabs");
-  if (!tabs) return; // settings page only — no effect elsewhere
+  if (!tabs) return;
 
   const navLinks = document.querySelector(".nav-links");
   if (!navLinks) return;

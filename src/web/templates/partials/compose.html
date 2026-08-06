@@ -72,6 +72,31 @@
     </div>
     <textarea id="compose-body" name="body" rows="10" required>{{ quoted_body }}</textarea>
   </div>
+  <div class="form-group compose-attachments-group">
+    <label for="compose-attachments">Attachments</label>
+    <div class="compose-attachments">
+      <label class="attachment-pick" for="compose-attachments-input">
+        <i data-lucide="paperclip" class="icon-sm"></i>
+        <span>Add files</span>
+        <input id="compose-attachments-input"
+               name="attachments"
+               type="file"
+               multiple
+               hidden />
+      </label>
+      <ul id="compose-attachment-list"
+          class="attachment-chips"
+          aria-live="polite">
+        {% for att in attachments %}
+          <li class="attachment-chip is-stored"
+              data-attachment-id="{{ att.id }}"
+              data-filename="{{ att.filename }}"
+              data-size="{{ att.size }}"></li>
+        {% endfor %}
+      </ul>
+    </div>
+    <span class="compose-hint">{{ attachment_hint }}</span>
+  </div>
   <input type="hidden" name="mode" value="{{ mode }}" />
   <input type="hidden"
          name="original_message_id"

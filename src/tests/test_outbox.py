@@ -193,8 +193,8 @@ class TestReexport:
 
 
 class TestMigration:
-    def test_schema_version_is_four(self):
-        assert _SCHEMA_VERSION == 4
+    def test_schema_version_is_five(self):
+        assert _SCHEMA_VERSION == 5
 
     def test_outbox_table_created_on_fresh_db(self, tmp_db):
         with _connect(tmp_db) as conn:
@@ -205,7 +205,7 @@ class TestMigration:
 
     def test_user_version_bumped(self, tmp_db):
         with _connect(tmp_db) as conn:
-            assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
 
     def test_migrate_adds_outbox_to_pre_existing_db(self, tmp_path):
         db_path = str(tmp_path / "old.db")
@@ -214,11 +214,14 @@ class TestMigration:
             conn.execute("DROP TABLE outbox")
             conn.execute("DROP INDEX IF EXISTS idx_outbox_status")
             conn.execute("DROP INDEX IF EXISTS idx_outbox_next")
+            conn.execute("DROP TABLE attachments")
+            conn.execute("DROP INDEX IF EXISTS idx_attachments_owner")
             conn.execute("PRAGMA user_version = 3")
         cache.init_db(db_path)
         with _connect(db_path) as conn:
             tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
             assert "outbox" in tables
-            assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+            assert "attachments" in tables
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
         oid = outbox.enqueue(_payload(), db_path)
         assert outbox.get(oid, db_path)["status"] == "pending"

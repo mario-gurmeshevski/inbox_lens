@@ -28,7 +28,7 @@ dev = [
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
     "ruff==0.15.18",
-    "httpx2==2.4.0",
+    "httpx2==2.12.0",
     "djlint==1.39.4",
     "vulture==2.16",
 ]
